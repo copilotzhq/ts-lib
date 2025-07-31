@@ -7,7 +7,7 @@ import {
   jsonb,
 } from "npm:drizzle-orm@0.44.4/pg-core";
 
-export const agents = pgTable("agents", {
+export const agents: any = pgTable("agents", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   role: text("role").notNull(),
@@ -20,7 +20,7 @@ export const agents = pgTable("agents", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const tools = pgTable("tools", {
+export const tools:any = pgTable("tools", {
   id: uuid("id").primaryKey().defaultRandom(),
   key: varchar("key", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
@@ -31,7 +31,7 @@ export const tools = pgTable("tools", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const threads = pgTable("threads", {
+export const threads:any = pgTable("threads", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
@@ -49,7 +49,7 @@ export const threads = pgTable("threads", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const tasks = pgTable("tasks", {
+export const tasks:any = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   goal: text("goal").notNull(),
@@ -64,7 +64,7 @@ export const tasks = pgTable("tasks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const messages = pgTable("messages", {
+export const messages:any = pgTable("messages", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id")
     .notNull()
@@ -78,7 +78,7 @@ export const messages = pgTable("messages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const tool_logs = pgTable("tool_logs", {
+export const tool_logs:any = pgTable("tool_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id")
     .notNull()
@@ -94,7 +94,7 @@ export const tool_logs = pgTable("tool_logs", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const queue = pgTable("queue", {
+export const queue:any = pgTable("queue", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id")
     .notNull()

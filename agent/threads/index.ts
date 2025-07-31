@@ -90,13 +90,13 @@ async function buildProcessingContext(
     // Merge all available tools
     const nativeToolsArray = Object.values(getNativeTools());
     const userTools = context.tools || [];
-    
+
     // Generate API tools if API configs are provided
     const apiTools = context.apis ? generateAllApiTools(context.apis) : [];
-    
+
     // Generate MCP tools if MCP server configs are provided
     const mcpTools = context.mcpServers ? await generateAllMcpTools(context.mcpServers) : [];
-    
+
     const allTools = [...nativeToolsArray, ...userTools, ...apiTools, ...mcpTools];
 
     return {
@@ -140,7 +140,7 @@ function discoverTargetAgents(
     // Case 2: Message contains agent mentions (@AgentName)
     const mentions = message.content?.match(/@(\w+)/g);
     if (mentions) {
-        const mentionedNames = mentions.map(m => m.substring(1));
+        const mentionedNames = mentions.map((m: string) => m.substring(1));
         const mentionedAgents = availableAgents.filter(a =>
             mentionedNames.includes(a.name)
         );
@@ -157,7 +157,7 @@ function discoverTargetAgents(
     // Only activate fallback in exactly 2-participant conversations (user-agent or agent-agent)
     if (thread.participants && thread.participants.length === 2) {
         // Find the other participant (not the sender)
-        const otherParticipant: string | undefined = thread.participants.find(p => p !== message?.senderId);
+        const otherParticipant: string | undefined = thread.participants.find((p: string) => p !== message?.senderId);
 
         // If the other participant is an agent, select it
         if (otherParticipant) {
@@ -215,8 +215,8 @@ function buildLLMContext(
     const { thread, activeTask, availableAgents, allSystemAgents } = processingContext;
 
     // Build thread context with participant information
-    const participantInfo = thread.participants?.map(p => {
-        const agentInfo = availableAgents.find(a => a.name === p);
+    const participantInfo = thread.participants?.map((p: string) => {
+        const agentInfo = availableAgents.find((a: AgentConfig) => a.name === p);
         return `name: ${p} | role: ${agentInfo?.role || "N/A"} | description: ${agentInfo?.description || "N/A"}`;
     }).join("\n- ") || "N/A";
 
@@ -240,7 +240,7 @@ function buildLLMContext(
             "",
             "IMPORTANT: In the conversation history, messages from other participants are prefixed with [SpeakerName]: to help you understand who said what. Your own previous messages appear without prefixes.",
             "",
-            `If you expect an answer from a specific participant, use mention with @<name>, for example: @${thread.participants?.find(p => p !== agent.name)} (otherwise, the participant will not be able to see your message).`
+            `If you expect an answer from a specific participant, use mention with @<name>, for example: @${thread.participants?.find((p: string) => p !== agent.name)} (otherwise, the participant will not be able to see your message).`
         ] : []),
         ...(otherAvailableAgents.length > 0 ? [
             "",
