@@ -1,5 +1,11 @@
 import { createThread, type AgentConfig, type MCPServerConfig, type ChatCallbacks } from "copilotz/agents";
 
+const log = (...args: any[]) =>{
+    const timestamp = new Date().toISOString();
+    const logMessage = `[${timestamp}] ${args.join(" ")}\n`;
+    Deno.writeTextFileSync("mcp-client.log", logMessage, { append: true });
+}
+
 // MCP server config using our own test server
 const testMcpServer: MCPServerConfig = {
     name: "test-server",
@@ -7,7 +13,7 @@ const testMcpServer: MCPServerConfig = {
     transport: {
         type: "stdio",
         command: "deno",
-        args: ["run", "-A", "./services/agents/examples/test-mcp-server.ts"]
+        args: ["run", "-A", "./agents/examples/mcp/mcp-server.ts"]
     },
     // Test both tools
     capabilities: ["get_current_time", "echo_message"],
@@ -39,24 +45,24 @@ const testAgent: AgentConfig = {
 const callbacks: ChatCallbacks = {
     onToolCalling: (data) => {
         const toolType = data.toolName.startsWith("test-server_") ? "MCP" : "Native";
-        console.log(`🔧 [${toolType}] Calling tool: ${data.toolName}`);
+        log(`🔧 [${toolType}] Calling tool: ${data.toolName}`);
     },
     onToolCompleted: (data) => {
         const toolType = data.toolName.startsWith("test-server_") ? "MCP" : "Native";
         if (data.error) {
-            console.log(`❌ [${toolType}] Tool ${data.toolName} failed: ${data.error}`);
+            log(`❌ [${toolType}] Tool ${data.toolName} failed: ${data.error}`);
         } else {
-            console.log(`✅ [${toolType}] Tool ${data.toolName} completed in ${data.duration}ms`);
+            log(`✅ [${toolType}] Tool ${data.toolName} completed in ${data.duration}ms`);
         }
     },
     onMessageSent: (data) => {
-        console.log(`💬 ${data.senderId}: ${data.content}`);
+        log(`💬 ${data.senderId}: ${data.content}`);
     }
 };
 
 export async function testOfficialMcpSdk() {
-    console.log("🧪 Testing Official MCP SDK Integration...\n");
-    console.log("📋 Using our custom MCP server built with official TypeScript SDK\n");
+    log("🧪 Testing Official MCP SDK Integration...\n");
+    log("📋 Using our custom MCP server built with official TypeScript SDK\n");
 
     try {
         const result = await createThread(
@@ -74,9 +80,9 @@ export async function testOfficialMcpSdk() {
             }
         );
 
-        console.log("\n✅ Official MCP SDK integration test completed!");
-        console.log("🎯 Successfully tested both native and MCP tools!");
-        console.log(`📋 Thread ID: ${result.threadId}`);
+        log("\n✅ Official MCP SDK integration test completed!");
+        log("🎯 Successfully tested both native and MCP tools!");
+        log(`📋 Thread ID: ${result.threadId}`);
         
     } catch (error) {
         console.error("❌ Official MCP SDK test failed:", error);

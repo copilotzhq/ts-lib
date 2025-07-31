@@ -96,7 +96,6 @@ class MCPClient {
             const response = await this.client.listTools();
             return response.tools || [];
         } catch (error) {
-            console.error(`Failed to list tools from MCP server ${this.config.name}:`, error);
             return [];
         }
     }
@@ -110,7 +109,6 @@ class MCPClient {
         }
 
         try {
-            console.log(`🔧 [DEBUG] Starting MCP tool call: ${name}`);
             
             // Add 10-second timeout to prevent hanging
             const timeoutPromise = new Promise((_, reject) => {
@@ -123,11 +121,9 @@ class MCPClient {
             });
             
             const response = await Promise.race([callPromise, timeoutPromise]);
-            console.log(`✅ [DEBUG] MCP tool call completed: ${name}`);
             return response;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`❌ [DEBUG] MCP tool call failed: ${name} - ${errorMessage}`);
             throw new Error(`Failed to call MCP tool ${name}: ${errorMessage}`);
         }
     }
@@ -145,7 +141,7 @@ class MCPClient {
 
             this.client = undefined;
         } catch (error) {
-            console.error(`Error disconnecting from MCP server ${this.config.name}:`, error);
+
         }
 
         this.connected = false;
@@ -158,13 +154,10 @@ class MCPClient {
 function createMcpExecutor(client: MCPClient, originalToolName: string, serverName: string) {
     return async (params: any = {}) => {
         try {
-            console.log(`🔧 [DEBUG] Calling MCP tool '${originalToolName}' with params:`, params);
             const result = await client.callTool(originalToolName, params);
-            console.log(`✅ [DEBUG] MCP tool '${originalToolName}' completed:`, result);
             return result;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error(`❌ [DEBUG] MCP tool '${originalToolName}' failed:`, errorMessage);
             throw new Error(`MCP tool execution failed: ${errorMessage}`);
         }
     };
@@ -214,7 +207,7 @@ export async function generateMcpTools(mcpConfig: MCPServerConfig): Promise<Runn
         // For now, we'll keep the connection open during tool execution
 
     } catch (error) {
-        console.error(`Failed to generate tools for MCP server ${mcpConfig.name}:`, error);
+
         await client.disconnect();
     }
 
@@ -231,7 +224,6 @@ export async function generateAllMcpTools(mcpConfigs: MCPServerConfig[]): Promis
     // Filter for supported transports
     const supportedConfigs = mcpConfigs.filter(config => {
         if (config.transport.type !== "stdio") {
-            console.warn(`Skipping MCP server ${config.name}: transport type '${config.transport.type}' not supported by official SDK. Only 'stdio' is currently supported.`);
             return false;
         }
         return true;
@@ -243,7 +235,7 @@ export async function generateAllMcpTools(mcpConfigs: MCPServerConfig[]): Promis
             const tools = await generateMcpTools(config);
             return tools;
         } catch (error) {
-            console.error(`Failed to generate tools for MCP server ${config.name}:`, error);
+
             return [];
         }
     });
@@ -265,7 +257,6 @@ export async function generateAllMcpTools(mcpConfigs: MCPServerConfig[]): Promis
 export async function disconnectAllMcpServers(): Promise<void> {
     // In a production implementation, you'd maintain a registry of active clients
     // and disconnect them here
-    console.log("MCP server cleanup would happen here");
 }
 
 // Export MCPClient for testing purposes

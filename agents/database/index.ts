@@ -1,4 +1,4 @@
-import { Ominipg, withDrizzle } from "jsr:@oxian/ominipg@0.1.3";
+import { Ominipg, withDrizzle } from "omnipg";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { schema, schemaDDL } from "./schema.ts";
 

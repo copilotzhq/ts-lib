@@ -5,7 +5,7 @@ import {
 import { createThread } from "../index.ts";
 import { createDatabase, queue } from "../database/index.ts";
 import { eq } from "drizzle-orm";
-import {
+import type {
   AgentConfig, RunnableTool,
   ToolCallingData,
   ToolCompletedData,
