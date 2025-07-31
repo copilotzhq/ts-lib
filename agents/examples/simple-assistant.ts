@@ -1,4 +1,4 @@
-import { run, getNativeTools, type ChatCallbacks, type RunnableTool } from "copilotz/agent";
+import { run, getNativeTools, type ChatCallbacks, type RunnableTool } from "copilotz/agents";
 
 // Get all native tool keys
 const allNativeToolKeys = Object.keys(getNativeTools());

@@ -1,4 +1,4 @@
-import { run, getNativeTools } from "copilotz/agent";
+import { run, getNativeTools } from "copilotz/agents";
 
 // Get all native tool keys
 const allNativeToolKeys = Object.keys(getNativeTools());

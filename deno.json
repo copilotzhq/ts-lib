@@ -1,10 +1,10 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Libt",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "MIT",
   "exports": {
-    "./agent": "./agent/index.ts",
+    "./agents": "./agents/index.ts",
     "./ai": "./ai/index.ts"
   },
   "unstable": [
@@ -25,7 +25,8 @@
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
     "omnipg": "jsr:@oxian/ominipg@0.1.3", 
-    "copilotz/": "jsr:@copilotz/copilotz@0.1.2/",
+    "copilotz/agents": "./agents/index.ts",
+    "copilotz/ai": "./ai/index.ts",
     "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",
     "drizzle-orm/pg-proxy": "npm:drizzle-orm@0.44.4/pg-proxy",
     "drizzle-orm": "npm:drizzle-orm@0.44.4",
