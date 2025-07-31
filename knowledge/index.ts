@@ -3,7 +3,7 @@
  * Unified interface for document ingestion, processing, and retrieval
  */
 
-import { Ominipg } from 'jsr:@oxian/ominipg@0.1.3';
+import { Ominipg } from 'omnipg';
 import type {
   KnowledgeBaseConfig,
   KnowledgeBaseRequest,

@@ -1,6 +1,6 @@
-import { RunnableTool, MCPServerConfig } from "../Interfaces.ts";
-import { Client } from "npm:@modelcontextprotocol/sdk@1.17.0/client/index.js";
-import { StdioClientTransport } from "npm:@modelcontextprotocol/sdk@1.17.0/client/stdio.js";
+import type { RunnableTool, MCPServerConfig } from "../Interfaces.ts";
+import { Client } from "modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "modelcontextprotocol/sdk/client/stdio.js";
 
 interface MCPTool {
     name: string;

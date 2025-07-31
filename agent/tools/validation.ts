@@ -1,5 +1,5 @@
-import Ajv from "npm:ajv@8.17.1";
-import addFormats from "npm:ajv-formats@3.0.1";
+import Ajv from "ajv";
+import addFormats from "ajv-formats";
 
 const ajv = new (Ajv as any)();
 (addFormats as any)(ajv);

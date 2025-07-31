@@ -1,4 +1,4 @@
-import { getEncoding } from "npm:js-tiktoken@1.0.20";
+import { getEncoding } from "js-tiktoken";
 import type { ChatMessage, ChatRequest, ChatResponse, ProviderConfig, ToolDefinition, ToolCall } from './types.ts';
 
 /**

@@ -1,5 +1,5 @@
 import { threads, messages, tasks, tool_logs, queue } from "./schema.ts";
-import { and, eq, desc, or, inArray, sql } from "npm:drizzle-orm@0.44.4";
+import { and, eq, desc, or, inArray, sql } from "drizzle-orm";
 import { NewMessage, Thread, Message, Task, ToolLog, Queue, NewTask, NewToolLog, NewThread } from "../Interfaces.ts";
 
 /**

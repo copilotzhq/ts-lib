@@ -1,5 +1,5 @@
 import type { RunnableTool, APIConfig, AuthConfig, DynamicAuth } from "../Interfaces.ts";
-import { parse as parseYaml } from "npm:yaml@2.8.0";
+import { parse as parseYaml } from "yaml";
 
 // Token cache for dynamic authentication
 interface CachedToken {

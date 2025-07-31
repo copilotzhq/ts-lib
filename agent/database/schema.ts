@@ -5,7 +5,7 @@ import {
   uuid,
   varchar,
   jsonb,
-} from "npm:drizzle-orm@0.44.4/pg-core";
+} from "drizzle-orm/pg-core";
 
 export const agents: any = pgTable("agents", {
   id: uuid("id").primaryKey().defaultRandom(),

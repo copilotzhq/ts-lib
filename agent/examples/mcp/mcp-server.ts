@@ -5,9 +5,9 @@
  * Based on: https://modelcontextprotocol.io/quickstart/server#node
  */
 
-import { McpServer } from "npm:@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "npm:@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "npm:zod";
+import { McpServer } from "modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
 
 // Create server instance
 const server = new McpServer({

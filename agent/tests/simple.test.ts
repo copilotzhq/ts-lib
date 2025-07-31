@@ -4,7 +4,7 @@ import {
 } from "jsr:@std/assert";
 import { createThread } from "../index.ts";
 import { createDatabase, queue } from "../database/index.ts";
-import { eq } from "npm:drizzle-orm";
+import { eq } from "drizzle-orm";
 import {
   AgentConfig, RunnableTool,
   ToolCallingData,

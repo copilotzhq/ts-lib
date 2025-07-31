@@ -1,4 +1,4 @@
-import { createThread, type AgentConfig, type MCPServerConfig, type ChatCallbacks } from "@copilotz/client/agent";
+import { createThread, type AgentConfig, type MCPServerConfig, type ChatCallbacks } from "copilotz/agent";
 
 // MCP server config using our own test server
 const testMcpServer: MCPServerConfig = {

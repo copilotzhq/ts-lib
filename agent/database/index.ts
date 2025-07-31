@@ -1,5 +1,5 @@
 import { Ominipg, withDrizzle } from "jsr:@oxian/ominipg@0.1.3";
-import { drizzle } from "npm:drizzle-orm@0.44.4/pg-proxy";
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { schema, schemaDDL } from "./schema.ts";
 
 export interface DatabaseConfig {
