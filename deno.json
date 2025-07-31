@@ -1,0 +1,30 @@
+{
+  "name": "@copilotz/copilotz",
+  "description": "Copilotz Libt",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    "./agent": "./agent/index.ts",
+    "./ai": "./ai/index.ts"
+  },
+  "unstable": [
+    "bare-node-builtins",
+    "detect-cjs",
+    "node-globals",
+    "unstable-sloppy-imports",
+    "unsafe-proto",
+    "webgpu",
+    "broadcast-channel",
+    "worker-options",
+    "cron",
+    "kv",
+    "net",
+    "otel"
+  ],
+  "imports": {
+    "ajv": "npm:ajv",
+    "ajv-formats": "npm:ajv-formats",
+    "@copilotz/copilotz/agent": "jsr:@copilotz/copilotz/agent",
+    "@copilotz/copilotz/ai": "jsr:@copilotz/copilotz/ai"
+  }
+}

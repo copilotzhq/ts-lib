@@ -1,0 +1,271 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "National Weather Service API",
+    "description": "Access to weather data from the U.S. National Weather Service",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.weather.gov",
+      "description": "National Weather Service API"
+    }
+  ],
+  "paths": {
+    "/points/{latitude},{longitude}": {
+      "get": {
+        "operationId": "getGridPoint",
+        "summary": "Get grid point data for coordinates",
+        "description": "Returns grid point data including forecast office and grid coordinates for a given latitude/longitude",
+        "parameters": [
+          {
+            "name": "latitude",
+            "in": "path",
+            "required": true,
+            "description": "Latitude coordinate (decimal degrees)",
+            "schema": {
+              "type": "number",
+              "format": "float",
+              "minimum": -90,
+              "maximum": 90
+            }
+          },
+          {
+            "name": "longitude", 
+            "in": "path",
+            "required": true,
+            "description": "Longitude coordinate (decimal degrees)",
+            "schema": {
+              "type": "number",
+              "format": "float",
+              "minimum": -180,
+              "maximum": 180
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Grid point data",
+            "content": {
+              "application/geo+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "properties": {
+                      "type": "object",
+                      "properties": {
+                        "forecast": {
+                          "type": "string",
+                          "description": "URL for forecast data"
+                        },
+                        "forecastHourly": {
+                          "type": "string", 
+                          "description": "URL for hourly forecast data"
+                        },
+                        "cwa": {
+                          "type": "string",
+                          "description": "Weather forecast office identifier"
+                        },
+                        "gridId": {
+                          "type": "string",
+                          "description": "Grid identifier"
+                        },
+                        "gridX": {
+                          "type": "integer",
+                          "description": "Grid X coordinate"
+                        },
+                        "gridY": {
+                          "type": "integer", 
+                          "description": "Grid Y coordinate"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/gridpoints/{office}/{gridX},{gridY}/forecast": {
+      "get": {
+        "operationId": "getForecast",
+        "summary": "Get weather forecast for grid coordinates",
+        "description": "Returns weather forecast for specific grid coordinates",
+        "parameters": [
+          {
+            "name": "office",
+            "in": "path",
+            "required": true,
+            "description": "Weather forecast office identifier",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "gridX",
+            "in": "path", 
+            "required": true,
+            "description": "Grid X coordinate",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "gridY",
+            "in": "path",
+            "required": true, 
+            "description": "Grid Y coordinate",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Weather forecast data",
+            "content": {
+              "application/geo+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "properties": {
+                      "type": "object",
+                      "properties": {
+                        "periods": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "description": "Period name (e.g., 'Today', 'Tonight')"
+                              },
+                              "temperature": {
+                                "type": "integer",
+                                "description": "Temperature"
+                              },
+                              "temperatureUnit": {
+                                "type": "string",
+                                "description": "Temperature unit (F or C)"
+                              },
+                              "windSpeed": {
+                                "type": "string",
+                                "description": "Wind speed"
+                              },
+                              "windDirection": {
+                                "type": "string", 
+                                "description": "Wind direction"
+                              },
+                              "shortForecast": {
+                                "type": "string",
+                                "description": "Brief forecast description"
+                              },
+                              "detailedForecast": {
+                                "type": "string",
+                                "description": "Detailed forecast description"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/alerts/active/area/{area}": {
+      "get": {
+        "operationId": "getActiveAlerts",
+        "summary": "Get active weather alerts for an area",
+        "description": "Returns active weather alerts for a specific area (state or region)",
+        "parameters": [
+          {
+            "name": "area",
+            "in": "path",
+            "required": true,
+            "description": "Two-letter state code (e.g., CA, NY) or area identifier",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active weather alerts",
+            "content": {
+              "application/geo+json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "properties": {
+                            "type": "object",
+                            "properties": {
+                              "event": {
+                                "type": "string",
+                                "description": "Alert event type"
+                              },
+                              "areaDesc": {
+                                "type": "string",
+                                "description": "Affected area description"
+                              },
+                              "severity": {
+                                "type": "string",
+                                "description": "Alert severity level"
+                              },
+                              "urgency": {
+                                "type": "string",
+                                "description": "Alert urgency level"
+                              },
+                              "headline": {
+                                "type": "string",
+                                "description": "Alert headline"
+                              },
+                              "description": {
+                                "type": "string",
+                                "description": "Detailed alert description"
+                              },
+                              "instruction": {
+                                "type": "string",
+                                "description": "Safety instructions"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "UserAgent": {
+        "name": "User-Agent",
+        "in": "header",
+        "required": true,
+        "description": "User agent header required by NWS API",
+        "schema": {
+          "type": "string",
+          "default": "CopilotzWeatherApp/1.0"
+        }
+      }
+    }
+  }
+} 
