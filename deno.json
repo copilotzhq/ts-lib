@@ -22,8 +22,8 @@
     "otel"
   ],
   "imports": {
-    "ajv": "npm:ajv",
-    "ajv-formats": "npm:ajv-formats",
+    "ajv": "npm:ajv@8.17.1",
+    "ajv-formats": "npm:ajv-formats@3.0.1",
     "omnipg": "jsr:@oxian/ominipg@0.1.3", 
     "copilotz/": "jsr:@copilotz/copilotz@0.1.0/",
     "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",
