@@ -1,7 +1,7 @@
 // Import the createThread function from the threads folder
 import { createThread } from "./threads/index.ts";
 // Import the Interfaces
-import * as Interfaces from "./Interfaces.ts";
+import type * as Interfaces from "./Interfaces.ts";
 
 // Export all interfaces
 export * from "./Interfaces.ts";
@@ -16,6 +16,8 @@ export * from "./tools/mcp-generator.ts";
 // Export database
 export * from "./database/index.ts";
 
+export * as utils from "./utils/index.ts";
+
 // Export the run function for interactive session
 export async function run({
     participants,
@@ -24,18 +26,20 @@ export async function run({
     apis,
     mcpServers,
     callbacks,
-    dbConfig
+    dbConfig,
+    dbInstance
 }: {
-    participants?: string[];
     agents: Interfaces.AgentConfig[];
-    tools: Interfaces.RunnableTool[];
+    participants?: string[];
+    tools?: Interfaces.RunnableTool[];
     apis?: Interfaces.APIConfig[];
     mcpServers?: Interfaces.MCPServerConfig[];
-    callbacks: Interfaces.ChatCallbacks;
-    dbConfig: Interfaces.DatabaseConfig;
+    callbacks?: Interfaces.ChatCallbacks;
+    dbConfig?: Interfaces.DatabaseConfig;
+    dbInstance?: any;
 }) {
     console.log("🎯 Starting Interactive Session");
-    console.log("Type your research questions, or 'quit' to exit\n");
+    console.log("Type your questions, or 'quit' to exit\n");
 
     const threadId = crypto.randomUUID();
 
@@ -70,12 +74,13 @@ export async function run({
                     mcpServers,
                     callbacks,
                     dbConfig,
+                    dbInstance,
                     stream: true,
                 }
             );
 
         } catch (error) {
-            console.error("❌ Research failed:", error);
+            console.error("❌ Session failed:", error);
         }
 
         console.log("\n" + "-".repeat(60) + "\n");

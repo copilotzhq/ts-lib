@@ -1,5 +1,5 @@
 
-import { RunnableTool } from "../../Interfaces.ts";
+import type { RunnableTool } from "../../Interfaces.ts";
 
 import ask_question from "./ask_question.ts";
 import create_thread from "./create_thread.ts";
@@ -16,7 +16,7 @@ import fetch_text from "./fetch_text.ts";
 import run_command from "./run_command.ts";
 import wait from "./wait.ts";
 
-const nativeTools: { [key: string]: RunnableTool } = {
+export const nativeTools: { [key: string]: RunnableTool } = {
     ask_question,
     create_thread,
     end_thread,
@@ -32,7 +32,6 @@ const nativeTools: { [key: string]: RunnableTool } = {
     run_command,
     wait
 };
-
 
 export function getNativeTools(): { [key: string]: RunnableTool } {
     return nativeTools;

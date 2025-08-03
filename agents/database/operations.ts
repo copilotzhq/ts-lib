@@ -1,4 +1,4 @@
-import { threads, messages, tasks, tool_logs, queue } from "./schema.ts";
+import { threads, messages, tasks, tool_logs, queue, agents, apis, tools, mcpServers } from "./schema.ts";
 import { and, eq, desc, or, inArray, sql } from "drizzle-orm";
 import { NewMessage, Thread, Message, Task, ToolLog, Queue, NewTask, NewToolLog, NewThread } from "../Interfaces.ts";
 
@@ -152,7 +152,91 @@ export function createOperations(db: any) {
         async createTask(taskData: NewTask): Promise<Task> {
             const [newTask] = await db.insert(tasks).values(taskData).returning();
             return newTask;
-        }
+        },
+
+        // Agent operations
+        async createAgent(agentData: any): Promise<any> {
+            // Ensure we only pass fields that exist in the schema
+            const cleanAgentData = {
+                name: agentData.name,
+                role: agentData.role,
+                personality: agentData.personality || null,
+                instructions: agentData.instructions || null,
+                description: agentData.description || null,
+                agentType: agentData.agentType || "agentic",
+                allowedAgents: agentData.allowedAgents || null,
+                allowedTools: agentData.allowedTools || null,
+                llmOptions: agentData.llmOptions || null
+            };
+            
+            const [newAgent] = await db.insert(agents).values(cleanAgentData).returning();
+            return newAgent;
+        },
+
+        async getAllAgents(): Promise<any[]> {
+            return await db.select().from(agents);
+        },
+
+        async getAgentByName(name: string): Promise<any | undefined> {
+            const [agent] = await db.select().from(agents).where(eq(agents.name, name)).limit(1);
+            return agent;
+        },
+
+        // API operations
+        async createAPI(apiData: any): Promise<any> {
+            // Ensure we only pass fields that exist in the schema
+            const cleanApiData = {
+                name: apiData.name,
+                description: apiData.description || null,
+                openApiSchema: apiData.openApiSchema || null,
+                baseUrl: apiData.baseUrl || null,
+                headers: apiData.headers || null,
+                auth: apiData.auth || null,
+                timeout: apiData.timeout || null
+            };
+            
+            const [newAPI] = await db.insert(apis).values(cleanApiData).returning();
+            return newAPI;
+        },
+
+        async getAllAPIs(): Promise<any[]> {
+            return await db.select().from(apis);
+        },
+
+        async getAPIByName(name: string): Promise<any | undefined> {
+            const [api] = await db.select().from(apis).where(eq(apis.name, name)).limit(1);
+            return api;
+        },
+
+        // Tool operations
+        async createTool(toolData: any): Promise<any> {
+            const [newTool] = await db.insert(tools).values(toolData).returning();
+            return newTool;
+        },
+
+        async getAllTools(): Promise<any[]> {
+            return await db.select().from(tools);
+        },
+
+        async getToolByKey(key: string): Promise<any | undefined> {
+            const [tool] = await db.select().from(tools).where(eq(tools.key, key)).limit(1);
+            return tool;
+        },
+
+        // MCP Server operations
+        async createMCPServer(mcpData: any): Promise<any> {
+            const [newMCPServer] = await db.insert(mcpServers).values(mcpData).returning();
+            return newMCPServer;
+        },
+
+        async getAllMCPServers(): Promise<any[]> {
+            return await db.select().from(mcpServers);
+        },
+
+        async getMCPServerByName(name: string): Promise<any | undefined> {
+            const [mcpServer] = await db.select().from(mcpServers).where(eq(mcpServers.name, name)).limit(1);
+            return mcpServer;
+        },
     };
 }
 
@@ -212,4 +296,56 @@ export async function archiveThread(db: any, threadId: string, summary: string):
 
 export async function createTask(db: any, taskData: NewTask): Promise<Task> {
     return createOperations(db).createTask(taskData);
+}
+
+// Legacy exports for agent operations
+export async function createAgent(db: any, agentData: any): Promise<any> {
+    return createOperations(db).createAgent(agentData);
+}
+
+export async function getAllAgents(db: any): Promise<any[]> {
+    return createOperations(db).getAllAgents();
+}
+
+export async function getAgentByName(db: any, name: string): Promise<any | undefined> {
+    return createOperations(db).getAgentByName(name);
+}
+
+// Legacy exports for API operations
+export async function createAPI(db: any, apiData: any): Promise<any> {
+    return createOperations(db).createAPI(apiData);
+}
+
+export async function getAllAPIs(db: any): Promise<any[]> {
+    return createOperations(db).getAllAPIs();
+}
+
+export async function getAPIByName(db: any, name: string): Promise<any | undefined> {
+    return createOperations(db).getAPIByName(name);
+}
+
+// Legacy exports for tool operations
+export async function createTool(db: any, toolData: any): Promise<any> {
+    return createOperations(db).createTool(toolData);
+}
+
+export async function getAllTools(db: any): Promise<any[]> {
+    return createOperations(db).getAllTools();
+}
+
+export async function getToolByKey(db: any, key: string): Promise<any | undefined> {
+    return createOperations(db).getToolByKey(key);
+}
+
+// Legacy exports for MCP server operations
+export async function createMCPServer(db: any, mcpData: any): Promise<any> {
+    return createOperations(db).createMCPServer(mcpData);
+}
+
+export async function getAllMCPServers(db: any): Promise<any[]> {
+    return createOperations(db).getAllMCPServers();
+}
+
+export async function getMCPServerByName(db: any, name: string): Promise<any | undefined> {
+    return createOperations(db).getMCPServerByName(name);
 } 

@@ -40,3 +40,6 @@ passwords.txt
 
 # test-data
 test-data
+
+# internal examples
+agents/examples/internal

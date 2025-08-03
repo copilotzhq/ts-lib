@@ -21,6 +21,11 @@ import {
     ToolCallingData,
     ToolCompletedData,
     LLMCompletedData,
+    InterceptorData,
+    ProgrammaticAgentInput,
+    ProgrammaticAgentOutput,
+    ContentStreamData,
+    ToolCallStreamData,
 } from "../Interfaces.ts";
 import { ToolDefinition, ChatMessage } from "../../ai/llm/types.ts";
 
@@ -268,8 +273,11 @@ function buildLLMContext(
         `Your instructions are: ${agent.instructions}`
     ].join("\n");
 
+    const currentDate = new Date().toLocaleString();
+    const dateContext = `Current date and time: ${currentDate}`;
+
     // Combine all contexts
-    const systemPrompt = [threadContext, taskContext, agentContext]
+    const systemPrompt = [threadContext, taskContext, agentContext, dateContext]
         .filter(Boolean)
         .join("\n\n");
 
@@ -320,16 +328,42 @@ function buildLLMHistory(
 }
 
 /**
- * Triggers callback if provided in context
+ * Triggers callback and handles interception logic
  */
-async function triggerCallback(
+async function triggerInterceptor<T>(
     context: ChatContext,
     callbackName: keyof NonNullable<ChatContext['callbacks']>,
-    data: any
-): Promise<void> {
+    data: T,
+    agentName: string
+): Promise<T> {
     const callback = context.callbacks?.[callbackName];
-    if (callback) {
-        await (callback as any)(data);
+    if (!callback) {
+        return data;
+    }
+
+    try {
+        const result = await (callback as any)(data);
+        
+        // Check if the result contains an override
+        if (result !== undefined && result !== null) {
+            // Trigger interceptor callback if available
+            if (context.callbacks?.onIntercepted) {
+                await context.callbacks.onIntercepted({
+                    threadId: (data as any).threadId || '',
+                    agentName,
+                    callbackType: callbackName,
+                    originalValue: data,
+                    interceptedValue: result,
+                    timestamp: new Date(),
+                } as InterceptorData);
+            }
+            return result;
+        }
+        
+        return data;
+    } catch (error) {
+        console.error(`Error in callback ${callbackName}:`, error);
+        return data;
     }
 }
 
@@ -372,8 +406,8 @@ async function processToolExecutionResults(
         const startTime = toolStartTimes?.get(toolCallId);
         const duration = startTime ? endTime - startTime : undefined;
 
-        // Trigger onToolCompleted callback
-        await triggerCallback(context, 'onToolCompleted', {
+        // Trigger onToolCompleted callback with interceptor support
+        const finalToolCompletedData = await triggerInterceptor(context, 'onToolCompleted', {
             threadId: message.threadId!,
             agentName: agent.name,
             toolName: call.function.name,
@@ -383,7 +417,15 @@ async function processToolExecutionResults(
             error: result.error ? String(result.error) : undefined,
             duration,
             timestamp,
-        } as ToolCompletedData);
+        } as ToolCompletedData, agent.name);
+
+        // Update result if output was intercepted
+        if (JSON.stringify(finalToolCompletedData.toolOutput) !== JSON.stringify(result.output)) {
+            toolResults[i] = {
+                ...result,
+                output: finalToolCompletedData.toolOutput
+            };
+        }
     }
 
     // Create and save tool result messages with clear success/error distinction
@@ -419,6 +461,117 @@ async function processToolExecutionResults(
 }
 
 /**
+ * Processes a programmatic agent using its custom processing function
+ */
+async function processProgrammaticAgent(
+    ops: Operations,
+    agent: AgentConfig,
+    message: NewMessage,
+    processingContext: MessageProcessingContext,
+    context: ChatContext
+): Promise<AgentProcessingResult> {
+    if (!agent.processingFunction) {
+        throw new Error(`Programmatic agent ${agent.name} is missing processingFunction`);
+    }
+
+    // Prepare input for programmatic agent
+    const input: ProgrammaticAgentInput = {
+        message,
+        context: processingContext,
+        chatContext: context,
+    };
+
+    try {
+        // Call the custom processing function
+        const output: ProgrammaticAgentOutput = await agent.processingFunction(input);
+
+        // Create agent response message if content is provided
+        let savedMessage: NewMessage | undefined;
+        if (output.content) {
+            const agentResponseMessage: NewMessage = {
+                threadId: message.threadId,
+                senderId: agent.name,
+                senderType: "agent" as const,
+                content: output.content,
+                toolCalls: output.toolCalls,
+            };
+
+            savedMessage = await ops.createMessage(agentResponseMessage);
+
+            // Trigger message sent callback with interceptor support
+            await triggerInterceptor(context, 'onMessageSent', {
+                threadId: message.threadId!,
+                senderId: agent.name,
+                senderType: "agent",
+                content: output.content,
+                timestamp: new Date(),
+            }, agent.name);
+        }
+
+        // Process tool calls if any
+        let toolResults: ToolExecutionResult[] | undefined;
+        if (output.toolCalls && output.toolCalls.length > 0) {
+            // Get agent's available tools for tool processing
+            const agentTools = agent.allowedTools?.map(toolKey =>
+                processingContext.allTools.find(tool => tool.key === toolKey)
+            ).filter((tool): tool is RunnableTool => tool !== undefined) || [];
+
+            toolResults = await processToolCalls(
+                output.toolCalls,
+                agentTools,
+                {
+                    ...context,
+                    senderId: agent.name,
+                    senderType: "agent",
+                    threadId: message.threadId,
+                    agents: processingContext.allSystemAgents,
+                    tools: processingContext.allTools,
+                }
+            );
+
+            // Process tool execution results
+            await processToolExecutionResults(
+                ops,
+                agent,
+                output.toolCalls,
+                toolResults,
+                message,
+                context,
+                processingContext.activeTask
+            );
+        }
+
+        // Queue for continued processing if requested
+        if (output.shouldContinue !== false && savedMessage) {
+            await ops.addToQueue(message.threadId!, {
+                threadId: message.threadId,
+                senderId: agent.name,
+                senderType: "agent" as const,
+            });
+        }
+
+        return { agent, response: savedMessage, toolResults };
+    } catch (error) {
+        console.error(`Error in programmatic agent ${agent.name}:`, error);
+        return { agent };
+    }
+}
+
+/**
+ * Triggers callback if provided in context (backwards compatible)
+ */
+async function triggerCallback(
+    context: ChatContext,
+    callbackName: keyof NonNullable<ChatContext['callbacks']>,
+    data: any
+): Promise<void> {
+    const callback = context.callbacks?.[callbackName];
+    if (callback) {
+        await (callback as any)(data);
+    }
+}
+
+/**
  * Processes a message for a single agent
  */
 async function processAgentMessage(
@@ -429,6 +582,12 @@ async function processAgentMessage(
     processingContext: MessageProcessingContext,
     context: ChatContext
 ): Promise<AgentProcessingResult> {
+    // Check if this is a programmatic agent
+    if (agent.agentType === "programmatic") {
+        return await processProgrammaticAgent(ops, agent, message, processingContext, context);
+    }
+
+    // Continue with standard agentic processing
     const { allTools, activeTask } = processingContext;
 
     // Build LLM context and history
@@ -443,15 +602,115 @@ async function processAgentMessage(
     // Call LLM with agent context and optional streaming
     const llmTools = formatToolsForAI(agentTools);
 
-    // Setup streaming callback if streaming is enabled
-    const streamCallback = (context.stream && context.callbacks?.onTokenStream)
+        // Setup streaming callback if streaming is enabled
+    let streamBuffer = '';
+    let insideToolCall = false;
+    let toolCallBuffer = '';
+    let contentBuffer = ''; // Buffer for content that might be part of a tool call
+    
+    const streamCallback = (context.stream && (context.callbacks?.onTokenStream || context.callbacks?.onContentStream || context.callbacks?.onToolCallStream))
         ? (token: string) => {
-            context.callbacks!.onTokenStream!({
-                threadId: message.threadId!,
-                agentName: agent.name,
-                token,
-                isComplete: false,
-            });
+            // Call original token stream if provided
+            if (context.callbacks?.onTokenStream) {
+                context.callbacks.onTokenStream({
+                    threadId: message.threadId!,
+                    agentName: agent.name,
+                    token,
+                    isComplete: false,
+                });
+            }
+
+            // Add token to buffer for parsing
+            streamBuffer += token;
+
+            // Parse for tool calls and content streaming
+            if (context.callbacks?.onContentStream || context.callbacks?.onToolCallStream) {
+                if (!insideToolCall) {
+                    // Check if we're starting a tool call
+                    if (streamBuffer.includes('<function_calls>')) {
+                        const beforeToolCall = streamBuffer.split('<function_calls>')[0];
+                        if (beforeToolCall && context.callbacks?.onContentStream) {
+                            context.callbacks.onContentStream({
+                                threadId: message.threadId!,
+                                agentName: agent.name,
+                                token: beforeToolCall,
+                                isComplete: false,
+                            } as ContentStreamData);
+                        }
+                        insideToolCall = true;
+                        toolCallBuffer = '<function_calls>';
+                        streamBuffer = streamBuffer.split('<function_calls>').slice(1).join('<function_calls>');
+                        contentBuffer = ''; // Clear content buffer
+                    } else {
+                        // Check if current buffer might be start of tool call
+                        const lastWhitespaceIndex = Math.max(
+                            streamBuffer.lastIndexOf(' '),
+                            streamBuffer.lastIndexOf('\n'),
+                            streamBuffer.lastIndexOf('\t')
+                        );
+                        const potentialStart = streamBuffer.slice(lastWhitespaceIndex + 1);
+                        const toolCallStart = '<function_calls>';
+                        
+                        if (toolCallStart.startsWith(potentialStart) && potentialStart.length > 0) {
+                            // Hold back this content as it might be start of tool call
+                            const safeContent = streamBuffer.slice(0, lastWhitespaceIndex + 1);
+                            if (safeContent && context.callbacks?.onContentStream) {
+                                context.callbacks.onContentStream({
+                                    threadId: message.threadId!,
+                                    agentName: agent.name,
+                                    token: safeContent,
+                                    isComplete: false,
+                                } as ContentStreamData);
+                            }
+                            contentBuffer = potentialStart;
+                            streamBuffer = potentialStart;
+                        } else {
+                            // Safe to stream all content
+                            if (context.callbacks?.onContentStream) {
+                                context.callbacks.onContentStream({
+                                    threadId: message.threadId!,
+                                    agentName: agent.name,
+                                    token,
+                                    isComplete: false,
+                                } as ContentStreamData);
+                            }
+                        }
+                    }
+                } else {
+                    // Handle content inside tool calls
+                    toolCallBuffer += token;
+                    
+                    // Check for tool call end
+                    if (toolCallBuffer.includes('</function_calls>')) {
+                        const parts = toolCallBuffer.split('</function_calls>');
+                        const completeToolCall = parts[0] + '</function_calls>';
+                        
+                        if (context.callbacks?.onToolCallStream) {
+                            context.callbacks.onToolCallStream({
+                                threadId: message.threadId!,
+                                agentName: agent.name,
+                                token: completeToolCall,
+                                isComplete: false,
+                            } as ToolCallStreamData);
+                        }
+                        
+                        insideToolCall = false;
+                        toolCallBuffer = '';
+                        
+                        // Stream remaining content after tool call
+                        const afterToolCall = parts.slice(1).join('</function_calls>');
+                        if (afterToolCall && context.callbacks?.onContentStream) {
+                            context.callbacks.onContentStream({
+                                threadId: message.threadId!,
+                                agentName: agent.name,
+                                token: afterToolCall,
+                                isComplete: false,
+                            } as ContentStreamData);
+                        }
+                        streamBuffer = afterToolCall;
+                    }
+                }
+            }
         }
         : undefined;
 
@@ -469,18 +728,46 @@ async function processAgentMessage(
 
     const llmDuration = Date.now() - llmStartTime;
 
-    // Trigger final stream callback to indicate completion
-    if (streamCallback && context.callbacks?.onTokenStream) {
-        context.callbacks.onTokenStream({
-            threadId: message.threadId!,
-            agentName: agent.name,
-            token: "",
-            isComplete: true,
-        });
+        // Trigger final stream callbacks to indicate completion
+    if (streamCallback) {
+        // Flush any remaining content buffer before completion
+        if (contentBuffer && context.callbacks?.onContentStream) {
+            context.callbacks.onContentStream({
+                threadId: message.threadId!,
+                agentName: agent.name,
+                token: contentBuffer,
+                isComplete: false,
+            } as ContentStreamData);
+        }
+        
+        if (context.callbacks?.onTokenStream) {
+            context.callbacks.onTokenStream({
+                threadId: message.threadId!,
+                agentName: agent.name,
+                token: "",
+                isComplete: true,
+            });
+        }
+        if (context.callbacks?.onContentStream) {
+            context.callbacks.onContentStream({
+                threadId: message.threadId!,
+                agentName: agent.name,
+                token: "",
+                isComplete: true,
+            } as ContentStreamData);
+        }
+        if (context.callbacks?.onToolCallStream) {
+            context.callbacks.onToolCallStream({
+                threadId: message.threadId!,
+                agentName: agent.name,
+                token: "",
+                isComplete: true,
+            } as ToolCallStreamData);
+        }
     }
 
-    // Trigger LLM completed callback with request and response data
-    await triggerCallback(context, 'onLLMCompleted', {
+    // Trigger LLM completed callback with interceptor support
+    const llmCompletedData = await triggerInterceptor(context, 'onLLMCompleted', {
         threadId: message.threadId!,
         agentName: agent.name,
         systemPrompt: llmContextData.systemPrompt,
@@ -501,20 +788,28 @@ async function processAgentMessage(
         },
         duration: llmDuration,
         timestamp: new Date(),
-    } as LLMCompletedData);
+    } as LLMCompletedData, agent.name);
+
+    // Use potentially intercepted LLM response
+    const finalLLMResponse = llmCompletedData.llmResponse || {
+        success: llmResponse.success,
+        answer: llmResponse.success && "answer" in llmResponse ? llmResponse.answer : undefined,
+        toolCalls: llmResponse.success && "toolCalls" in llmResponse ? llmResponse.toolCalls : undefined,
+        error: llmResponse.success ? undefined : llmResponse.error,
+    };
 
     // Handle LLM response
-    if (!llmResponse.success) {
-        console.error("LLM Error:", llmResponse.error);
+    if (!finalLLMResponse.success) {
+        console.error("LLM Error:", finalLLMResponse.error);
         return { agent };
     }
 
-    if (!("answer" in llmResponse) || !llmResponse.answer) {
+    if (!("answer" in finalLLMResponse) || !finalLLMResponse.answer) {
         return { agent };
     }
 
     // Clean LLM response to prevent duplicate prefixes
-    let cleanResponse = llmResponse.answer;
+    let cleanResponse = finalLLMResponse.answer;
 
     // Remove self-referential prefix if LLM added one (e.g., "[TestAgent]: Hello" -> "Hello")
     const selfPrefixPattern = new RegExp(`^\\[${escapeRegex(agent.name)}\\]:\\s*`, 'i');
@@ -530,46 +825,62 @@ async function processAgentMessage(
         senderId: agent.name,
         senderType: "agent" as const,
         content: cleanResponse, // Use cleaned response without re-adding prefix
-        toolCalls: llmResponse.toolCalls,
+        toolCalls: finalLLMResponse.toolCalls,
     };
 
-
-    const savedMessage = await ops.createMessage(agentResponseMessage);
-
-    // Trigger message sent callback
-    await triggerCallback(context, 'onMessageSent', {
+    // Trigger message sent callback with interceptor support  
+    const finalMessageData = await triggerInterceptor(context, 'onMessageSent', {
         threadId: message.threadId!,
         senderId: agent.name,
         senderType: "agent",
         content: agentResponseMessage.content!,
         timestamp: new Date(),
-    });
+    }, agent.name);
+
+    // If content was intercepted, save the final version
+    if (finalMessageData.content !== agentResponseMessage.content) {
+        agentResponseMessage.content = finalMessageData.content;
+    }
+
+    const savedMessage = await ops.createMessage(agentResponseMessage);
 
     // Process tool calls if any
-    if (llmResponse.toolCalls && llmResponse.toolCalls.length > 0) {
+    if (finalLLMResponse.toolCalls && finalLLMResponse.toolCalls.length > 0) {
         // Track start times for duration calculation
         const toolStartTimes = new Map<string, number>();
+        let finalToolCalls = [...finalLLMResponse.toolCalls];
 
-        // Trigger onToolCalling callbacks before execution
-        for (let i = 0; i < llmResponse.toolCalls.length; i++) {
-            const call = llmResponse.toolCalls[i];
+        // Trigger onToolCalling callbacks before execution with interceptor support
+        for (let i = 0; i < finalToolCalls.length; i++) {
+            const call = finalToolCalls[i];
             const toolCallId = call.id || `${call.function.name}_${i}`;
             const startTime = Date.now();
 
             toolStartTimes.set(toolCallId, startTime);
 
-            await triggerCallback(context, 'onToolCalling', {
+            const finalToolCallingData = await triggerInterceptor(context, 'onToolCalling', {
                 threadId: message.threadId!,
                 agentName: agent.name,
                 toolName: call.function.name,
                 toolInput: call.function.arguments,
                 toolCallId,
                 timestamp: new Date(startTime),
-            } as ToolCallingData);
+            } as ToolCallingData, agent.name);
+
+            // Update tool call if intercepted
+            if (JSON.stringify(finalToolCallingData.toolInput) !== JSON.stringify(call.function.arguments)) {
+                finalToolCalls[i] = {
+                    ...call,
+                    function: {
+                        ...call.function,
+                        arguments: finalToolCallingData.toolInput
+                    }
+                };
+            }
         }
 
         const toolResults = await processToolCalls(
-            llmResponse.toolCalls,
+            finalToolCalls,
             agentTools,
             {
                 ...context,
@@ -585,7 +896,7 @@ async function processAgentMessage(
         await processToolExecutionResults(
             ops,
             agent,
-            llmResponse.toolCalls,
+            finalToolCalls,
             toolResults,
             message,
             context,
@@ -620,14 +931,19 @@ async function processMessage(
     // Build processing context
     const processingContext = await buildProcessingContext(ops, currentMessage, context, allSystemAgents);
 
-    // Trigger message received callback
-    await triggerCallback(context, 'onMessageReceived', {
+    // Trigger message received callback with interceptor support
+    const finalMessageReceivedData = await triggerInterceptor(context, 'onMessageReceived', {
         threadId: currentMessage.threadId!,
         senderId: currentMessage.senderId!,
         senderType: currentMessage.senderType!,
         content: currentMessage.content!,
         timestamp: new Date(),
-    });
+    }, currentMessage.senderId!);
+
+    // Update message content if intercepted
+    if (finalMessageReceivedData.content !== currentMessage.content) {
+        currentMessage.content = finalMessageReceivedData.content;
+    }
 
     // Discover target agents
     const targetAgents = discoverTargetAgents(currentMessage, processingContext);

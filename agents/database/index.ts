@@ -1,6 +1,7 @@
 import { Ominipg, withDrizzle } from "omnipg";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { schema, schemaDDL } from "./schema.ts";
+import { createOperations } from "./operations.ts";
 
 export interface DatabaseConfig {
   url?: string;
@@ -23,10 +24,14 @@ export async function createDatabase(config?: DatabaseConfig): Promise<any> {
   const ominipg = await Ominipg.connect(finalConfig);
   const dbInstance = await withDrizzle(ominipg, drizzle, schema);
 
+  // Add operations to the database instance
+  dbInstance.operations = createOperations(dbInstance);
+
   return dbInstance;
 }
 
 
 export * from "./schema.ts";
+export * from "./operations.ts";
 
 export { schema };

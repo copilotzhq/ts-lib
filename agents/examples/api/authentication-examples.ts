@@ -7,7 +7,7 @@
  * when integrating APIs with agents. It covers all supported authentication types.
  */
 
-import { APIConfig, ApiKeyAuth, BearerAuth, BasicAuth, CustomAuth, DynamicAuth } from "../../Interfaces.ts";
+import type { APIConfig, DynamicAuth } from "../../Interfaces.ts";
 import { generateApiTools } from "../../tools/api-generator.ts";
 
 // Sample OpenAPI schema for testing authentication
@@ -38,7 +38,7 @@ const sampleApiSchema = {
  * Common for services like OpenWeatherMap, Stripe, etc.
  */
 function createApiKeyHeaderExample(): APIConfig {
-    const apiKeyAuth: ApiKeyAuth = {
+    const apiKeyAuth: APIConfig['auth'] = {
         type: 'apiKey',
         key: 'your-secret-api-key-here',
         name: 'X-API-Key', // Header name
@@ -59,7 +59,7 @@ function createApiKeyHeaderExample(): APIConfig {
  * Common for services like Google APIs, YouTube API, etc.
  */
 function createApiKeyQueryExample(): APIConfig {
-    const apiKeyAuth: ApiKeyAuth = {
+    const apiKeyAuth: APIConfig['auth'] = {
         type: 'apiKey',
         key: 'AIzaSyBOTI52HcCX0fXhgsH4jOjG0FiQMo4a',
         name: 'api_key', // Query parameter name
@@ -80,7 +80,7 @@ function createApiKeyQueryExample(): APIConfig {
  * Common for services like GitHub API, Discord API, etc.
  */
 function createBearerTokenExample(): APIConfig {
-    const bearerAuth: BearerAuth = {
+    const bearerAuth: APIConfig['auth'] = {
         type: 'bearer',
         token: 'ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', // GitHub personal access token
         scheme: 'Bearer' // Optional - defaults to 'Bearer'
@@ -100,7 +100,7 @@ function createBearerTokenExample(): APIConfig {
  * Common for internal APIs, Jenkins, etc.
  */
 function createBasicAuthExample(): APIConfig {
-    const basicAuth: BasicAuth = {
+    const basicAuth: APIConfig['auth'] = {
         type: 'basic',
         username: 'your-username',
         password: 'your-password'
@@ -120,7 +120,7 @@ function createBasicAuthExample(): APIConfig {
  * For services with unique authentication requirements
  */
 function createCustomAuthExample(): APIConfig {
-    const customAuth: CustomAuth = {
+    const customAuth: APIConfig['auth'] = {
         type: 'custom',
         headers: {
             'X-Custom-Auth': 'custom-token-value',
@@ -150,9 +150,9 @@ function createEnvironmentBasedAuth(): APIConfig {
     // Get API key from environment variable
     const apiKey = Deno.env.get('API_KEY');
     const bearerToken = Deno.env.get('BEARER_TOKEN');
-    
-    let auth: ApiKeyAuth | BearerAuth | undefined;
-    
+
+    let auth: APIConfig['auth'] | undefined;
+
     if (bearerToken) {
         auth = {
             type: 'bearer',
@@ -318,7 +318,7 @@ function createDiscordBotExample(): APIConfig {
     };
 
     // Discord uses Bot tokens, not dynamic auth, but shows the pattern
-    const bearerAuth: BearerAuth = {
+    const bearerAuth: APIConfig['auth'] = {
         type: 'bearer',
         token: Deno.env.get('DISCORD_BOT_TOKEN') || 'your-bot-token',
         scheme: 'Bot' // Discord uses "Bot" instead of "Bearer"
@@ -366,7 +366,7 @@ function createOpenAIExample(): APIConfig {
         }
     };
 
-    const bearerAuth: BearerAuth = {
+    const bearerAuth: APIConfig['auth'] = {
         type: 'bearer',
         token: Deno.env.get('OPENAI_API_KEY') || 'your-openai-api-key'
     };
@@ -405,7 +405,7 @@ async function demonstrateAuthentication() {
         console.log(`\n${index + 1}️⃣ ${example.name}:`);
         console.log(`   Service: ${example.config.name}`);
         console.log(`   Auth Type: ${example.config.auth?.type || 'none'}`);
-        
+
         if (example.config.auth) {
             switch (example.config.auth.type) {
                 case 'apiKey':

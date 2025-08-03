@@ -6,6 +6,8 @@ import {
     messages,
     tool_logs,
     queue,
+    mcpServers,
+    apis
 } from "./database/index.ts";
 
 import type { ProviderConfig } from "../ai/llm/types.ts";
@@ -41,6 +43,28 @@ export interface RunnableTool
     ) => Promise<any>;
 }
 
+// Agent types
+export type AgentType = "agentic" | "programmatic";
+
+// Programmatic agent processing function
+export interface ProgrammaticProcessingFunction {
+    (input: ProgrammaticAgentInput): Promise<ProgrammaticAgentOutput> | ProgrammaticAgentOutput;
+}
+
+// Input for programmatic agents
+export interface ProgrammaticAgentInput {
+    message: NewMessage;
+    context: MessageProcessingContext;
+    chatContext: ChatContext;
+}
+
+// Output for programmatic agents (matches agent response format)
+export interface ProgrammaticAgentOutput {
+    content?: string;
+    toolCalls?: any[];
+    shouldContinue?: boolean; // Whether to continue processing in the queue
+}
+
 export interface AgentConfig
     extends Omit<
         typeof agents.$inferInsert,
@@ -49,6 +73,8 @@ export interface AgentConfig
     llmOptions?: ProviderConfig;
     allowedAgents?: string[]; // Array of agent names this agent can communicate with
     allowedTools?: string[]; // Array of tool keys this agent can use
+    agentType?: AgentType; // Type of agent - defaults to "agentic"
+    processingFunction?: ProgrammaticProcessingFunction; // For programmatic agents
 }
 
 export type Thread = typeof threads.$inferSelect;
@@ -142,106 +168,59 @@ export interface TokenStreamData {
     isComplete: boolean;
 }
 
-// Callback types for chat framework events
+export interface ContentStreamData {
+    threadId: string;
+    agentName: string;
+    token: string;
+    isComplete: boolean;
+}
+
+export interface ToolCallStreamData {
+    threadId: string;
+    agentName: string;
+    token: string;
+    isComplete: boolean;
+}
+
+// Interceptor data types
+export interface InterceptorData {
+    threadId: string;
+    agentName: string;
+    callbackType: string; // Which callback triggered the interception
+    originalValue: any;
+    interceptedValue: any;
+    timestamp: Date;
+}
+
+
+// Tool callbacks with interceptor support
+
+export type ToolCallingResponse = ToolCallingData | undefined;
+export type ToolCompletedResponse = ToolCompletedData | undefined;
+export type MessageReceivedResponse = MessageReceivedData | undefined;
+export type MessageSentResponse = MessageSentData | undefined;
+export type LLMCompletedResponse = LLMCompletedData | undefined;
+
+// Enhanced callback types that can return values for interception
 export interface ChatCallbacks {
-    onToolCalling?: (data: ToolCallingData) => void | Promise<void>;
-    onToolCompleted?: (data: ToolCompletedData) => void | Promise<void>;
-    onMessageReceived?: (data: MessageReceivedData) => void | Promise<void>;
-    onMessageSent?: (data: MessageSentData) => void | Promise<void>;
-    onTokenStream?: (data: TokenStreamData) => void | Promise<void>;
-    onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void>;
+    onToolCalling?: (data: ToolCallingData) => void | Promise<void | ToolCallingResponse> | ToolCallingResponse;
+    onToolCompleted?: (data: ToolCompletedData) => void | Promise<void | ToolCompletedResponse> | ToolCompletedResponse;
+    onMessageReceived?: (data: MessageReceivedData) => void | Promise<void | MessageReceivedResponse> | MessageReceivedResponse;
+    onMessageSent?: (data: MessageSentData) => void | Promise<void | MessageSentResponse> | MessageSentResponse;
+    onTokenStream?: (data: TokenStreamData) => void | Promise<void> | TokenStreamData;
+    onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
+    onToolCallStream?: (data: ToolCallStreamData) => void | Promise<void> | ToolCallStreamData;
+    onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
+    onIntercepted?: (data: InterceptorData) => void | Promise<void> | InterceptorData; // New callback for interceptions
 }
-
-// TO DO: ADD MCP SERVERS -> export interface McpServerConfig. Array of MCP Servers Connection Configs
-
-// TO DO: ADD APIs -> export interface ApiConfig. Array of OpenAPI schemas
-
-// Authentication configuration types
-export interface ApiKeyAuth {
-    type: 'apiKey';
-    key: string; // The API key value
-    name: string; // Parameter name (e.g., 'X-API-Key', 'api_key')
-    in: 'header' | 'query'; // Where to put the API key
-}
-
-export interface BearerAuth {
-    type: 'bearer';
-    token: string; // The bearer token (JWT, OAuth token, etc.)
-    scheme?: string; // Optional scheme (default: 'Bearer')
-}
-
-export interface BasicAuth {
-    type: 'basic';
-    username: string;
-    password: string;
-}
-
-export interface CustomAuth {
-    type: 'custom';
-    headers?: Record<string, string>; // Custom headers
-    queryParams?: Record<string, string>; // Custom query parameters
-}
-
-export interface DynamicAuth {
-    type: 'dynamic';
-    authEndpoint: {
-        url: string; // Auth endpoint URL (e.g., '/auth/login', '/oauth/token')
-        method?: 'GET' | 'POST' | 'PUT'; // HTTP method (default: POST)
-        headers?: Record<string, string>; // Headers for auth request
-        body?: any; // Auth request body (credentials, client_id, etc.)
-        credentials?: {
-            username?: string;
-            password?: string;
-            client_id?: string;
-            client_secret?: string;
-            grant_type?: string;
-            [key: string]: any; // Additional auth parameters
-        };
-    };
-    tokenExtraction: {
-        path: string; // JSONPath to extract token (e.g., 'access_token', 'data.token', 'response.authKey')
-        type: 'bearer' | 'apiKey'; // How to use the extracted token
-        headerName?: string; // For apiKey type: where to put the token (default: 'Authorization')
-        prefix?: string; // Token prefix (e.g., 'Bearer ', 'Token ', default: 'Bearer ' for bearer type)
-    };
-    refreshConfig?: {
-        refreshPath?: string; // JSONPath to refresh token (e.g., 'refresh_token')
-        refreshEndpoint?: string; // Endpoint for token refresh
-        refreshBeforeExpiry?: number; // Refresh N seconds before expiry (default: 300)
-        expiryPath?: string; // JSONPath to token expiry (e.g., 'expires_in', 'exp')
-    };
-    cache?: {
-        enabled?: boolean; // Whether to cache tokens (default: true)
-        duration?: number; // Cache duration in seconds (default: 3600)
-    };
-}
-
-export type AuthConfig = ApiKeyAuth | BearerAuth | BasicAuth | CustomAuth | DynamicAuth;
 
 // API Configuration for OpenAPI schema tools
-export interface APIConfig {
-    name: string;
-    description?: string;
-    openApiSchema: any; // OpenAPI 3.0+ JSON schema
-    baseUrl?: string; // Base URL to override the one in the schema
-    headers?: Record<string, string>; // Default headers for all requests (deprecated in favor of auth)
-    auth?: AuthConfig; // Authentication configuration
-    timeout?: number; // Request timeout in seconds
-}
+export type APIConfig = typeof apis.$inferSelect;
+export type AuthConfig = typeof apis.$inferSelect.auth;
+export type DynamicAuth = typeof apis.$inferSelect.auth.dynamic;
 
 // MCP Server Configuration
-export interface MCPServerConfig {
-    name: string;
-    description?: string;
-    transport: {
-        type: "stdio" | "sse" | "websocket";
-        command?: string; // For stdio transport
-        args?: string[]; // For stdio transport
-        url?: string; // For sse/websocket transport
-    };
-    capabilities?: string[]; // Optional capabilities filter
-    env?: Record<string, string>; // Environment variables for stdio
-}
+export type MCPServerConfig = typeof mcpServers.$inferSelect;
 
 export interface ChatContext {
     agents?: AgentConfig[];

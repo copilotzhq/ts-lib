@@ -34,10 +34,23 @@ interface OpenAPISchema {
 
 /**
  * Converts OpenAPI parameter schema to JSON Schema for tool validation
+ * Also returns metadata about where each parameter should be routed
  */
-function convertParameterToJsonSchema(parameters: any[] = [], requestBody?: any): any {
+function convertParameterToJsonSchema(parameters: any[] = [], requestBody?: any): {
+    schema: any;
+    parameterMetadata: {
+        pathParams: Set<string>;
+        queryParams: Set<string>;
+        bodyParams: Set<string>;
+        isObjectBody: boolean;
+    };
+} {
     const properties: Record<string, any> = {};
     const required: string[] = [];
+    const pathParams = new Set<string>();
+    const queryParams = new Set<string>();
+    const bodyParams = new Set<string>();
+    let isObjectBody = false;
 
     // Process path, query, and header parameters
     parameters.forEach((param) => {
@@ -50,6 +63,14 @@ function convertParameterToJsonSchema(parameters: any[] = [], requestBody?: any)
             if (param.required) {
                 required.push(param.name);
             }
+
+            // Track parameter location
+            if (param.in === 'path') {
+                pathParams.add(param.name);
+            } else if (param.in === 'query') {
+                queryParams.add(param.name);
+            }
+            // Note: headers are handled in authentication, so we skip them here
         }
     });
 
@@ -57,15 +78,20 @@ function convertParameterToJsonSchema(parameters: any[] = [], requestBody?: any)
     if (requestBody?.content) {
         const jsonContent = requestBody.content['application/json'];
         if (jsonContent?.schema) {
-            // If it's an object schema, merge properties
+            // If it's an object schema, merge properties and mark them as body params
             if (jsonContent.schema.type === 'object' && jsonContent.schema.properties) {
-                Object.assign(properties, jsonContent.schema.properties);
+                isObjectBody = true;
+                Object.keys(jsonContent.schema.properties).forEach(propName => {
+                    properties[propName] = jsonContent.schema.properties[propName];
+                    bodyParams.add(propName);
+                });
                 if (jsonContent.schema.required) {
                     required.push(...jsonContent.schema.required);
                 }
             } else {
                 // For non-object schemas, create a 'body' parameter
                 properties.body = jsonContent.schema;
+                bodyParams.add('body');
                 if (requestBody.required) {
                     required.push('body');
                 }
@@ -74,9 +100,17 @@ function convertParameterToJsonSchema(parameters: any[] = [], requestBody?: any)
     }
 
     return {
-        type: "object",
-        properties,
-        required: required.length > 0 ? required : undefined,
+        schema: {
+            type: "object",
+            properties,
+            required: required.length > 0 ? required : undefined,
+        },
+        parameterMetadata: {
+            pathParams,
+            queryParams,
+            bodyParams,
+            isObjectBody
+        }
     };
 }
 
@@ -289,23 +323,23 @@ async function applyAuthentication(
             }
             break;
 
-        case 'bearer':
+        case 'bearer': {
             const scheme = auth.scheme || 'Bearer';
             headers['Authorization'] = `${scheme} ${auth.token}`;
             break;
-
-        case 'basic':
+        }
+        case 'basic': {
             const credentials = btoa(`${auth.username}:${auth.password}`);
             headers['Authorization'] = `Basic ${credentials}`;
             break;
-
+        }
         case 'custom':
             if (auth.headers) {
                 Object.assign(headers, auth.headers);
             }
             if (auth.queryParams) {
                 Object.entries(auth.queryParams).forEach(([key, value]) => {
-                    queryParams.set(key, value);
+                    queryParams.set(key, String(value));
                 });
             }
             break;
@@ -338,7 +372,13 @@ function createApiExecutor(
     path: string,
     method: string,
     operation: OpenAPIOperation,
-    baseUrl: string
+    baseUrl: string,
+    parameterMetadata: {
+        pathParams: Set<string>;
+        queryParams: Set<string>;
+        bodyParams: Set<string>;
+        isObjectBody: boolean;
+    }
 ) {
     return async (params: any = {}) => {
         try {
@@ -346,17 +386,16 @@ function createApiExecutor(
             let url = baseUrl + path;
 
             // Replace path parameters
-            const pathParams = Object.keys(params).filter(key =>
-                path.includes(`{${key}}`)
-            );
-            pathParams.forEach(key => {
-                url = url.replace(`{${key}}`, encodeURIComponent(params[key]));
+            parameterMetadata.pathParams.forEach(key => {
+                if (params[key] !== undefined) {
+                    url = url.replace(`{${key}}`, encodeURIComponent(params[key]));
+                }
             });
 
-            // Build query parameters
+            // Build query parameters (only for parameters explicitly marked as query)
             const queryParams = new URLSearchParams();
-            Object.keys(params).forEach(key => {
-                if (!pathParams.includes(key) && key !== 'body' && params[key] !== undefined) {
+            parameterMetadata.queryParams.forEach(key => {
+                if (params[key] !== undefined) {
                     queryParams.append(key, String(params[key]));
                 }
             });
@@ -383,10 +422,27 @@ function createApiExecutor(
             };
 
             // Add body for methods that support it
-            if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && params.body) {
-                requestOptions.body = typeof params.body === 'string'
-                    ? params.body
-                    : JSON.stringify(params.body);
+            if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && parameterMetadata.bodyParams.size > 0) {
+                let requestBody: any;
+
+                if (parameterMetadata.isObjectBody) {
+                    // Collect all body parameters into an object
+                    requestBody = {};
+                    parameterMetadata.bodyParams.forEach(key => {
+                        if (params[key] !== undefined) {
+                            requestBody[key] = params[key];
+                        }
+                    });
+                } else {
+                    // Use the 'body' parameter directly
+                    requestBody = params.body;
+                }
+
+                if (requestBody !== undefined) {
+                    requestOptions.body = typeof requestBody === 'string'
+                        ? requestBody
+                        : JSON.stringify(requestBody);
+                }
             }
 
             // Set timeout
@@ -464,7 +520,7 @@ export function generateApiTools(apiConfig: APIConfig): RunnableTool[] {
                 `${apiConfig.description ? apiConfig.description + ': ' : ''}${toolName}`;
 
             // Convert OpenAPI parameters to JSON Schema
-            const inputSchema = convertParameterToJsonSchema(op.parameters, op.requestBody);
+            const { schema: inputSchema, parameterMetadata } = convertParameterToJsonSchema(op.parameters, op.requestBody);
 
             // Create the tool
             const tool: RunnableTool = {
@@ -472,7 +528,7 @@ export function generateApiTools(apiConfig: APIConfig): RunnableTool[] {
                 name: toolName,
                 description: toolDescription,
                 inputSchema,
-                execute: createApiExecutor(apiConfig, path, method, op, baseUrl),
+                execute: createApiExecutor(apiConfig, path, method, op, baseUrl, parameterMetadata),
             };
 
             tools.push(tool);

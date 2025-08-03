@@ -5,7 +5,10 @@ import {
   uuid,
   varchar,
   jsonb,
+  integer
 } from "drizzle-orm/pg-core";
+
+import type { ProviderConfig } from "../../ai/llm/types.ts";
 
 export const agents: any = pgTable("agents", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -14,8 +17,10 @@ export const agents: any = pgTable("agents", {
   personality: text("personality"),
   instructions: text("instructions"),
   description: text("description"),
-  capabilities: jsonb("capabilities").$type<string[]>(),
-  tools: jsonb("tools").$type<string[]>(),
+  agentType: varchar("agent_type", { enum: ["agentic", "programmatic"] }).default("agentic").notNull(),
+  allowedAgents: jsonb("allowed_agents").$type<string[]>(),
+  allowedTools: jsonb("allowed_tools").$type<string[]>(),
+  llmOptions: jsonb("llm_options").$type<ProviderConfig>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -27,6 +32,35 @@ export const tools:any = pgTable("tools", {
   description: text("description").notNull(),
   inputSchema: jsonb("input_schema").$type<object>(),
   outputSchema: jsonb("output_schema").$type<object>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const apis:any = pgTable("apis", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  openApiSchema: jsonb("open_api_schema").$type<object>(),
+  baseUrl: text("base_url"),
+  headers: jsonb("headers").$type<Record<string, string>>(),
+  auth: jsonb("auth").$type<AuthConfig>(),
+  timeout: integer("timeout"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const mcpServers:any = pgTable("mcp_servers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  transport: jsonb("transport").$type<{
+    type: "stdio" | "sse" | "websocket";
+    command?: string; // For stdio transport
+    args?: string[]; // For stdio transport
+    url?: string; // For sse/websocket transport
+  }>(),
+  capabilities: jsonb("capabilities").$type<string[]>(),
+  env: jsonb("env").$type<object>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -116,7 +150,72 @@ export const schema = {
   messages,
   tool_logs,
   queue,
+  apis,
+  mcpServers,
 };
+
+
+// Authentication configuration types
+interface ApiKeyAuth {
+  type: 'apiKey';
+  key: string; // The API key value
+  name: string; // Parameter name (e.g., 'X-API-Key', 'api_key')
+  in: 'header' | 'query'; // Where to put the API key
+}
+
+interface BearerAuth {
+  type: 'bearer';
+  token: string; // The bearer token (JWT, OAuth token, etc.)
+  scheme?: string; // Optional scheme (default: 'Bearer')
+}
+
+interface BasicAuth {
+  type: 'basic';
+  username: string;
+  password: string;
+}
+
+interface CustomAuth {
+  type: 'custom';
+  headers?: Record<string, string>; // Custom headers
+  queryParams?: Record<string, string>; // Custom query parameters
+}
+
+interface DynamicAuth {
+  type: 'dynamic';
+  authEndpoint: {
+      url: string; // Auth endpoint URL (e.g., '/auth/login', '/oauth/token')
+      method?: 'GET' | 'POST' | 'PUT'; // HTTP method (default: POST)
+      headers?: Record<string, string>; // Headers for auth request
+      body?: any; // Auth request body (credentials, client_id, etc.)
+      credentials?: {
+          username?: string;
+          password?: string;
+          client_id?: string;
+          client_secret?: string;
+          grant_type?: string;
+          [key: string]: any; // Additional auth parameters
+      };
+  };
+  tokenExtraction: {
+      path: string; // JSONPath to extract token (e.g., 'access_token', 'data.token', 'response.authKey')
+      type: 'bearer' | 'apiKey'; // How to use the extracted token
+      headerName?: string; // For apiKey type: where to put the token (default: 'Authorization')
+      prefix?: string; // Token prefix (e.g., 'Bearer ', 'Token ', default: 'Bearer ' for bearer type)
+  };
+  refreshConfig?: {
+      refreshPath?: string; // JSONPath to refresh token (e.g., 'refresh_token')
+      refreshEndpoint?: string; // Endpoint for token refresh
+      refreshBeforeExpiry?: number; // Refresh N seconds before expiry (default: 300)
+      expiryPath?: string; // JSONPath to token expiry (e.g., 'expires_in', 'exp')
+  };
+  cache?: {
+      enabled?: boolean; // Whether to cache tokens (default: true)
+      duration?: number; // Cache duration in seconds (default: 3600)
+  };
+}
+
+type AuthConfig = ApiKeyAuth | BearerAuth | BasicAuth | CustomAuth | DynamicAuth;
 
 export const schemaDDL: string[] = [
   `CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`,
@@ -126,8 +225,11 @@ export const schemaDDL: string[] = [
 	"role" text NOT NULL,
 	"personality" text,
 	"instructions" text,
-	"capabilities" jsonb,
-	"tools" jsonb,
+	"description" text,
+	"agent_type" varchar DEFAULT 'agentic' NOT NULL,
+	"allowed_agents" jsonb,
+	"allowed_tools" jsonb,
+	"llm_options" jsonb,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );`,
@@ -196,6 +298,28 @@ export const schemaDDL: string[] = [
 	"status" varchar DEFAULT 'pending' NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL
 );`,
+  `CREATE TABLE IF NOT EXISTS "apis" (
+	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+	"name" varchar(255) NOT NULL,
+	"description" text,
+	"open_api_schema" jsonb,
+	"base_url" text,
+	"headers" jsonb,
+	"auth" jsonb,
+	"timeout" integer,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
+);`,
+  `CREATE TABLE IF NOT EXISTS "mcp_servers" (
+	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+	"name" varchar(255) NOT NULL,
+	"description" text,
+	"transport" jsonb,
+	"capabilities" jsonb,
+	"env" jsonb,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
+);`,
   `DO $$ BEGIN
  ALTER TABLE "messages" ADD CONSTRAINT "messages_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
 EXCEPTION
@@ -220,5 +344,5 @@ END $$;`,
  ALTER TABLE "queue" ADD CONSTRAINT "queue_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
-END $$;`,
+END $$;`
 ]; 

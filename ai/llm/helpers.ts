@@ -9,12 +9,12 @@ export function formatMessages({ messages, instructions, config, tools }: ChatRe
   // Build system content with instructions and tool definitions
   let systemContent = instructions || messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
 
-  
+
   // Add tool definitions to system prompt if tools are provided
   if (tools && tools.length > 0) {
     const toolSystemPrompt = generateToolSystemPrompt(tools);
     systemContent = systemContent
-      ? `${systemContent}\n\n${toolSystemPrompt}`
+      ? `${toolSystemPrompt}\n\n${systemContent}`
       : toolSystemPrompt;
   }
   // Add system message if content exists
@@ -216,16 +216,21 @@ In this environment you have access to a set of tools you can use to answer the 
 === RULES ===
 
 1. You may talk to the human normally and call tools in the same response.
-2. If a tool is needed, produce JSONL objects between <tool_calls> … </tool_calls>.  
+2. If a tool is needed, produce JSONL objects between <function_calls> … </function_calls>.  
    • Required keys: "name", "arguments"  
    • No extra keys.  
 3. Do not wrap the JSON in markdown fences or add other braces.  
 4. Example:
-<tool_calls>
-{"name": "tool_name", "arguments": { "arg_1": "value_1", "arg_2": "value_2" } }
-{"name": "tool_name_2","arguments": { "arg_1": "value_1", "arg_2": "value_2"} }
-</tool_calls>
 
+\`\`\` 
+<function_calls>
+{ "name": "function_name", "arguments": { "key_1": "value_1", "key_2": "value_2" } }
+{ "name": "function_name_2","arguments": { "key_1": "value_1", "key_2": "value_2", "key_3": "value_3"} }
+</function_calls>
+Hi, I'm going to execute two function calls.
+\`\`\`
+
+VERY IMPORTANT, PAY ATTENTION TO THIS >>>>>> ALWAYS Start your messages with the <function_calls> block when you have a tool to call.
 
 === TOOL CATALOG (read-only) ===
 
@@ -241,10 +246,10 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
   const toolCalls: ToolCall[] = [];
   let cleanResponse = response;
 
-  // Regex to match <tool_calls> ... </tool_calls> block(s)
-  const toolCallsPattern = /<tool_calls>([\s\S]*?)<\/tool_calls>/g;
+  // Regex to match <function_calls> ... </function_calls> block(s)
+  const toolCallsPattern = /<function_calls>([\s\S]*?)<\/function_calls>/g;
 
-  // Find all <tool_calls> blocks
+  // Find all <function_calls> blocks
   const matches = [...response.matchAll(toolCallsPattern)];
 
   for (const match of matches) {
@@ -292,7 +297,7 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
     // Reconstruct the enhanced tool_calls block with execution IDs
     if (updatedJsonObjects.length > 0) {
       const enhancedBlockContent = updatedJsonObjects.join('\n');
-      const enhancedBlock = `<tool_calls>\n${enhancedBlockContent}\n</tool_calls>`;
+      const enhancedBlock = `<function_calls>\n${enhancedBlockContent}\n</function_calls>`;
 
       // Replace the original block with the enhanced version containing execution IDs
       cleanResponse = cleanResponse.replace(match[0], enhancedBlock);
