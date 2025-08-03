@@ -1,6 +1,6 @@
 import chatManagement from "../../threads/index.ts";
 import { createOperations } from "../../database/operations.ts";
-import { ToolExecutionContext, AgentConfig } from "../../Interfaces.ts";
+import { ToolExecutionContext, AgentConfig, Message } from "../../Interfaces.ts";
 
 interface AskQuestionParams {
     question: string;
@@ -71,7 +71,7 @@ export default {
                 const messages = await ops.getMessageHistory(questionThreadId, targetAgent, 10);
 
                 // Look for a response from the target agent (excluding the initial question)
-                const targetAgentResponse = messages.find(msg =>
+                const targetAgentResponse = messages.find((msg: Message) =>
                     msg.senderId === targetAgent &&
                     msg.senderType === "agent" &&
                     msg.content &&
