@@ -1,6 +1,6 @@
 import type { APIConfig } from "copilotz/agents";
 
-export function getToolNames(openApiSchema: APIConfig['openApiSchema']) {
+export function getToolNames(openApiSchema: APIConfig['openApiSchema']): string[] {
     return [...Object.keys(openApiSchema.paths).flatMap(path => {
         const pathObj = openApiSchema.paths[path];
         const operationIds: string[] = [];

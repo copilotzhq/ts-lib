@@ -1,4 +1,4 @@
-export function createFileLogger(path: string = "mcp-client.log") {
+export function createFileLogger(path: string = "mcp-client.log"): (...args: any[]) => void {
 
     // override console.log with our log function avoid 
     // interference with mcp server std transport

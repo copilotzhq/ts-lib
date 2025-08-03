@@ -5,7 +5,7 @@ import { NewMessage, Thread, Message, Task, ToolLog, Queue, NewTask, NewToolLog,
 /**
  * Database operations factory - creates operation functions bound to a specific database instance
  */
-export function createOperations(db: any) {
+export function createOperations(db: any): any {
     return {
         async getMessageHistory(threadId: string, userId: string, limit: number = 50): Promise<NewMessage[]> {
             const allMessages: (Message & { threadLevel: number })[] = [];
