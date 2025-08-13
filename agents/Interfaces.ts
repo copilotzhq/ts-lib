@@ -214,14 +214,14 @@ export type LLMCompletedResponse = LLMCompletedData | undefined;
 
 // Enhanced callback types that can return values for interception
 export interface ChatCallbacks {
-    onToolCalling?: (data: ToolCallingData) => void | Promise<void | ToolCallingResponse> | ToolCallingResponse;
-    onToolCompleted?: (data: ToolCompletedData) => void | Promise<void | ToolCompletedResponse> | ToolCompletedResponse;
-    onMessageReceived?: (data: MessageReceivedData) => void | Promise<void | MessageReceivedResponse> | MessageReceivedResponse;
-    onMessageSent?: (data: MessageSentData) => void | Promise<void | MessageSentResponse> | MessageSentResponse;
+    onToolCalling?: (data: ToolCallingData, respond?: (message: MessageSentData) => void) => void | Promise<void | ToolCallingResponse> | ToolCallingResponse;
+    onToolCompleted?: (data: ToolCompletedData, respond?: (message: MessageSentData) => void) => void | Promise<void | ToolCompletedResponse> | ToolCompletedResponse;
+    onMessageReceived?: (data: MessageReceivedData, respond?: (message: MessageSentData) => void) => void | Promise<void | MessageReceivedResponse> | MessageReceivedResponse;
+    onMessageSent?: (data: MessageSentData, respond?: (message: MessageSentData) => void) => void | Promise<void | MessageSentResponse> | MessageSentResponse;
     onTokenStream?: (data: TokenStreamData) => void | Promise<void> | TokenStreamData;
     onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
     onToolCallStream?: (data: ToolCallStreamData) => void | Promise<void> | ToolCallStreamData;
-    onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
+    onLLMCompleted?: (data: LLMCompletedData, respond?: (message: { content: string; senderId?: string; senderType?: "user" | "agent" | "tool" | "system" }) => void) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
     onIntercepted?: (data: InterceptorData) => void | Promise<void> | InterceptorData; // New callback for interceptions
 }
 

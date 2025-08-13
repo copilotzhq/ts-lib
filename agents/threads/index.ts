@@ -377,7 +377,26 @@ async function triggerInterceptor<T>(
     }
 
     try {
-        const result = await (callback as any)(data);
+        // Provide a respond function to allow programmatic replies
+        const respond = async (message: { content: string; senderId?: string; senderType?: "user" | "agent" | "tool" | "system" }) => {
+            try {
+                const ops = createOperations(context.dbInstance);
+                const threadId = (data as any).threadId;
+                if (!threadId) return;
+                const msg = {
+                    threadId,
+                    senderId: message.senderId || agentName,
+                    senderType: message.senderType || "agent",
+                    content: message.content,
+                } as NewMessage;
+                await ops.createMessage(msg);
+                await ops.addToQueue(threadId, msg);
+            } catch (e) {
+                console.error('Error in respond() from callback:', e);
+            }
+        };
+
+        const result = await (callback as any)(data, respond);
         
         // Check if the result contains an override
         if (result !== undefined && result !== null) {
