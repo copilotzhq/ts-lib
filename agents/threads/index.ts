@@ -40,6 +40,30 @@ const DEFAULT_SENDER_TYPE = "user";
 const escapeRegex = (string: string): string => {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 };
+/**
+ * Reconstructs a <function_calls> block from toolCalls with execution IDs
+ */
+function buildFunctionCallsBlock(toolCalls: Array<{ id?: string; function: { name: string; arguments: string } }>): string {
+    const objects = toolCalls.map((call) => {
+        let args: any;
+        try {
+            args = JSON.parse(call.function.arguments);
+        } catch {
+            // Keep as string if not valid JSON
+            args = call.function.arguments;
+        }
+        const obj: any = {
+            name: call.function.name,
+            arguments: args,
+        };
+        if (call.id) {
+            obj.tool_call_id = call.id;
+        }
+        return JSON.stringify(obj);
+    });
+    return [`<function_calls>`, ...objects, `</function_calls>`].join('\n');
+}
+
 
 /**
  * Converts RunnableTool array to AI service compatible ToolDefinition array
@@ -828,12 +852,19 @@ async function processAgentMessage(
     const selfMentionPattern = new RegExp(`^@${escapeRegex(agent.name)}:\\s*`, 'i');
     cleanResponse = cleanResponse.replace(selfMentionPattern, '');
 
+    // If there were tool calls, prepend a reconstructed <function_calls> block with execution IDs
+    let finalContent = cleanResponse;
+    if (finalLLMResponse.toolCalls && finalLLMResponse.toolCalls.length > 0) {
+        const block = buildFunctionCallsBlock(finalLLMResponse.toolCalls as any);
+        finalContent = `${block}\n${cleanResponse}`;
+    }
+
     // Create and save agent response message
     const agentResponseMessage: NewMessage = {
         threadId: message.threadId,
         senderId: agent.name,
         senderType: "agent" as const,
-        content: cleanResponse, // Use cleaned response without re-adding prefix
+        content: finalContent,
         toolCalls: finalLLMResponse.toolCalls,
     };
 
