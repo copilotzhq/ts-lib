@@ -25,6 +25,7 @@ export interface ChatMessage {
     userId?: string;
     mediaProcessed?: boolean;
     originalSize?: number;
+    toolCalls?: ToolCall[]; // Optional: recorded tool calls to rehydrate as <function_calls>
   };
 }
 

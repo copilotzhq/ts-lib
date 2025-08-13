@@ -240,6 +240,20 @@ ${toolDefinitions}
 }
 
 /**
+ * Rehydrate a <function_calls> block from recorded tool calls, if present in message metadata
+ */
+export function buildFunctionCallsBlock(toolCalls: { id?: string; function: { name: string; arguments: string } }[]): string {
+  const objects = toolCalls.map(call => {
+    let args: any;
+    try { args = JSON.parse(call.function.arguments); } catch { args = call.function.arguments; }
+    const obj: any = { name: call.function.name, arguments: args };
+    if (call.id) obj.tool_call_id = call.id;
+    return JSON.stringify(obj);
+  });
+  return [`<function_calls>`, ...objects, `</function_calls>`].join('\n');
+}
+
+/**
  * Parse tool calls from AI response using the Anthropic-style <tool_calls> JSON block
  */
 export function parseToolCallsFromResponse(response: string): { cleanResponse: string; tool_calls: ToolCall[] } {
@@ -294,14 +308,9 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
       }
     }
 
-    // Reconstruct the enhanced tool_calls block with execution IDs
-    if (updatedJsonObjects.length > 0) {
-      const enhancedBlockContent = updatedJsonObjects.join('\n');
-      const enhancedBlock = `<function_calls>\n${enhancedBlockContent}\n</function_calls>`;
-
-      // Replace the original block with the enhanced version containing execution IDs
-      cleanResponse = cleanResponse.replace(match[0], enhancedBlock);
-    }
+    // Remove the <function_calls> block from the content to keep agent replies clean.
+    // The tool calls (with execution IDs) are returned separately via tool_calls
+    cleanResponse = cleanResponse.replace(match[0], '').trimStart();
   }
 
   return { cleanResponse, tool_calls: toolCalls };

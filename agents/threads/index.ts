@@ -168,7 +168,6 @@ function discoverTargetAgents(
 
     // Case 2: Message contains agent mentions (@AgentName)
     const mentions = message.content?.match(/@(\w+)/g);
-    console.log('mentions', mentions);
     if (mentions) {
         const mentionedNames = mentions.map((m: string) => m.substring(1));
         
@@ -199,9 +198,6 @@ function discoverTargetAgents(
             }
         }
     }
-
-
-    console.log('candidateAgents', candidateAgents.map(a => a.name));
 
     // Apply agent filtering for agent-to-agent communication
     return filterAllowedAgents(message, candidateAgents, availableAgents);
@@ -347,6 +343,16 @@ function buildLLMHistory(
             content = `[Tool Result]: ${content}`;
         }
         // Current agent messages keep original content (they're "assistant" role)
+
+        // If this message had recorded tool calls, prepend a reconstructed <function_calls> block
+        if ((msg as any).toolCalls && Array.isArray((msg as any).toolCalls) && (msg as any).toolCalls.length > 0) {
+            try {
+                const block = buildFunctionCallsBlock((msg as any).toolCalls);
+                content = `${block}\n${content}`;
+            } catch {
+                // ignore malformed toolCalls
+            }
+        }
 
         return {
             content,
@@ -852,11 +858,11 @@ async function processAgentMessage(
     const selfMentionPattern = new RegExp(`^@${escapeRegex(agent.name)}:\\s*`, 'i');
     cleanResponse = cleanResponse.replace(selfMentionPattern, '');
 
-    // If there were tool calls, prepend a reconstructed <function_calls> block with execution IDs
-    let finalContent = cleanResponse;
+    // Use clean content for persistence; toolCalls are stored separately on the message
+    const finalContent = cleanResponse;
+    let toolCallBlock: string | undefined;
     if (finalLLMResponse.toolCalls && finalLLMResponse.toolCalls.length > 0) {
-        const block = buildFunctionCallsBlock(finalLLMResponse.toolCalls as any);
-        finalContent = `${block}\n${cleanResponse}`;
+        toolCallBlock = buildFunctionCallsBlock(finalLLMResponse.toolCalls as any);
     }
 
     // Create and save agent response message
@@ -868,17 +874,17 @@ async function processAgentMessage(
         toolCalls: finalLLMResponse.toolCalls,
     };
 
-    // Trigger message sent callback with interceptor support  
+    // Trigger message sent callback with interceptor support (send clean text only)
     const finalMessageData = await triggerInterceptor(context, 'onMessageSent', {
         threadId: message.threadId!,
         senderId: agent.name,
         senderType: "agent",
-        content: agentResponseMessage.content!,
+        content: cleanResponse,
         timestamp: new Date(),
     }, agent.name);
 
-    // If content was intercepted, save the final version
-    if (finalMessageData.content !== agentResponseMessage.content) {
+    // If content was intercepted, update textual content only
+    if (finalMessageData.content !== cleanResponse) {
         agentResponseMessage.content = finalMessageData.content;
     }
 

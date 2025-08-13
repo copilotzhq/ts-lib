@@ -1,6 +1,6 @@
 import type { ChatRequest, ChatResponse, StreamCallback, ProviderName, ProviderConfig, MediaAttachment, MediaProcessingResult } from './types.ts';
 import { getProvider, isProviderAvailable, getAvailableProviders } from './providers/index.ts';
-import { formatMessages, countTokens, createMockResponse, processStream, parseSSEData, parseToolCallsFromResponse } from './helpers.ts';
+import { formatMessages, countTokens, createMockResponse, processStream, parseSSEData, parseToolCallsFromResponse, buildFunctionCallsBlock } from './helpers.ts';
 import {
     preprocessMediaAttachments,
     generateMediaSummary,
@@ -400,9 +400,21 @@ export async function executeChat(
     }
 
     // Format messages
-    const messages = formatMessages({
+    let messages = formatMessages({
         ...request,
         messages: processedMessages
+    });
+
+    // Rehydrate function call examples into content, if present in metadata
+    messages = messages.map(m => {
+        if (m.metadata && (m.metadata as any).toolCalls && Array.isArray((m.metadata as any).toolCalls)) {
+            const toolCalls = (m.metadata as any).toolCalls as any[];
+            try {
+                const block = buildFunctionCallsBlock(toolCalls);
+                m.content = `${block}\n${m.content}`;
+            } catch { /* ignore malformed */ }
+        }
+        return m;
     });
 
     // Transform messages if needed (e.g., Anthropic, Gemini)
