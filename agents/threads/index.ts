@@ -415,13 +415,21 @@ async function processToolExecutionResults(
     activeTask: Task | null,
     toolStartTimes?: Map<string, number>
 ): Promise<void> {
+    // Helper to parse tool input string to JSON when possible
+    const parseToolInput = (input: unknown): unknown => {
+        if (typeof input === 'string') {
+            try { return JSON.parse(input); } catch { return input; }
+        }
+        return input;
+    };
+
     // Create tool log entries for database
     const toolLogEntries = toolCalls.map((call, i) => ({
         threadId: message.threadId,
         agentId: null, // Code-first agents don't have DB IDs
         taskId: activeTask?.id,
         toolName: call.function.name,
-        toolInput: call.function.arguments ?? null,
+        toolInput: parseToolInput(call.function.arguments) ?? null,
         toolOutput: toolResults[i].output ?? null,
         status: toolResults[i].error ? "error" as const : "success" as const,
         errorMessage: toolResults[i].error ? String(toolResults[i].error) : undefined,
@@ -446,7 +454,7 @@ async function processToolExecutionResults(
             threadId: message.threadId!,
             agentName: agent.name,
             toolName: call.function.name,
-            toolInput: call.function.arguments,
+            toolInput: parseToolInput(call.function.arguments),
             toolCallId,
             toolOutput: result.output,
             error: result.error ? String(result.error) : undefined,
