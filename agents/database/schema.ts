@@ -136,6 +136,7 @@ export const messages:any = pgTable("messages", {
   toolCalls: jsonb("tool_calls").$type<object[]>(),
   metadata: jsonb("metadata").$type<Record<string, any>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 export const tool_logs:any = pgTable("tool_logs", {
@@ -168,6 +169,7 @@ export const queue:any = pgTable("queue", {
     .notNull(),
   metadata: jsonb("metadata").$type<Record<string, any>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 export const schema = {
@@ -316,7 +318,8 @@ export const schemaDDL: string[] = [
 	"tool_calls" jsonb,
 	"tool_call_id" varchar(255),
 	"metadata" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );`,
   `CREATE TABLE IF NOT EXISTS "tool_logs" (
 	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
@@ -338,7 +341,8 @@ export const schemaDDL: string[] = [
 	"message" jsonb NOT NULL,
 	"status" varchar DEFAULT 'pending' NOT NULL,
 	"metadata" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );`,
   `CREATE TABLE IF NOT EXISTS "apis" (
 	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
