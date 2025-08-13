@@ -535,12 +535,15 @@ async function processToolExecutionResults(
         };
     });
 
-    // Save tool results to database and queue for processing
-    await Promise.all(toolResultMessages.map(async msg =>
-        await ops.addToQueue(message.threadId!, msg)
-    ));
-
+    // First, persist tool result messages
     await Promise.all(toolResultMessages.map(msg => ops.createMessage(msg)));
+
+    // If there is NO programmatic response requested, enqueue tool result messages for the agent to continue
+    if (pendingProgrammaticResponses.length === 0) {
+        await Promise.all(toolResultMessages.map(async msg =>
+            await ops.addToQueue(message.threadId!, msg)
+        ));
+    }
 
     // Enqueue any programmatic responses requested by callbacks AFTER tool results are persisted
     if (pendingProgrammaticResponses.length > 0) {
