@@ -387,18 +387,12 @@ async function triggerInterceptor<T>(
                 } else {
                     const ops = createOperations(context.dbInstance);
                     const threadId = (data as any).threadId;
-                    console.log('threadId from within triggerInterceptor/respond', threadId);
+
                     if (!threadId) return;
                     // Trigger onMessageSent for programmatic responses and allow interception
                     const senderId = message.senderId || agentName;
                     const senderType = message.senderType || "agent";
-                    console.log('calling onMessageSent from within triggerInterceptor/respond', {
-                        threadId,
-                        senderId,
-                        senderType,
-                        content: message.content,
-                        timestamp: new Date(),
-                    });
+
                     const sentData = await triggerInterceptor(context, 'onMessageSent', {
                         threadId,
                         senderId,
@@ -568,6 +562,19 @@ async function processToolExecutionResults(
     // Enqueue any programmatic responses requested by callbacks AFTER tool results are persisted
     if (pendingProgrammaticResponses.length > 0) {
         for (const queuedMsg of pendingProgrammaticResponses) {
+            // Fire onMessageSent before persisting, allowing interception/modification
+            const sentData = await triggerInterceptor(context, 'onMessageSent', {
+                threadId: queuedMsg.threadId!,
+                senderId: queuedMsg.senderId!,
+                senderType: queuedMsg.senderType!,
+                content: queuedMsg.content || '',
+                timestamp: new Date(),
+            } as MessageSentData, queuedMsg.senderId!);
+
+            if (sentData && sentData.content !== undefined) {
+                queuedMsg.content = sentData.content;
+            }
+
             await ops.createMessage(queuedMsg);
             await ops.addToQueue(message.threadId!, queuedMsg);
         }
