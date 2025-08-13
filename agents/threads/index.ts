@@ -369,7 +369,8 @@ async function triggerInterceptor<T>(
     context: ChatContext,
     callbackName: keyof NonNullable<ChatContext['callbacks']>,
     data: T,
-    agentName: string
+    agentName: string,
+    respondOverride?: (message: { content: string; senderId?: string; senderType?: "user" | "agent" | "tool" | "system" }) => Promise<void>
 ): Promise<T> {
     const callback = context.callbacks?.[callbackName];
     if (!callback) {
@@ -380,17 +381,21 @@ async function triggerInterceptor<T>(
         // Provide a respond function to allow programmatic replies
         const respond = async (message: { content: string; senderId?: string; senderType?: "user" | "agent" | "tool" | "system" }) => {
             try {
-                const ops = createOperations(context.dbInstance);
-                const threadId = (data as any).threadId;
-                if (!threadId) return;
-                const msg = {
-                    threadId,
-                    senderId: message.senderId || agentName,
-                    senderType: message.senderType || "agent",
-                    content: message.content,
-                } as NewMessage;
-                await ops.createMessage(msg);
-                await ops.addToQueue(threadId, msg);
+                if (respondOverride) {
+                    await respondOverride(message);
+                } else {
+                    const ops = createOperations(context.dbInstance);
+                    const threadId = (data as any).threadId;
+                    if (!threadId) return;
+                    const msg = {
+                        threadId,
+                        senderId: message.senderId || agentName,
+                        senderType: message.senderType || "agent",
+                        content: message.content,
+                    } as NewMessage;
+                    await ops.createMessage(msg);
+                    await ops.addToQueue(threadId, msg);
+                }
             } catch (e) {
                 console.error('Error in respond() from callback:', e);
             }
@@ -434,6 +439,8 @@ async function processToolExecutionResults(
     activeTask: Task | null,
     toolStartTimes?: Map<string, number>
 ): Promise<void> {
+    // Collect programmatic responses requested by onToolCompleted to run after persistence
+    const pendingProgrammaticResponses: NewMessage[] = [];
     // Helper to parse tool input string to JSON when possible
     const parseToolInput = (input: unknown): unknown => {
         if (typeof input === 'string') {
@@ -479,7 +486,21 @@ async function processToolExecutionResults(
             error: result.error ? String(result.error) : undefined,
             duration,
             timestamp,
-        } as ToolCompletedData, agent.name);
+        } as ToolCompletedData, agent.name, async (programmaticMessage) => {
+            // Defer programmatic responses until tool logs + tool result messages are persisted
+            const ops = createOperations(context.dbInstance);
+            const threadId = message.threadId!;
+            const queuedMsg: NewMessage = {
+                threadId,
+                senderId: programmaticMessage.senderId || agent.name,
+                senderType: programmaticMessage.senderType || 'agent',
+                content: programmaticMessage.content,
+            };
+            // Save at the end of this tool-completed loop, after tool result messages
+            // For now, add to queue after we finish writing tool result messages
+            // We'll push to an array and enqueue after persistence
+            (pendingProgrammaticResponses as NewMessage[]).push(queuedMsg);
+        });
 
         // Update result if output was intercepted
         if (JSON.stringify(finalToolCompletedData.toolOutput) !== JSON.stringify(result.output)) {
@@ -520,6 +541,14 @@ async function processToolExecutionResults(
     ));
 
     await Promise.all(toolResultMessages.map(msg => ops.createMessage(msg)));
+
+    // Enqueue any programmatic responses requested by callbacks AFTER tool results are persisted
+    if (pendingProgrammaticResponses.length > 0) {
+        for (const queuedMsg of pendingProgrammaticResponses) {
+            await ops.createMessage(queuedMsg);
+            await ops.addToQueue(message.threadId!, queuedMsg);
+        }
+    }
 }
 
 /**
