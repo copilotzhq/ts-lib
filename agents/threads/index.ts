@@ -22,6 +22,7 @@ import {
     ToolCompletedData,
     LLMCompletedData,
     InterceptorData,
+    MessageSentData,
     ProgrammaticAgentInput,
     ProgrammaticAgentOutput,
     ContentStreamData,
@@ -387,11 +388,22 @@ async function triggerInterceptor<T>(
                     const ops = createOperations(context.dbInstance);
                     const threadId = (data as any).threadId;
                     if (!threadId) return;
+                    // Trigger onMessageSent for programmatic responses and allow interception
+                    const senderId = message.senderId || agentName;
+                    const senderType = message.senderType || "agent";
+                    const sentData = await triggerInterceptor(context, 'onMessageSent', {
+                        threadId,
+                        senderId,
+                        senderType,
+                        content: message.content,
+                        timestamp: new Date(),
+                    } as MessageSentData, senderId);
+
                     const msg = {
                         threadId,
-                        senderId: message.senderId || agentName,
-                        senderType: message.senderType || "agent",
-                        content: message.content,
+                        senderId,
+                        senderType,
+                        content: sentData.content,
                     } as NewMessage;
                     await ops.createMessage(msg);
                     await ops.addToQueue(threadId, msg);
