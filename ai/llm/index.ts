@@ -442,11 +442,11 @@ export async function executeChat(
         fullResponse = await processStream(reader, stream || (() => { }), providerAPI.extractContent);
     }
 
-    // Parse tool calls from response if tools were provided
+    // Parse tool calls from response unconditionally and strip them from the final answer
+    // This guarantees downstream callbacks (e.g., onMessageSent) receive clean content
     let cleanResponse = fullResponse;
     let tool_calls: any[] = [];
-
-    if (request.tools && request.tools.length > 0) {
+    {
         const parsed = parseToolCallsFromResponse(fullResponse);
         cleanResponse = parsed.cleanResponse;
         tool_calls = parsed.tool_calls;

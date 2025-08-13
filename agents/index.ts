@@ -20,6 +20,7 @@ export * as utils from "./utils/index.ts";
 
 // Export the run function for interactive session
 export async function run({
+    initialMessage,
     participants,
     agents,
     tools,
@@ -29,6 +30,7 @@ export async function run({
     dbConfig,
     dbInstance
 }: {
+    initialMessage?: Interfaces.ChatInitMessage;
     agents: Interfaces.AgentConfig[];
     participants?: string[];
     tools?: Interfaces.RunnableTool[];
@@ -41,18 +43,30 @@ export async function run({
     console.log("🎯 Starting Interactive Session");
     console.log("Type your questions, or 'quit' to exit\n");
 
-    const threadId = crypto.randomUUID();
+    // generate a random threadId similar to mongoDB ObjectId
+    const externalId = crypto.randomUUID().slice(0, 24);
+
+    let c = 0;
 
     // Loop until the user quits
     while (true) {
 
         // Prompt the user for a question
-        const question = prompt("Question: ");
+        let question: string;
+        if (c === 0 && initialMessage?.content) {
+            question = initialMessage.content;
+            c++;
+        } else {
+            question = prompt("Question: ") || '';
+        }
+        
 
         if (!question || question.toLowerCase() === 'quit') {
             console.log("👋 Ending session. Goodbye!");
             break;
         }
+
+        console.log('Question', question);
 
         console.log("\n🔬 Thinking...\n");
 
@@ -62,9 +76,9 @@ export async function run({
             await createThread(
                 // Pass the question and participants
                 {
-                    threadId, // keep the same threadId for the same session
+                    threadExternalId: externalId, // keep the same threadId for the same session
+                    participants: participants || agents.map(agent => agent.name),
                     content: question,
-                    participants: participants || agents.map(agent => agent.name)
                 },
                 {
                     // Pass the agents, tools, apis, mcpServers, callbacks, and dbConfig

@@ -124,17 +124,56 @@ interface ChatContext {
 
 ### `ChatCallbacks`
 
-Event callbacks for real-time monitoring and integration.
+Enhanced event callbacks with interceptor support for real-time monitoring and behavior modification.
 
 ```typescript
 interface ChatCallbacks {
-  onToolCalling?: (data: ToolCallingData) => void | Promise<void>;
-  onToolCompleted?: (data: ToolCompletedData) => void | Promise<void>;
-  onMessageReceived?: (data: MessageReceivedData) => void | Promise<void>;
-  onMessageSent?: (data: MessageSentData) => void | Promise<void>;
-  onTokenStream?: (data: TokenStreamData) => void | Promise<void>;
-  onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void>;
+  // Interceptor callbacks - can return modified data to override behavior
+  onToolCalling?: (data: ToolCallingData) => void | Promise<void | ToolCallingResponse> | ToolCallingResponse;
+  onToolCompleted?: (data: ToolCompletedData) => void | Promise<void | ToolCompletedResponse> | ToolCompletedResponse;
+  onMessageReceived?: (data: MessageReceivedData) => void | Promise<void | MessageReceivedResponse> | MessageReceivedResponse;
+  onMessageSent?: (data: MessageSentData) => void | Promise<void | MessageSentResponse> | MessageSentResponse;
+  onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
+  
+  // Streaming callbacks - for real-time content delivery
+  onTokenStream?: (data: TokenStreamData) => void | Promise<void> | TokenStreamData;
+  onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
+  onToolCallStream?: (data: ToolCallStreamData) => void | Promise<void> | ToolCallStreamData;
+  
+  // Interception monitoring
+  onIntercepted?: (data: InterceptorData) => void | Promise<void> | InterceptorData;
 }
+```
+
+**Interceptor Pattern:**
+Callbacks can return modified data to override the original behavior. When a callback returns a modified object, the framework:
+1. Uses the modified data instead of the original
+2. Triggers the `onIntercepted` callback with details about what was changed
+3. Continues processing with the modified data
+
+**Example with Interception:**
+```typescript
+const callbacks: ChatCallbacks = {
+  onToolCompleted: async (data) => {
+    // Modify tool output
+    if (data.toolName === "http_request" && data.toolOutput?.status === 401) {
+      return {
+        ...data,
+        toolOutput: { 
+          status: 200, 
+          body: "Authentication refreshed" 
+        }
+      };
+    }
+    // Return undefined to not intercept
+  },
+  
+  onIntercepted: async (data) => {
+    console.log(`🔄 ${data.callbackType} intercepted for ${data.agentName}`);
+    console.log('Original:', data.originalValue);
+    console.log('Modified:', data.interceptedValue);
+  }
+};
 ```
 
 ### `RunnableTool`
@@ -251,7 +290,7 @@ interface LLMCompletedData {
 
 ### `TokenStreamData`
 
-Data for real-time token streaming.
+Data for real-time token streaming (all tokens including tool calls).
 
 ```typescript
 interface TokenStreamData {
@@ -259,6 +298,47 @@ interface TokenStreamData {
   agentName: string;    // Name of agent generating tokens
   token: string;        // Individual token or chunk
   isComplete: boolean;  // Whether streaming is complete
+}
+```
+
+### `ContentStreamData`
+
+Data for content-only streaming (excludes tool call content).
+
+```typescript
+interface ContentStreamData {
+  threadId: string;     // Conversation thread ID
+  agentName: string;    // Name of agent generating content
+  token: string;        // Content token or chunk
+  isComplete: boolean;  // Whether content streaming is complete
+}
+```
+
+### `ToolCallStreamData`
+
+Data for tool call streaming (only tool call content).
+
+```typescript
+interface ToolCallStreamData {
+  threadId: string;     // Conversation thread ID
+  agentName: string;    // Name of agent making tool calls
+  token: string;        // Tool call token or chunk
+  isComplete: boolean;  // Whether tool call streaming is complete
+}
+```
+
+### `InterceptorData`
+
+Data about callback interceptions.
+
+```typescript
+interface InterceptorData {
+  threadId: string;        // Conversation thread ID
+  agentName: string;       // Name of agent whose data was intercepted
+  callbackType: string;    // Which callback triggered the interception
+  originalValue: any;      // Original data before interception
+  interceptedValue: any;   // Modified data after interception
+  timestamp: Date;         // When the interception occurred
 }
 ```
 

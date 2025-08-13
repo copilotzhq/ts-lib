@@ -1,4 +1,4 @@
-import { threads, messages, tasks, tool_logs, queue, agents, apis, tools, mcpServers } from "./schema.ts";
+import { threads, messages, tasks, tool_logs, queue, agents, apis, tools, mcpServers, users } from "./schema.ts";
 import { and, eq, desc, or, inArray, sql } from "drizzle-orm";
 import { NewMessage, Thread, Message, Task, ToolLog, Queue, NewTask, NewToolLog, NewThread } from "../Interfaces.ts";
 
@@ -70,6 +70,18 @@ export function createOperations(db: any): any {
                 .from(threads)
                 .where(and(
                     eq(threads.id, threadId),
+                    eq(threads.status, "active")
+                ))
+                .limit(1);
+            return thread;
+        },
+
+        async getThreadByExternalId(externalId: string): Promise<Thread | undefined> {
+            const [thread] = await db
+                .select()
+                .from(threads)
+                .where(and(
+                    eq(threads.externalId, externalId),
                     eq(threads.status, "active")
                 ))
                 .limit(1);
@@ -159,6 +171,7 @@ export function createOperations(db: any): any {
             // Ensure we only pass fields that exist in the schema
             const cleanAgentData = {
                 name: agentData.name,
+                externalId: agentData.externalId || null,
                 role: agentData.role,
                 personality: agentData.personality || null,
                 instructions: agentData.instructions || null,
@@ -166,7 +179,8 @@ export function createOperations(db: any): any {
                 agentType: agentData.agentType || "agentic",
                 allowedAgents: agentData.allowedAgents || null,
                 allowedTools: agentData.allowedTools || null,
-                llmOptions: agentData.llmOptions || null
+                llmOptions: agentData.llmOptions || null,
+                metadata: agentData.metadata || null,
             };
             
             const [newAgent] = await db.insert(agents).values(cleanAgentData).returning();
@@ -182,17 +196,74 @@ export function createOperations(db: any): any {
             return agent;
         },
 
+        async getAgentByExternalId(externalId: string): Promise<any | undefined> {
+            const [agent] = await db.select().from(agents).where(eq(agents.externalId, externalId)).limit(1);
+            return agent;
+        },
+
+        async upsertAgent(agentData: any): Promise<any> {
+            // Prefer id, then name
+            if (agentData.id) {
+                const [existing] = await db.select().from(agents).where(eq(agents.id, agentData.id)).limit(1);
+                if (existing) {
+                    const [updated] = await db
+                        .update(agents)
+                        .set({
+                            name: agentData.name ?? existing.name,
+                            externalId: agentData.externalId ?? existing.externalId,
+                            role: agentData.role ?? existing.role,
+                            personality: agentData.personality ?? existing.personality,
+                            instructions: agentData.instructions ?? existing.instructions,
+                            description: agentData.description ?? existing.description,
+                            agentType: agentData.agentType ?? existing.agentType,
+                            allowedAgents: agentData.allowedAgents ?? existing.allowedAgents,
+                            allowedTools: agentData.allowedTools ?? existing.allowedTools,
+                            llmOptions: agentData.llmOptions ?? existing.llmOptions,
+                            metadata: agentData.metadata ?? existing.metadata,
+                        })
+                        .where(eq(agents.id, agentData.id))
+                        .returning();
+                    return updated;
+                }
+            }
+            if (agentData.name) {
+                const [existingByName] = await db.select().from(agents).where(eq(agents.name, agentData.name)).limit(1);
+                if (existingByName) {
+                    const [updated] = await db
+                        .update(agents)
+                        .set({
+                            externalId: agentData.externalId ?? existingByName.externalId,
+                            role: agentData.role ?? existingByName.role,
+                            personality: agentData.personality ?? existingByName.personality,
+                            instructions: agentData.instructions ?? existingByName.instructions,
+                            description: agentData.description ?? existingByName.description,
+                            agentType: agentData.agentType ?? existingByName.agentType,
+                            allowedAgents: agentData.allowedAgents ?? existingByName.allowedAgents,
+                            allowedTools: agentData.allowedTools ?? existingByName.allowedTools,
+                            llmOptions: agentData.llmOptions ?? existingByName.llmOptions,
+                            metadata: agentData.metadata ?? existingByName.metadata,
+                        })
+                        .where(eq(agents.name, agentData.name))
+                        .returning();
+                    return updated;
+                }
+            }
+            return this.createAgent(agentData);
+        },
+
         // API operations
         async createAPI(apiData: any): Promise<any> {
             // Ensure we only pass fields that exist in the schema
             const cleanApiData = {
                 name: apiData.name,
+                externalId: apiData.externalId || null,
                 description: apiData.description || null,
                 openApiSchema: apiData.openApiSchema || null,
                 baseUrl: apiData.baseUrl || null,
                 headers: apiData.headers || null,
                 auth: apiData.auth || null,
-                timeout: apiData.timeout || null
+                timeout: apiData.timeout || null,
+                metadata: apiData.metadata || null,
             };
             
             const [newAPI] = await db.insert(apis).values(cleanApiData).returning();
@@ -208,9 +279,68 @@ export function createOperations(db: any): any {
             return api;
         },
 
+        async getAPIByExternalId(externalId: string): Promise<any | undefined> {
+            const [api] = await db.select().from(apis).where(eq(apis.externalId, externalId)).limit(1);
+            return api;
+        },
+
+        async upsertAPI(apiData: any): Promise<any> {
+            if (apiData.id) {
+                const [existing] = await db.select().from(apis).where(eq(apis.id, apiData.id)).limit(1);
+                if (existing) {
+                    const [updated] = await db
+                        .update(apis)
+                        .set({
+                            name: apiData.name ?? existing.name,
+                            externalId: apiData.externalId ?? existing.externalId,
+                            description: apiData.description ?? existing.description,
+                            openApiSchema: apiData.openApiSchema ?? existing.openApiSchema,
+                            baseUrl: apiData.baseUrl ?? existing.baseUrl,
+                            headers: apiData.headers ?? existing.headers,
+                            auth: apiData.auth ?? existing.auth,
+                            timeout: apiData.timeout ?? existing.timeout,
+                            metadata: apiData.metadata ?? existing.metadata,
+                        })
+                        .where(eq(apis.id, apiData.id))
+                        .returning();
+                    return updated;
+                }
+            }
+            if (apiData.name) {
+                const [existingByName] = await db.select().from(apis).where(eq(apis.name, apiData.name)).limit(1);
+                if (existingByName) {
+                    const [updated] = await db
+                        .update(apis)
+                        .set({
+                            externalId: apiData.externalId ?? existingByName.externalId,
+                            description: apiData.description ?? existingByName.description,
+                            openApiSchema: apiData.openApiSchema ?? existingByName.openApiSchema,
+                            baseUrl: apiData.baseUrl ?? existingByName.baseUrl,
+                            headers: apiData.headers ?? existingByName.headers,
+                            auth: apiData.auth ?? existingByName.auth,
+                            timeout: apiData.timeout ?? existingByName.timeout,
+                            metadata: apiData.metadata ?? existingByName.metadata,
+                        })
+                        .where(eq(apis.name, apiData.name))
+                        .returning();
+                    return updated;
+                }
+            }
+            return this.createAPI(apiData);
+        },
+
         // Tool operations
         async createTool(toolData: any): Promise<any> {
-            const [newTool] = await db.insert(tools).values(toolData).returning();
+            const cleanToolData = {
+                key: toolData.key,
+                name: toolData.name,
+                externalId: toolData.externalId || null,
+                description: toolData.description || null,
+                inputSchema: toolData.inputSchema || null,
+                outputSchema: toolData.outputSchema || null,
+                metadata: toolData.metadata || null,
+            };
+            const [newTool] = await db.insert(tools).values(cleanToolData).returning();
             return newTool;
         },
 
@@ -221,6 +351,53 @@ export function createOperations(db: any): any {
         async getToolByKey(key: string): Promise<any | undefined> {
             const [tool] = await db.select().from(tools).where(eq(tools.key, key)).limit(1);
             return tool;
+        },
+
+        async getToolByExternalId(externalId: string): Promise<any | undefined> {
+            const [tool] = await db.select().from(tools).where(eq(tools.externalId, externalId)).limit(1);
+            return tool;
+        },
+
+        async upsertTool(toolData: any): Promise<any> {
+            // check by id first, then by name
+            if (toolData.id) {
+                const [existing] = await db.select().from(tools).where(eq(tools.id, toolData.id)).limit(1);
+                if (existing) {
+                    const [updated] = await db
+                        .update(tools)
+                        .set({
+                            key: toolData.key ?? existing.key,
+                            name: toolData.name ?? existing.name,
+                            externalId: toolData.externalId ?? existing.externalId,
+                            description: toolData.description ?? existing.description,
+                            inputSchema: toolData.inputSchema ?? existing.inputSchema,
+                            outputSchema: toolData.outputSchema ?? existing.outputSchema,
+                            metadata: toolData.metadata ?? existing.metadata,
+                        })
+                        .where(eq(tools.id, toolData.id))
+                        .returning();
+                    return updated;
+                }
+            }
+            if (toolData.name) {
+                const [existingByName] = await db.select().from(tools).where(eq(tools.name, toolData.name)).limit(1);
+                if (existingByName) {
+                    const [updated] = await db
+                        .update(tools)
+                        .set({
+                            key: toolData.key ?? existingByName.key,
+                            externalId: toolData.externalId ?? existingByName.externalId,
+                            description: toolData.description ?? existingByName.description,
+                            inputSchema: toolData.inputSchema ?? existingByName.inputSchema,
+                            outputSchema: toolData.outputSchema ?? existingByName.outputSchema,
+                            metadata: toolData.metadata ?? existingByName.metadata,
+                        })
+                        .where(eq(tools.name, toolData.name))
+                        .returning();
+                    return updated;
+                }
+            }
+            return this.createTool(toolData);
         },
 
         // MCP Server operations
@@ -236,6 +413,48 @@ export function createOperations(db: any): any {
         async getMCPServerByName(name: string): Promise<any | undefined> {
             const [mcpServer] = await db.select().from(mcpServers).where(eq(mcpServers.name, name)).limit(1);
             return mcpServer;
+        },
+
+        // Users
+        async upsertUser(userData: any): Promise<any> {
+            // match by id, externalId, or email
+            let existing: any | undefined;
+            if (userData.id) {
+                [existing] = await db.select().from(users).where(eq(users.id, userData.id)).limit(1);
+            }
+            if (!existing && userData.externalId) {
+                [existing] = await db.select().from(users).where(eq(users.externalId, userData.externalId)).limit(1);
+            }
+            if (!existing && userData.email) {
+                [existing] = await db.select().from(users).where(eq(users.email, userData.email)).limit(1);
+            }
+            if (existing) {
+                const [updated] = await db
+                    .update(users)
+                    .set({
+                        name: userData.name ?? existing.name,
+                        email: userData.email ?? existing.email,
+                        externalId: userData.externalId ?? existing.externalId,
+                        metadata: userData.metadata ?? existing.metadata,
+                    })
+                    .where(eq(users.id, existing.id))
+                    .returning();
+                return updated;
+            }
+            const [created] = await db
+                .insert(users)
+                .values({
+                    name: userData.name || null,
+                    email: userData.email || null,
+                    externalId: userData.externalId || null,
+                    metadata: userData.metadata || null,
+                })
+                .returning();
+            return created;
+        },
+        async getUserByExternalId(externalId: string): Promise<any | undefined> {
+            const [user] = await db.select().from(users).where(eq(users.externalId, externalId)).limit(1);
+            return user;
         },
     };
 }
@@ -311,6 +530,14 @@ export async function getAgentByName(db: any, name: string): Promise<any | undef
     return createOperations(db).getAgentByName(name);
 }
 
+export async function getAgentByExternalId(db: any, externalId: string): Promise<any | undefined> {
+    return createOperations(db).getAgentByExternalId(externalId);
+}
+
+export async function upsertAgent(db: any, agentData: any): Promise<any> {
+    return createOperations(db).upsertAgent(agentData);
+}
+
 // Legacy exports for API operations
 export async function createAPI(db: any, apiData: any): Promise<any> {
     return createOperations(db).createAPI(apiData);
@@ -324,6 +551,14 @@ export async function getAPIByName(db: any, name: string): Promise<any | undefin
     return createOperations(db).getAPIByName(name);
 }
 
+export async function getAPIByExternalId(db: any, externalId: string): Promise<any | undefined> {
+    return createOperations(db).getAPIByExternalId(externalId);
+}
+
+export async function upsertAPI(db: any, apiData: any): Promise<any> {
+    return createOperations(db).upsertAPI(apiData);
+}
+
 // Legacy exports for tool operations
 export async function createTool(db: any, toolData: any): Promise<any> {
     return createOperations(db).createTool(toolData);
@@ -335,6 +570,21 @@ export async function getAllTools(db: any): Promise<any[]> {
 
 export async function getToolByKey(db: any, key: string): Promise<any | undefined> {
     return createOperations(db).getToolByKey(key);
+}
+
+export async function getToolByExternalId(db: any, externalId: string): Promise<any | undefined> {
+    return createOperations(db).getToolByExternalId(externalId);
+}
+export async function upsertTool(db: any, toolData: any): Promise<any> {
+    return createOperations(db).upsertTool(toolData);
+}
+
+export async function upsertUser(db: any, userData: any): Promise<any> {
+    return createOperations(db).upsertUser(userData);
+}
+
+export async function getUserByExternalId(db: any, externalId: string): Promise<any | undefined> {
+    return createOperations(db).getUserByExternalId(externalId);
 }
 
 // Legacy exports for MCP server operations

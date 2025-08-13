@@ -69,6 +69,14 @@ export interface ProviderConfig {
   metadata?: Record<string, any>; // Anthropic
   baseUrl?: string; // Custom base URL (Ollama, self-hosted)
   reasoningEffort?: 'low' | 'medium' | 'high'; // OpenAI reasoning models (o3, o4)
+  verbosity?: 'none' | 'low' | 'medium' | 'high'; // OpenAI reasoning models (o3, o4)
+  // New unified reasoning config for GPT-5 and future models
+  reasoning?: {
+    effort?: 'low' | 'medium' | 'high';
+    maxTokens?: number; // provider-specific support varies
+    exclude?: boolean; // whether to exclude reasoning tokens from the response when supported
+    enabled?: boolean; // enable reasoning with default parameters when supported
+  };
   
   // Multimodal configuration
   vision?: {

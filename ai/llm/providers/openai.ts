@@ -3,7 +3,11 @@ import { formatMediaForProvider, processAudioWithWhisper } from '../media.ts';
 
 // Helper function to check if a model is a reasoning model
 function isReasoningModel(model: string): boolean {
-  return model.startsWith('o3') || model.startsWith('o4') || model.includes('o1');
+  return model.startsWith('o3') || model.startsWith('o4') || model.includes('o1') || model.startsWith('gpt-5');
+}
+
+function isGPT5Model(model: string): boolean {
+  return model.startsWith('gpt-5');
 }
 
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
@@ -49,27 +53,35 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         return baseMessage;
       });
 
-
       const modelName = config.model || 'gpt-4o-mini';
       const bodyConfig: any = {
         model: modelName,
         messages: openaiMessages,
         stream: true,
         temperature: config.temperature || 0,
-        max_completion_tokens: config.maxCompletionTokens || config.maxTokens || 1000,
         top_p: config.topP,
         presence_penalty: config.presencePenalty,
         frequency_penalty: config.frequencyPenalty,
         stop: config.stop,
         seed: config.seed,
         user: config.user,
+        reasoning_effort: config.reasoningEffort,
+        verbosity: config.verbosity,
         response_format: config.responseType === 'json' 
           ? { type: 'json_object' } 
           : undefined,
       };
-      // Add reasoning_effort for reasoning models
-      if (isReasoningModel(modelName) && config.reasoningEffort) {
-        bodyConfig.reasoning_effort = config.reasoningEffort;
+
+      // Token limits: OpenAI chat completions expects max_completion_tokens
+      {
+        const maxComp = config.maxCompletionTokens ?? config.maxTokens ?? 1000;
+        if (typeof maxComp === 'number') bodyConfig.max_completion_tokens = maxComp;
+      }
+
+      // Reasoning: Only send reasoning_effort for o-series models; omit nested `reasoning` entirely
+      if (isReasoningModel(modelName) && !isGPT5Model(modelName)) {
+        const effort = (config.reasoning && config.reasoning.effort) || config.reasoningEffort;
+        if (effort) bodyConfig.reasoning_effort = effort;
       }
 
       return bodyConfig;

@@ -460,13 +460,20 @@ interface AgentConfig {
 
 ```typescript
 interface ChatCallbacks {
-    onToolCalling?: (data: ToolCallingData) => void | Promise<void> | ToolCallingResponse | Promise<ToolCallingResponse>;
-    onToolCompleted?: (data: ToolCompletedData) => void | Promise<void> | ToolCompletedResponse | Promise<ToolCompletedResponse>;
-    onMessageReceived?: (data: MessageReceivedData) => void | Promise<void> | MessageReceivedResponse | Promise<MessageReceivedResponse>;
-    onMessageSent?: (data: MessageSentData) => void | Promise<void> | MessageSentResponse | Promise<MessageSentResponse>;
-    onTokenStream?: (data: TokenStreamData) => void | Promise<void>;
-    onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void> | LLMCompletedResponse | Promise<LLMCompletedResponse>;
-    onOverride?: (data: CallbackOverrideData) => void | Promise<void>; // New callback
+    // Interceptor callbacks - can return modified data to override behavior
+    onToolCalling?: (data: ToolCallingData) => void | Promise<void | ToolCallingResponse> | ToolCallingResponse;
+    onToolCompleted?: (data: ToolCompletedData) => void | Promise<void | ToolCompletedResponse> | ToolCompletedResponse;
+    onMessageReceived?: (data: MessageReceivedData) => void | Promise<void | MessageReceivedResponse> | MessageReceivedResponse;
+    onMessageSent?: (data: MessageSentData) => void | Promise<void | MessageSentResponse> | MessageSentResponse;
+    onLLMCompleted?: (data: LLMCompletedData) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
+    
+    // Streaming callbacks - for real-time content delivery
+    onTokenStream?: (data: TokenStreamData) => void | Promise<void> | TokenStreamData;
+    onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
+    onToolCallStream?: (data: ToolCallStreamData) => void | Promise<void> | ToolCallStreamData;
+    
+    // Interception monitoring
+    onIntercepted?: (data: InterceptorData) => void | Promise<void> | InterceptorData;
 }
 ```
 

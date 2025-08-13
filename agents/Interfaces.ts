@@ -1,4 +1,4 @@
-import {
+import type {
     agents,
     tools,
     threads,
@@ -7,7 +7,8 @@ import {
     tool_logs,
     queue,
     mcpServers,
-    apis
+    apis,
+    users
 } from "./database/index.ts";
 
 import type { ProviderConfig } from "../ai/llm/types.ts";
@@ -92,15 +93,25 @@ export type NewToolLog = typeof tool_logs.$inferInsert;
 export type Queue = typeof queue.$inferSelect;
 export type NewQueue = typeof queue.$inferInsert;
 
+export type User = typeof users.$inferSelect;
+
 // Chat framework initialization types
 export interface ChatInitMessage {
     threadId?: string;
+    threadExternalId?: string; // Optional external thread identifier
     senderId?: string;
     senderType?: "user" | "agent" | "tool" | "system";
     content: string;
     threadName?: string;
     parentThreadId?: string;
     participants?: string[]; // Filter agents available for this conversation
+    user?: {
+        id?: string;
+        externalId?: string;
+        name?: string;
+        email?: string;
+        metadata?: any;
+    };
 }
 
 // Callback data types
@@ -227,6 +238,7 @@ export interface ChatContext {
     tools?: RunnableTool[];
     apis?: APIConfig[]; // Array of API configurations
     mcpServers?: MCPServerConfig[]; // Array of MCP server configurations
+    users?: User[]; // Optional users context
     stream?: boolean;
     activeTaskId?: string;
     callbacks?: ChatCallbacks;

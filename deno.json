@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "MIT",
   "exports": {
     "./agents": "./agents/index.ts",
@@ -35,5 +35,6 @@
     "zod": "npm:zod@3.21.4",
     "yaml": "npm:yaml@2.8.0",
     "js-tiktoken": "npm:js-tiktoken@1.0.20"
-  }
+  },
+  "lock": false
 }

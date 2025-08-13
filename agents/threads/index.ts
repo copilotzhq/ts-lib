@@ -27,7 +27,7 @@ import {
     ContentStreamData,
     ToolCallStreamData,
 } from "../Interfaces.ts";
-import { ToolDefinition, ChatMessage } from "../../ai/llm/types.ts";
+import type { ToolDefinition, ChatMessage } from "../../ai/llm/types.ts";
 
 // Constants
 const DEFAULT_THREAD_NAME = "Main Thread";
@@ -144,15 +144,18 @@ function discoverTargetAgents(
 
     // Case 2: Message contains agent mentions (@AgentName)
     const mentions = message.content?.match(/@(\w+)/g);
+    console.log('mentions', mentions);
     if (mentions) {
         const mentionedNames = mentions.map((m: string) => m.substring(1));
+        
         const mentionedAgents = availableAgents.filter(a =>
             mentionedNames.includes(a.name)
         );
 
         if (mentionedAgents.length > 0) {
             // Apply agent filtering for agent-to-agent communication
-            return filterAllowedAgents(message, mentionedAgents, availableAgents);
+            const filteredAgents = filterAllowedAgents(message, mentionedAgents, availableAgents);
+            return filteredAgents;
         }
     }
 
@@ -173,6 +176,8 @@ function discoverTargetAgents(
         }
     }
 
+
+    console.log('candidateAgents', candidateAgents.map(a => a.name));
 
     // Apply agent filtering for agent-to-agent communication
     return filterAllowedAgents(message, candidateAgents, availableAgents);
@@ -386,8 +391,8 @@ async function processToolExecutionResults(
         agentId: null, // Code-first agents don't have DB IDs
         taskId: activeTask?.id,
         toolName: call.function.name,
-        toolInput: JSON.stringify(call.function.arguments),
-        toolOutput: JSON.stringify(toolResults[i].output),
+        toolInput: call.function.arguments ?? null,
+        toolOutput: toolResults[i].output ?? null,
         status: toolResults[i].error ? "error" as const : "success" as const,
         errorMessage: toolResults[i].error ? String(toolResults[i].error) : undefined,
     }));
@@ -436,8 +441,8 @@ async function processToolExecutionResults(
             // Clear error message for self-correction
             content = `❌ TOOL ERROR: ${String(r.error)}\n\nPlease review the error above and try again with the correct format.`;
         } else if (r.output) {
-            // Successful execution
-            content = `✅ TOOL SUCCESS: ${JSON.stringify(r.output)}`;
+            // Successful execution (use string if already string, else JSON string)
+            content = typeof r.output === 'string' ? `✅ TOOL SUCCESS: ${r.output}` : `✅ TOOL SUCCESS: ${JSON.stringify(r.output)}`;
         } else {
             // Edge case: no output or error
             content = `⚠️ TOOL COMPLETED: No output returned`;
@@ -541,8 +546,12 @@ async function processProgrammaticAgent(
             );
         }
 
-        // Queue for continued processing if requested
-        if (output.shouldContinue !== false && savedMessage) {
+        // Check if the response contains @mentions for other agents
+        const mentions = savedMessage?.content?.match(/@(\w+)/g);
+        const hasMentions = mentions && mentions.length > 0;
+
+        // Queue for continued processing if requested OR if there are mentions
+        if ((output.shouldContinue !== false || hasMentions) && savedMessage) {
             await ops.addToQueue(message.threadId!, {
                 threadId: message.threadId,
                 senderId: agent.name,
@@ -844,6 +853,10 @@ async function processAgentMessage(
 
     const savedMessage = await ops.createMessage(agentResponseMessage);
 
+    // Check if the response contains @mentions for other agents
+    const mentions = savedMessage.content?.match(/@(\w+)/g);
+    const hasMentions = mentions && mentions.length > 0;
+
     // Process tool calls if any
     if (finalLLMResponse.toolCalls && finalLLMResponse.toolCalls.length > 0) {
         // Track start times for duration calculation
@@ -904,15 +917,28 @@ async function processAgentMessage(
             toolStartTimes
         );
 
+        // Even with tool calls, if there are mentions, queue for continuation
+        // This allows mentioned agents to respond after tool execution
+        if (hasMentions) {
+            await ops.addToQueue(message.threadId!, {
+                threadId: message.threadId,
+                senderId: agent.name,
+                senderType: "agent" as const,
+            });
+        }
+
         return { agent, response: savedMessage, toolResults };
-    } else {
-        // Queue agent response for continued processing
+    } else if (hasMentions) {
+        // Queue agent response for continued processing when there are mentions
         await ops.addToQueue(message.threadId!, {
             threadId: message.threadId,
             senderId: agent.name,
             senderType: "agent" as const,
         });
 
+        return { agent, response: savedMessage };
+    } else {
+        // No tool calls and no mentions - conversation can end naturally
         return { agent, response: savedMessage };
     }
 }
@@ -928,6 +954,7 @@ async function processMessage(
     context: ChatContext,
     allSystemAgents?: AgentConfig[] // Pass full agent list
 ): Promise<AgentProcessingResult[]> {
+
     // Build processing context
     const processingContext = await buildProcessingContext(ops, currentMessage, context, allSystemAgents);
 
@@ -1023,8 +1050,28 @@ async function createThreadImpl(
     // Create operations instance bound to this database
     const ops = createOperations(db);
 
+    // If user info is provided, upsert the user record for later reference
+    const userInfo = (initialMessage as any).user;
+    let senderUserIdForMessage: string | undefined;
+    if (userInfo && typeof (ops as any).upsertUser === 'function') {
+        try {
+            const upsertedUser = await (ops as any).upsertUser(userInfo);
+            senderUserIdForMessage = upsertedUser?.id;
+        } catch (err) {
+            console.error('User upsert failed during createThread:', err);
+        }
+    }
+
     // Apply defaults for optional properties
-    const threadId = initialMessage.threadId || crypto.randomUUID();
+    // Support external thread id lookup (seamless retrieval by external id)
+    let threadId = initialMessage.threadId;
+    if (!threadId && (initialMessage as any).threadExternalId) {
+        const byExt = await (ops as any).getThreadByExternalId?.((initialMessage as any).threadExternalId);
+        if (byExt?.id) {
+            threadId = byExt.id;
+        }
+    }
+    threadId = threadId || crypto.randomUUID();
     const senderId = initialMessage.senderId || DEFAULT_SENDER_ID;
     const senderType = initialMessage.senderType || DEFAULT_SENDER_TYPE;
 
@@ -1034,6 +1081,7 @@ async function createThreadImpl(
         senderId,
         senderType,
         content: initialMessage.content,
+        senderUserId: senderUserIdForMessage,
     };
 
 
@@ -1072,6 +1120,7 @@ async function createThreadImpl(
         parentThreadId: initialMessage.parentThreadId,
         name: initialMessage.threadName || DEFAULT_THREAD_NAME,
         participants: uniqueParticipants,
+        externalId: (initialMessage as any).threadExternalId || undefined,
     });
 
     // Update context to use filtered agents for this conversation

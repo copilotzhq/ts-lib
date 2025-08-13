@@ -1,669 +1,684 @@
-# 🤖 Copilotz - Next-Generation AI Agent Framework
+# 🤖 Copilotz Agent Framework
 
-> **Powerful, Simple, Secure** - Build sophisticated multi-agent systems with minimal code.
+> **Build sophisticated AI agent systems that can think, communicate, and act**
 
-Copilotz is a modern, TypeScript-first AI agent framework that enables you to create intelligent, collaborative agent systems. Built on the Oxian-js framework with PostgreSQL persistence and real-time capabilities.
+The Copilotz Agent framework enables you to create multi-agent systems where AI agents can communicate with each other, use tools, integrate with APIs, and execute both AI-powered and programmatic logic. Whether you need a simple assistant or a complex multi-agent workflow, this framework scales with your needs.
 
-## ✨ Why Copilotz?
+## ✨ Key Features
 
-- 🚀 **Zero Configuration** - Get started in 30 seconds
-- 🔒 **Security First** - Built-in protection against common vulnerabilities
-- 🛠️ **14 Native Tools** - File system, network, system commands, and more
-- 💬 **Multi-Agent Conversations** - Agents communicate naturally with @mentions
-- ⚡ **Real-time Streaming** - Live token streaming and event callbacks
-- 📦 **Database Persistence** - Full conversation history and tool logs
-- 🎯 **Task Management** - Built-in task creation and tracking
-- 🔄 **Thread Management** - Organized conversations with participants
+- 🧠 **Multi-Agent Conversations** - Agents that communicate and collaborate
+- 🔧 **Rich Tool Ecosystem** - 15+ built-in tools for files, APIs, system commands, and more  
+- 🌐 **API Integration** - Auto-generate tools from OpenAPI schemas
+- 🔌 **MCP Protocol Support** - Connect to Model Context Protocol servers
+- ⚡ **Programmatic Agents** - Mix AI and deterministic logic seamlessly
+- 💾 **Persistent Threads** - Conversations that remember context
+- 🎯 **Smart Agent Targeting** - @mentions automatically continue conversations
+- 📡 **Real-time Streaming** - Live token streaming and callbacks
+- 🎛️ **Interceptor System** - Modify agent behavior with custom logic
 
 ## 🚀 Quick Start
 
-### 1. Initialize the Framework
+### 1. Simple Assistant (30 seconds)
 
 ```typescript
-import { initCopilotz, copilotz, AgentConfig } from "./services/agents-v2/index.ts";
+import { run, getNativeTools } from "copilotz/agents";
 
-// Initialize with default database (uses DATABASE_URL env var)
-await initCopilotz();
+const agent = {
+    name: "assistant",
+    role: "Helpful Assistant", 
+    personality: "Friendly and knowledgeable",
+    instructions: "Help users with their questions and tasks",
+    allowedTools: Object.keys(getNativeTools()),
+    llmOptions: {
+        provider: "openai",
+        model: "gpt-4o-mini"
+    }
+};
 
-// Or with custom database
-import { createCopilotz } from "./services/agents-v2/index.ts";
-const chatManagement = await createCopilotz({
-  url: "postgresql://user:pass@localhost:5432/mydb"
+// Start interactive session
+run({
+    agents: [agent],
+    dbConfig: { url: ':memory:' }
 });
 ```
 
-### 2. Create Your First Agent
+### 2. Multi-Agent Collaboration
 
 ```typescript
-const myAgent: AgentConfig = {
-  name: "Assistant",
-  role: "Helpful AI Assistant",
-  personality: "Friendly and knowledgeable",
-  instructions: "Help users with their questions and tasks efficiently.",
-  description: "A general-purpose assistant agent",
-  allowedTools: ["http_request", "read_file", "write_file"],
-  allowedAgents: [], // Can communicate with any agent
-  llmOptions: {
-    provider: "openai",
-    model: "gpt-4o-mini",
-    temperature: 0.7,
-    maxTokens: 1000,
-  },
+import { run } from "copilotz/agents";
+
+const researcher = {
+    name: "Researcher",
+    role: "Research Specialist",
+    personality: "Thorough and analytical",
+    instructions: "Research topics and gather information",
+    allowedTools: ["http_request", "fetch_text"],
+    allowedAgents: ["Writer"],
+    llmOptions: { provider: "openai", model: "gpt-4o" }
 };
+
+const writer = {
+    name: "Writer", 
+    role: "Content Creator",
+    personality: "Creative and articulate",
+    instructions: "Write engaging content based on research",
+    allowedTools: ["write_file"],
+    allowedAgents: ["Researcher"],
+    llmOptions: { provider: "openai", model: "gpt-4o" }
+};
+
+run({
+    agents: [researcher, writer],
+    participants: ["Researcher"], // Start with researcher
+    dbConfig: { url: ':memory:' }
+});
+
+// Example conversation flow:
+// User: "Research AI trends and write an article"
+// Researcher: "I found great data on AI trends. @Writer, can you create an article with this research?"
+// 👆 The @mention automatically continues the conversation so Writer can respond!
+// Writer: "Thanks @Researcher! I'll create an engaging article with your findings..."
 ```
 
-### 3. Start a Conversation
+### 3. Programmatic + AI Agents
 
 ```typescript
-const result = await copilotz(
-  {
-    content: "Hello! Please help me analyze the package.json file.",
-    participants: ["Assistant"]
-  },
-  {
-    agents: [myAgent],
-    stream: true,
-    callbacks: {
-      onMessageSent: (data) => {
-        console.log(`${data.senderId}: ${data.content}`);
-      },
-      onToolCalling: (data) => {
-        console.log(`🔨 Using tool: ${data.toolName}`);
-      }
+import { createThread } from "copilotz/agents";
+
+// Programmatic calculator agent
+const calculator = {
+    name: "Calculator",
+    role: "Math Processor", 
+    agentType: "programmatic",
+    processingFunction: async ({ message }) => {
+        const expr = message.content.match(/(\d+)\s*([+\-*/])\s*(\d+)/);
+        if (expr) {
+            const [, a, op, b] = expr;
+            const result = eval(`${a} ${op} ${b}`); // Use proper math parser in production
+            return {
+                content: `The answer is: ${result}`,
+                shouldContinue: true
+            };
+        }
+        return {
+            content: "I can help with basic math like '5 + 3'",
+            shouldContinue: true  
+        };
     }
-  }
-);
+};
 
-console.log(`Conversation started: ${result.threadId}`);
-```
+// AI assistant agent
+const assistant = {
+    name: "Assistant",
+    role: "General Helper",
+    agentType: "agentic", // AI-powered (default)
+    personality: "Helpful and friendly",
+    instructions: "Help users and work with other agents",
+    allowedAgents: ["Calculator"],
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" }
+};
 
-## 🧪 Examples & Tutorials
-
-Ready to see Copilotz in action? Check out our **[examples folder](./examples/)** with working code you can run immediately:
-
-- **🚀 [Simple Researcher](./examples/simple-researcher.ts)** - Perfect starting point with web search
-- **🔬 [Advanced Researcher](./examples/researcher-with-websearch.ts)** - Production-ready with full features
-- **📚 [Examples Guide](./examples/README.md)** - Complete setup and usage instructions
-
-```bash
-# Try it now! (30 seconds)
-cd services/agents-v2/examples
-export DEFAULT_SERPER_KEY="your-key"  # Free from https://serper.dev
-deno run --allow-all simple-researcher.ts interactive
-```
-
-## 🏗️ Core Concepts
-
-### 🤖 Agents
-
-Agents are AI personalities with specific roles, capabilities, and tool access:
-
-```typescript
-interface AgentConfig {
-  name: string;           // Unique identifier
-  role: string;           // Agent's primary function
-  personality: string;    // How the agent behaves
-  instructions: string;   // Detailed behavior guidelines
-  description: string;    // What the agent does
-  allowedTools?: string[];    // Tools this agent can use
-  allowedAgents?: string[];   // Agents this agent can talk to
-  llmOptions?: ProviderConfig; // LLM configuration
-}
-```
-
-### 🧵 Threads
-
-Conversations happen in threads with specific participants:
-
-```typescript
-// Threads are created automatically when you start a conversation
-const result = await copilotz(
-  {
-    content: "Let's discuss the project architecture",
-    participants: ["Architect", "Developer"], // Only these agents participate
-    threadName: "Architecture Discussion"
-  },
-  { agents: [architectAgent, developerAgent] }
+await createThread(
+    { 
+        content: "@Calculator what is 15 * 27?",
+        participants: ["Calculator", "Assistant"]
+    },
+    {
+        agents: [calculator, assistant],
+        dbConfig: { url: ':memory:' }
+    }
 );
 ```
 
-### 🛠️ Tools
+## 🛠️ Built-in Tools
 
-Agents can use built-in tools or custom tools you define:
+The framework includes 15+ native tools ready to use:
 
-```typescript
-// Custom tool example
-const customTool: RunnableTool = {
-  key: "weather_check",
-  name: "Weather Checker",
-  description: "Get current weather for a location",
-  inputSchema: {
-    type: "object",
-    properties: {
-      location: { type: "string" }
-    }
-  },
-  execute: async ({ location }) => {
-    // Your weather API logic here
-    return { weather: "sunny", temperature: "22°C" };
-  }
-};
+### File System
+- `read_file` - Read file contents
+- `write_file` - Write to files  
+- `list_directory` - Browse directories
+- `search_files` - Find files by pattern
 
-// Use in agent configuration
-const weatherAgent: AgentConfig = {
-  name: "WeatherBot",
-  allowedTools: ["weather_check", "http_request"],
-  // ... other config
-};
-```
+### Network & APIs
+- `http_request` - Make HTTP/REST calls
+- `fetch_text` - Get text content from URLs
 
-## 🌐 API & MCP Tools Integration
+### System
+- `run_command` - Execute shell commands
+- `get_current_time` - Get current timestamp
 
-Copilotz supports seamless integration with external APIs and MCP (Model Context Protocol) servers, allowing agents to access a vast ecosystem of tools and services.
+### Agent Communication  
+- `ask_question` - Query other agents
+- `create_thread` - Start new conversations
+- `end_thread` - Close conversations
 
-### API Tools (OpenAPI Schema)
+### Utilities
+- `verbal_pause` - Add thinking delays
+- `wait` - Pause execution
+- `create_task` - Schedule background tasks
 
-Configure API tools using OpenAPI 3.0+ schemas. Each operation in the schema becomes a tool available to your agents:
+## 🌐 API Integration
+
+Auto-generate tools from OpenAPI schemas:
 
 ```typescript
-import { createThread, APIConfig } from "./services/agents/index.ts";
+import { createThread } from "copilotz/agents";
 
-const weatherApi: APIConfig = {
+// Define API configuration
+const weatherAPI = {
     name: "weather-api",
-    description: "Weather information API",
-    baseUrl: "https://api.openweathermap.org/data/2.5",
-    headers: { "Authorization": "Bearer your-api-key" },
-    timeout: 30,
-    openApiSchema: {
-        openapi: "3.0.0",
-        paths: {
-            "/weather": {
-                get: {
-                    operationId: "getCurrentWeather",
-                    summary: "Get current weather",
-                    parameters: [/* OpenAPI parameters */],
-                    responses: {/* OpenAPI responses */}
+    description: "Weather data service",
+    openApiSchema: await loadOpenAPISchema("./weather-api.json"),
+    auth: {
+        type: 'apiKey',
+        key: process.env.WEATHER_API_KEY,
+        name: 'X-API-Key',
+        in: 'header'
+    },
+    headers: {
+        "User-Agent": "CopilotzApp/1.0"
+    }
+};
+
+const weatherAgent = {
+    name: "WeatherBot",
+    role: "Weather Specialist", 
+    instructions: "Provide weather forecasts and alerts",
+    allowedTools: [
+        "getGridPoint",    // Auto-generated from OpenAPI
+        "getForecast",     // Auto-generated from OpenAPI  
+        "getActiveAlerts"  // Auto-generated from OpenAPI
+    ],
+    llmOptions: { provider: "openai", model: "gpt-4o" }
+};
+
+await createThread(
+    { 
+        content: "What's the weather in Seattle?",
+        participants: ["WeatherBot"] 
+    },
+    {
+        agents: [weatherAgent],
+        apis: [weatherAPI],
+        dbConfig: { url: ':memory:' }
+    }
+);
+```
+
+## 🔌 MCP Integration
+
+Connect to Model Context Protocol servers:
+
+```typescript
+import { createThread } from "copilotz/agents";
+
+const mcpServer = {
+    name: "database-server",
+    description: "Database query server",
+    transport: {
+        type: "stdio",
+        command: "npx",
+        args: ["@modelcontextprotocol/server-postgres"]
+    },
+    capabilities: ["query_database", "get_schema"]
+};
+
+const dbAgent = {
+    name: "DatabaseExpert",
+    role: "Database Analyst",
+    instructions: "Query databases and analyze data",
+    allowedTools: [
+        "database-server_query_database",  // MCP tool
+        "database-server_get_schema"       // MCP tool
+    ],
+    llmOptions: { provider: "openai", model: "gpt-4o" }
+};
+
+await createThread(
+    { 
+        content: "Show me the user table schema",
+        participants: ["DatabaseExpert"]
+    },
+    {
+        agents: [dbAgent],
+        mcpServers: [mcpServer],
+        dbConfig: { url: 'postgresql://...' }
+    }
+);
+```
+
+## 🎛️ Advanced Features
+
+### Callback Interceptors
+
+Modify agent behavior in real-time with the enhanced callback system:
+
+```typescript
+const callbacks = {
+    // Intercept and modify tool calls before execution
+    onToolCalling: async (data) => {
+        console.log(`🔧 ${data.agentName} calling ${data.toolName}`);
+        
+        // Modify tool input if needed
+        if (data.toolName === "http_request") {
+            return {
+                ...data,
+                toolInput: {
+                    ...data.toolInput,
+                    headers: { ...data.toolInput.headers, "X-Custom": "modified" }
+                }
+            };
+        }
+    },
+
+    // Intercept and modify tool outputs after execution
+    onToolCompleted: async (data) => {
+        if (data.toolName === "http_request" && data.toolOutput?.status === 401) {
+            return {
+                ...data,
+                toolOutput: { 
+                    ...data.toolOutput,
+                    body: "Authentication refreshed - retrying..."
+                }
+            };
+        }
+    },
+
+    // Intercept and modify LLM responses
+    onLLMCompleted: async (data) => {
+        if (data.agentName === "Assistant") {
+            return {
+                ...data,
+                llmResponse: {
+                    ...data.llmResponse,
+                    answer: `😊 ${data.llmResponse.answer} 😊`
+                }
+            };
+        }
+    },
+
+    // Intercept messages before/after sending
+    onMessageSent: async (data) => {
+        if (data.senderId === "Calculator") {
+            return {
+                ...data,
+                content: data.content.toUpperCase()
+            };
+        }
+    },
+
+    onMessageReceived: async (data) => {
+        console.log(`📥 Received: ${data.content}`);
+        // Modify message content if needed
+        if (data.content.includes("urgent")) {
+            return {
+                ...data,
+                content: `🚨 PRIORITY: ${data.content}`
+            };
+        }
+    },
+
+    // Monitor all interceptions
+    onIntercepted: async (data) => {
+        console.log(`🔄 Intercepted ${data.callbackType} for ${data.agentName}`);
+        console.log(`   Original:`, data.originalValue);
+        console.log(`   Modified:`, data.interceptedValue);
+    }
+};
+```
+
+### Real-time Streaming
+
+Monitor agent responses as they're generated:
+
+```typescript
+const streamingCallbacks = {
+    // Raw token streaming
+    onTokenStream: (data) => {
+        process.stdout.write(data.token);
+        if (data.isComplete) console.log('\n--- Stream Complete ---');
+    },
+
+    // Content-only streaming (excludes tool calls)
+    onContentStream: (data) => {
+        process.stdout.write(data.token);
+        if (data.isComplete) console.log('\n--- Content Complete ---');
+    },
+
+    // Tool call streaming (only tool call content)
+    onToolCallStream: (data) => {
+        console.log(`🔧 Tool call token: ${data.token}`);
+        if (data.isComplete) console.log('--- Tool Call Complete ---');
+    }
+};
+
+await createThread(
+    { content: "Generate a report and save it", participants: ["Writer"] },
+    { 
+        agents: [writerAgent], 
+        callbacks: streamingCallbacks,
+        stream: true // Enable streaming
+    }
+);
+```
+
+### Database-Driven Configuration
+
+Store and manage agent configurations dynamically with persistent connections:
+
+```typescript
+import { createDatabase } from "copilotz/agents";
+
+// Create persistent database instance (reuse across requests)
+let dbInstance: any = null;
+
+async function getDatabase() {
+    if (!dbInstance) {
+        dbInstance = await createDatabase({ 
+            url: process.env.DATABASE_URL || "postgresql://user:pass@host/db"
+        });
+        console.log("📦 Database connection established");
+    }
+    return dbInstance;
+}
+
+// Store configurations in database (one-time setup)
+async function setupConfigurations() {
+    const db = await getDatabase();
+    const ops = db.operations;
+
+    // Store agent configuration
+    await ops.createAgent({
+        name: "sales-agent",
+        role: "Sales Representative", 
+        instructions: "Help customers with product inquiries and sales",
+        allowedTools: ["http_request", "write_file"],
+        llmOptions: {
+            provider: "openai",
+            model: "gpt-4o",
+            temperature: 0.7
+        }
+    });
+
+    // Store API configuration
+    await ops.createAPI({
+        name: "crm-api",
+        description: "Customer relationship management API", 
+        openApiSchema: crmApiSchema,
+        headers: { "Authorization": "Bearer TOKEN" }
+    });
+}
+
+// Load and run agents (called per request in server environments)
+async function handleRequest(userQuery: string) {
+    const db = await getDatabase(); // Reuses existing connection
+    const { agents, apis } = await loadResourcesFromDatabase(db);
+    
+    return await createThread(
+        { content: userQuery, participants: ["sales-agent"] },
+        { 
+            agents, 
+            apis, 
+            dbInstance: db, // Pass existing instance
+            callbacks: {
+                onToolCompleted: async (data) => {
+                    // Advanced media handling
+                    const handleMedia = async ({ medias, sanitized }) => {
+                        console.log(`Processing ${medias.length} media items`);
+                        return sanitized;
+                    };
+                    
+                    return utils.interceptors.toolCompleted.interceptMediaInToolOutput(
+                        data, 
+                        handleMedia
+                    );
                 }
             }
         }
+    );
+}
+
+// Helper function to load resources from database
+async function loadResourcesFromDatabase(db) {
+    const ops = db.operations;
+    
+    const [dbAgents, dbApis] = await Promise.all([
+        ops.getAllAgents(),
+        ops.getAllAPIs()
+    ]);
+    
+    const agents = dbAgents.map(agent => ({
+        name: agent.name,
+        role: agent.role,
+        instructions: agent.instructions,
+        allowedTools: agent.allowedTools,
+        llmOptions: agent.llmOptions
+    }));
+    
+    const apis = dbApis.map(api => ({
+        name: api.name,
+        description: api.description,
+        openApiSchema: api.openApiSchema,
+        headers: api.headers
+    }));
+    
+    return { agents, apis };
+}
+
+// Server usage pattern
+export default {
+    async fetch(request: Request) {
+        const { query } = await request.json();
+        const result = await handleRequest(query);
+        return Response.json(result);
+    }
+};
+```
+
+**Benefits of Persistent Database Connections:**
+- ⚡ **Reduced Latency** - No connection overhead per request
+- 🔄 **Connection Reuse** - Single pool shared across requests  
+- 💾 **State Persistence** - Conversations and data survive across sessions
+- 📈 **Scalability** - Efficient resource utilization in server environments
+
+### Advanced Media Processing
+
+Handle media content in tool outputs:
+
+```typescript
+const mediaCallbacks = {
+    onToolCompleted: async (data) => {
+        const processedMedias = [];
+        
+        const mediaHandler = async ({ medias, sanitized }) => {
+            // Process each media item
+            for (const media of medias) {
+                const processedMedia = await processMedia(media);
+                processedMedias.push(processedMedia);
+            }
+            
+            return {
+                ...sanitized,
+                processedMedias
+            };
+        };
+        
+        return utils.interceptors.toolCompleted.interceptMediaInToolOutput(
+            data,
+            mediaHandler
+        );
+    }
+};
+
+async function processMedia(media) {
+    // Custom media processing logic
+    if (media.type === 'image') {
+        return await optimizeImage(media);
+    } else if (media.type === 'video') {
+        return await compressVideo(media);
+    }
+    return media;
+}
+```
+
+### Custom Tools
+
+Create domain-specific tools:
+
+```typescript
+const customTool = {
+    key: "analyze_sentiment",
+    name: "Sentiment Analyzer",
+    description: "Analyze text sentiment",
+    inputSchema: {
+        type: "object",
+        properties: {
+            text: { type: "string" }
+        }
+    },
+    execute: async ({ text }) => {
+        // Your sentiment analysis logic
+        return { sentiment: "positive", confidence: 0.85 };
     }
 };
 
 await createThread(
-    { content: "What's the weather in New York?" },
+    { content: "Analyze: 'I love this product!'", participants: ["Analyst"] },
     { 
-        agents: [weatherAgent],
-        apis: [weatherApi] // API tools auto-generated
+        agents: [sentimentAgent], 
+        tools: [customTool],
+        dbConfig: { url: ':memory:' }
     }
 );
 ```
 
-### MCP Server Tools
+### Persistent Conversations
 
-Connect to MCP servers using the **official MCP TypeScript SDK** ([documentation](https://modelcontextprotocol.io/quickstart/client#node)):
+Continue conversations across sessions:
 
-#### Stdio Transport (Currently Supported)
 ```typescript
-import { MCPServerConfig } from "./services/agents/index.ts";
-
-const mcpServer: MCPServerConfig = {
-    name: "filesystem-mcp",
-    description: "Local file system operations",
-    transport: {
-        type: "stdio",
-        command: "npx", 
-        args: ["@modelcontextprotocol/server-filesystem", "/tmp"]
+// Start a conversation
+const result = await createThread(
+    { 
+        threadId: "project-planning-session",
+        content: "Let's plan our new feature",
+        participants: ["ProductManager", "Engineer"]
     },
-    capabilities: ["read_file", "write_file"], // Optional filter
-    env: { "NODE_ENV": "production" } // Optional environment variables
-};
-```
+    { agents: [pmAgent, engineerAgent] }
+);
 
-#### Usage with Agents
-```typescript
+// Continue later with same threadId
 await createThread(
-    { content: "List files and read the README" },
-    { 
-        agents: [myAgent],
-        mcpServers: [mcpServer] // Stdio transport via official SDK
-    }
-);
-```
-
-#### Transport Support Status
-- ✅ **`stdio`**: Fully supported via official MCP SDK
-- ⏳ **`sse`**: Waiting for official SDK support  
-- ⏳ **`websocket`**: Waiting for official SDK support
-
-> **Note**: We've migrated to the [official MCP TypeScript SDK](https://modelcontextprotocol.io/quickstart/client#node) for better reliability and future compatibility. SSE and WebSocket transports will be re-enabled when the official SDK adds support for them.
-
-### Benefits
-
-- **Zero Boilerplate**: OpenAPI operations and MCP tools become available automatically
-- **Type Safety**: Full schema validation for API parameters  
-- **Error Handling**: Built-in timeout, retry, and error management
-- **Unified Interface**: Agents see all tools (native, API, MCP) consistently
-
-## 🛠️ Built-in Tools (14 Total)
-
-### 🔧 Core Tools
-- **`verbal_pause`** - Make strategic pauses in conversation
-- **`ask_question`** - Direct agent-to-agent questions
-- **`create_thread`** - Start new conversation threads
-- **`end_thread`** - Archive completed discussions
-- **`create_task`** - Create trackable tasks
-
-### 📁 File System Tools
-- **`read_file`** - Read local files safely
-- **`write_file`** - Write files with directory creation
-- **`list_directory`** - Browse directory contents
-- **`search_files`** - Find files by pattern
-
-### 🌐 Network Tools
-- **`http_request`** - Full HTTP client functionality
-- **`fetch_text`** - Simple text fetching
-
-### 💻 System Tools
-- **`run_command`** - Execute system commands safely
-
-### 🛠️ Utility Tools
-- **`get_current_time`** - Time/date in multiple formats
-- **`wait`** - Controlled delays
-
-> 🔒 **All tools include built-in security**: directory traversal protection, command filtering, timeout controls, and input validation.
-
-## 💬 Multi-Agent Communication
-
-### Direct Mentions
-Use @mentions to target specific agents:
-
-```typescript
-const result = await copilotz(
-  {
-    content: "Hey @DataAnalyst, can you check the user metrics? @Developer, prepare the dashboard updates.",
-    participants: ["Manager", "DataAnalyst", "Developer"]
-  },
-  { agents: [managerAgent, analystAgent, developerAgent] }
-);
-```
-
-### Agent-to-Agent Communication
-Agents can communicate with each other using tools:
-
-```typescript
-// Agent A can ask Agent B a question
-const questionResult = await tools.ask_question.execute({
-  question: "What's the current server status?",
-  targetAgent: "SysAdmin"
-});
-
-// Or create a dedicated thread for longer discussions
-const threadResult = await tools.create_thread.execute({
-  name: "Performance Investigation",
-  participants: ["DevOps", "Database"],
-  initialMessage: "We need to investigate the recent slowdowns"
-});
-```
-
-### Participant Filtering
-Control which agents can participate in conversations:
-
-```typescript
-// Only specific agents participate
-const result = await copilotz(
-  {
-    content: "Confidential discussion about security vulnerabilities",
-    participants: ["SecurityExpert", "LeadDeveloper"] // Others filtered out
-  },
-  {
-    agents: [securityAgent, leadDevAgent, juniorDevAgent] // All available, but juniorDev filtered out
-  }
-);
-```
-
-## 📊 Real-time Events & Streaming
-
-Get live updates on agent activities:
-
-```typescript
-const result = await copilotz(
-  {
-    content: "Analyze this large dataset",
-    participants: ["DataScientist"]
-  },
-  {
-    agents: [dataScientistAgent],
-    stream: true, // Enable token streaming
-    callbacks: {
-      onTokenStream: (data) => {
-        process.stdout.write(data.token); // Live typing effect
-      },
-      onToolCalling: (data) => {
-        console.log(`🔨 ${data.agentName} is using ${data.toolName}`);
-      },
-      onToolCompleted: (data) => {
-        console.log(`✅ ${data.toolName} completed ${data.error ? 'with error' : 'successfully'}`);
-        if (data.duration) console.log(`⏱️ Took ${data.duration}ms`);
-      },
-      onLLMCompleted: (data) => {
-        console.log(`🧠 ${data.agentName} completed LLM call`);
-        console.log(`📊 Tokens used: ${data.llmResponse?.tokens}`);
-        console.log(`🔧 Tools called: ${data.llmResponse?.toolCalls?.length || 0}`);
-      }
-    }
-  }
-);
-```
-
-## 🎯 Task Management
-
-Create and track tasks within conversations:
-
-```typescript
-// Agent can create tasks
-const taskAgent: AgentConfig = {
-  name: "ProjectManager",
-  allowedTools: ["create_task"],
-  instructions: "Create and track project tasks efficiently"
-};
-
-// Task will be created automatically when agent uses the tool
-const result = await copilotz(
-  {
-    content: "Please create a task to implement the new user authentication system",
-    participants: ["ProjectManager"]
-  },
-  {
-    agents: [taskAgent],
-    callbacks: {
-      onToolCompleted: (data) => {
-        if (data.toolName === "create_task") {
-          console.log(`📋 Task created: ${JSON.stringify(data.toolOutput)}`);
-        }
-      }
-    }
-  }
-);
-```
-
-## 🔧 Advanced Configuration
-
-### Multiple Database Instances
-
-```typescript
-// Different databases for different purposes
-const productionChat = await createCopilotz({
-  url: "postgresql://user:pass@prod-db:5432/agents"
-});
-
-const developmentChat = await createCopilotz({
-  url: "postgresql://user:pass@dev-db:5432/agents_dev"
-});
-
-// Use independently
-await productionChat(message, context);
-await developmentChat(message, context);
-```
-
-### Agent Permission System
-
-```typescript
-const restrictedAgent: AgentConfig = {
-  name: "JuniorDev",
-  allowedTools: ["read_file", "list_directory"], // Limited tools
-  allowedAgents: ["Mentor", "TeamLead"], // Can only talk to specific agents
-  // ... other config
-};
-
-const mentorAgent: AgentConfig = {
-  name: "Mentor",
-  allowedTools: ["read_file", "write_file", "run_command"], // More tools
-  allowedAgents: ["JuniorDev", "SeniorDev"], // Can guide juniors
-  // ... other config
-};
-```
-
-### Custom LLM Providers
-
-```typescript
-const customAgent: AgentConfig = {
-  name: "SpecializedAgent",
-  llmOptions: {
-    provider: "anthropic",
-    model: "claude-3-sonnet",
-    temperature: 0.3,
-    maxTokens: 2000,
-    topP: 0.9
-  }
-  // ... other config
-};
-```
-
-## 📚 Database Schema
-
-Copilotz automatically manages these tables:
-
-- **`agents`** - Agent configurations (optional, for persistence)
-- **`threads`** - Conversation threads
-- **`messages`** - All conversation messages
-- **`tasks`** - Created tasks with status tracking
-- **`tool_logs`** - Complete tool execution history
-- **`queue`** - Message processing queue
-
-## 🧪 Testing Your Agents
-
-Use the built-in test patterns:
-
-```typescript
-import { assert, assertExists } from "jsr:@std/assert";
-
-Deno.test("My Agent Test", async () => {
-  await initCopilotz();
-  
-  const result = await copilotz(
     {
-      content: "Test message",
-      participants: ["TestAgent"]
+        threadId: "project-planning-session", // Same ID
+        content: "Let's review yesterday's decisions",
+        participants: ["ProductManager", "Engineer"]  
     },
-    {
-      agents: [testAgent],
-      callbacks: {
-        onLLMCompleted: (data) => {
-          console.log(`Agent responded: ${data.llmResponse?.answer}`);
-        }
-      }
-    }
-  );
-
-  assertExists(result.queueId);
-  assert(result.status === "queued");
-});
-```
-
-## 🚀 Real-World Examples
-
-### 1. Development Team Simulation
-
-```typescript
-const architect: AgentConfig = {
-  name: "Architect",
-  role: "Software Architect",
-  personality: "Strategic and detail-oriented",
-  instructions: "Design system architecture and guide technical decisions",
-  allowedTools: ["read_file", "write_file", "create_thread", "ask_question"],
-  allowedAgents: ["Developer", "DevOps"]
-};
-
-const developer: AgentConfig = {
-  name: "Developer",
-  role: "Software Developer", 
-  personality: "Practical and solution-focused",
-  instructions: "Implement features and write code based on specifications",
-  allowedTools: ["read_file", "write_file", "run_command", "http_request"],
-  allowedAgents: ["Architect", "Tester"]
-};
-
-const devops: AgentConfig = {
-  name: "DevOps",
-  role: "DevOps Engineer",
-  personality: "Reliability-focused and systematic",
-  instructions: "Handle deployment, monitoring, and infrastructure",
-  allowedTools: ["run_command", "http_request", "read_file"],
-  allowedAgents: ["Architect", "Developer"]
-};
-
-// Start a project discussion
-const result = await copilotz(
-  {
-    content: "We need to plan the new microservices architecture for the e-commerce platform. @Architect, please lead this discussion.",
-    participants: ["Architect", "Developer", "DevOps"]
-  },
-  { agents: [architect, developer, devops] }
+    { agents: [pmAgent, engineerAgent] }
 );
 ```
 
-### 2. Content Creation Pipeline
+## 📚 Examples & Learning Path
 
-```typescript
-const researcher: AgentConfig = {
-  name: "Researcher",
-  role: "Content Researcher",
-  allowedTools: ["http_request", "fetch_text", "write_file"],
-  instructions: "Research topics and gather information from web sources"
-};
+### Beginner
+- [`simple-assistant.ts`](./examples/simple-assistant.ts) - Basic single agent
+- [`two-assistants.ts`](./examples/two-assistants.ts) - Agent-to-agent communication
 
-const writer: AgentConfig = {
-  name: "Writer", 
-  role: "Content Writer",
-  allowedTools: ["read_file", "write_file", "ask_question"],
-  instructions: "Create engaging content based on research"
-};
+### Intermediate  
+- [`programmatic-agent-example.ts`](./examples/programmatic-agent-example.ts) - Mixed AI/programmatic agents
+- [`weather-agent.ts`](./examples/api/weather-agent.ts) - API integration
 
-const editor: AgentConfig = {
-  name: "Editor",
-  role: "Content Editor", 
-  allowedTools: ["read_file", "write_file"],
-  instructions: "Review and improve content for clarity and style"
-};
+### Advanced
+- [`mcp-client.ts`](./examples/mcp/mcp-client.ts) - MCP protocol integration
+- [`authentication-examples.ts`](./examples/api/authentication-examples.ts) - Secure API access
 
-// Content creation workflow
-const result = await copilotz(
-  {
-    content: "Let's create a comprehensive blog post about TypeScript best practices. @Researcher, please gather the latest information.",
-    participants: ["Researcher", "Writer", "Editor"]
-  },
-  { agents: [researcher, writer, editor] }
-);
+### Advanced Examples
+- [`stock-researcher.ts`](./examples/advanced/stock-researcher.ts) - Financial research with Alpha Vantage API
+
+### Production Ready
+- [`simple.test.ts`](./tests/simple.test.ts) - Comprehensive testing patterns
+
+## 🧪 Testing
+
+Run the test suite to see all features in action:
+
+```bash
+# Run all tests
+deno test agents/tests/
+
+# Run specific test
+deno test agents/tests/simple.test.ts
+
+# Run with verbose output  
+deno test --allow-all agents/tests/ -- --verbose
 ```
 
-### 3. Customer Support System
+## 📖 Documentation
 
+- **[Quick Start Guide](./docs/QUICK_START.md)** - Get running in 2 minutes
+- **[API Reference](./docs/API_REFERENCE.md)** - Complete technical reference
+- **[Tools Documentation](./docs/TOOLS.md)** - Built-in tools guide
+- **[Programmatic Agents](./docs/PROGRAMMATIC_AGENTS_AND_OVERRIDES.md)** - Advanced agent patterns
+
+## 🎯 Use Cases
+
+### Customer Support
 ```typescript
-const supportAgent: AgentConfig = {
-  name: "Support",
-  role: "Customer Support Agent",
-  allowedTools: ["http_request", "create_task", "ask_question"],
-  allowedAgents: ["TechnicalExpert", "BillingExpert"],
-  instructions: "Help customers with their questions and escalate when needed"
-};
-
-const technicalExpert: AgentConfig = {
-  name: "TechnicalExpert", 
-  role: "Technical Support Specialist",
-  allowedTools: ["run_command", "read_file", "http_request"],
-  instructions: "Solve complex technical issues"
-};
-
-const billingExpert: AgentConfig = {
-  name: "BillingExpert",
-  role: "Billing Specialist", 
-  allowedTools: ["http_request"],
-  instructions: "Handle billing and payment related issues"
+// Route customers to specialized agents
+const supportRouter = {
+    name: "SupportRouter", 
+    instructions: "Route customer issues to billing, technical, or general support agents",
+    allowedAgents: ["BillingAgent", "TechnicalAgent", "GeneralAgent"]
 };
 ```
 
-## 🔍 Debugging and Monitoring
-
-### Comprehensive Logging
-
+### Content Creation Pipeline  
 ```typescript
-const result = await copilotz(
-  {
-    content: "Debug this complex workflow",
-    participants: ["DebugAgent"]
-  },
-  {
-    agents: [debugAgent],
-    callbacks: {
-      onLLMCompleted: (data) => {
-        console.log(`\n🔍 LLM Debug for ${data.agentName}:`);
-        console.log(`📚 Message History (${data.messageHistory.length} messages)`);
-        console.log(`🔧 Available Tools: [${data.availableTools.join(', ')}]`);
-        console.log(`📤 Response: ${data.llmResponse?.success ? '✅ Success' : '❌ Failed'}`);
-        console.log(`⏱️ Duration: ${data.duration}ms`);
-      },
-      onToolCalling: (data) => {
-        console.log(`🔨 Tool Call: ${data.toolName} by ${data.agentName}`);
-        console.log(`📥 Input:`, JSON.stringify(data.toolInput, null, 2));
-      },
-      onToolCompleted: (data) => {
-        console.log(`✅ Tool Complete: ${data.toolName}`);
-        if (data.error) console.log(`❌ Error:`, data.error);
-        if (data.duration) console.log(`⏱️ Duration: ${data.duration}ms`);
-      }
-    }
-  }
-);
+// Research → Write → Review → Publish
+const contentPipeline = [
+    { name: "Researcher", allowedAgents: ["Writer"] },
+    { name: "Writer", allowedAgents: ["Reviewer"] }, 
+    { name: "Reviewer", allowedAgents: ["Publisher"] },
+    { name: "Publisher", allowedTools: ["write_file", "http_request"] }
+];
 ```
 
-## 📈 Performance Tips
+### Code Generation & Review
+```typescript
+// Architect → Developer → Reviewer → Tester
+const devTeam = [
+    { name: "Architect", instructions: "Design system architecture" },
+    { name: "Developer", allowedTools: ["write_file", "run_command"] },
+    { name: "Reviewer", instructions: "Review code quality and standards" },
+    { name: "Tester", allowedTools: ["run_command", "read_file"] }
+];
+```
 
-1. **Use Participant Filtering** - Limit agents to only those needed for each conversation
-2. **Tool Selection** - Give agents only the tools they actually need
-3. **Stream When Possible** - Use streaming for better user experience
-4. **Database Optimization** - Use appropriate indexes for your query patterns
-5. **LLM Configuration** - Tune temperature and token limits for your use case
-
-## 🛡️ Security Best Practices
-
-1. **Principle of Least Privilege** - Give agents minimal required permissions
-2. **Input Validation** - All tools have built-in validation, but validate your custom tools
-3. **Network Security** - Use timeouts and validate URLs for HTTP tools
-4. **File System Security** - Built-in directory traversal protection
-5. **Command Execution** - Dangerous commands are automatically blocked
-
-## 🔧 Migration from AgentsV1
-
-Copilotz is a complete rewrite with breaking changes but significant improvements:
-
-### Key Differences:
-- **Simplified API** - Single function instead of complex plugin system
-- **Better Type Safety** - Full TypeScript support throughout
-- **Enhanced Security** - Built-in protections for all operations
-- **Real-time Features** - Streaming and comprehensive callbacks
-- **Database Integration** - Full persistence and history tracking
-
-### Migration Steps:
-1. Update your agent configurations to use `AgentConfig` interface
-2. Replace plugin-based tools with built-in tools or custom `RunnableTool`s
-3. Update your conversation initiation to use the new `copilotz()` function
-4. Add database initialization with `initCopilotz()`
+### Data Analysis Workflow
+```typescript
+// Collector → Processor → Analyst → Reporter  
+const analyticsTeam = [
+    { name: "DataCollector", allowedTools: ["http_request", "read_file"] },
+    { name: "DataProcessor", agentType: "programmatic" }, // Custom logic
+    { name: "Analyst", instructions: "Find insights and patterns" },
+    { name: "Reporter", allowedTools: ["write_file"] }
+];
+```
 
 ## 🤝 Contributing
 
 We welcome contributions! The framework is designed to be extensible:
 
-1. **Custom Tools** - Add new capabilities by implementing `RunnableTool`
-2. **LLM Providers** - Extend the AI service with new providers
-3. **Database Backends** - Support additional database types
-4. **Security Features** - Enhance protection mechanisms
+- **Custom Tools** - Add domain-specific capabilities
+- **New Providers** - Support additional LLM providers  
+- **Agent Types** - Create new agent behavior patterns
+- **Integrations** - Connect with external systems
 
 ## 📄 License
 
-MIT License - See LICENSE file for details.
+[View License](./LICENSE)
 
 ---
 
-**Built with ❤️ for the AI agent community**
-
-Start building your next-generation AI agent system today! 🚀 
+**Ready to build something amazing?** Start with the [Quick Start Guide](./docs/QUICK_START.md) or dive into the [examples](./examples/) to see the framework in action! 🚀

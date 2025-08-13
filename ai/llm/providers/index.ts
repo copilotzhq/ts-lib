@@ -46,7 +46,7 @@ export function isProviderAvailable(name: string): name is LLMProviderName {
  */
 export function getProviderDefaults(): Record<LLMProviderName, { model: string; apiKeyEnv: string }> {
   return {
-    openai: { model: 'gpt-4o-mini', apiKeyEnv: 'OPENAI_API_KEY' },
+    openai: { model: 'gpt-5-mini', apiKeyEnv: 'OPENAI_API_KEY' },
     anthropic: { model: 'claude-3-haiku-20240307', apiKeyEnv: 'ANTHROPIC_API_KEY' },
     gemini: { model: 'gemini-2.0-flash-lite-preview-02-05', apiKeyEnv: 'GEMINI_API_KEY' },
     groq: { model: 'llama3-8b-8192', apiKeyEnv: 'GROQ_API_KEY' },
