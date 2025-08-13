@@ -387,10 +387,18 @@ async function triggerInterceptor<T>(
                 } else {
                     const ops = createOperations(context.dbInstance);
                     const threadId = (data as any).threadId;
+                    console.log('threadId from within triggerInterceptor/respond', threadId);
                     if (!threadId) return;
                     // Trigger onMessageSent for programmatic responses and allow interception
                     const senderId = message.senderId || agentName;
                     const senderType = message.senderType || "agent";
+                    console.log('calling onMessageSent from within triggerInterceptor/respond', {
+                        threadId,
+                        senderId,
+                        senderType,
+                        content: message.content,
+                        timestamp: new Date(),
+                    });
                     const sentData = await triggerInterceptor(context, 'onMessageSent', {
                         threadId,
                         senderId,
