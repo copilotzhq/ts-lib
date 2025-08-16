@@ -111,7 +111,7 @@ export async function run({
     callbacks?: Interfaces.ChatCallbacks;
     dbConfig?: Interfaces.DatabaseConfig;
     dbInstance?: unknown;
-}) {
+}): Promise<void> {
     // Delegate to the event-queue based interactive session
     return await runEventQueue({
         initialMessage,
