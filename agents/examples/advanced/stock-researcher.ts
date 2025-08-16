@@ -177,7 +177,7 @@ const coordinatorAgent: AgentConfig = {
         - @StockAnalyst: For analyzing financial data and providing insights
         - @ReportWriter: For creating professional investment reports
         
-        When you need specific information:
+        When you need scstlpecific information:
         - Use @mention to bring agents into the conversation
         - Use ask_question tool for direct queries to specialists
         - Use create_thread tool for focused sub-research tasks

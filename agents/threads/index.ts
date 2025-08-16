@@ -28,7 +28,7 @@ import {
     ContentStreamData,
     ToolCallStreamData,
 } from "../Interfaces.ts";
-import type { ToolDefinition, ChatMessage } from "../../ai/llm/types.ts";
+import type { ToolDefinition, ChatMessage, ToolCall } from "../../ai/llm/types.ts";
 
 // Constants
 const DEFAULT_THREAD_NAME = "Main Thread";
@@ -323,7 +323,7 @@ function buildLLMHistory(
     chatHistory: NewMessage[],
     currentAgent: AgentConfig
 ): ChatMessage[] {
-    return chatHistory.map((msg) => {
+    return chatHistory.map((msg, idx) => {
         // Determine role based on sender type and agent identity
         const role = msg.senderType === "agent"
             ? (msg.senderId === currentAgent.name ? "assistant" : "user")
@@ -345,20 +345,24 @@ function buildLLMHistory(
         }
         // Current agent messages keep original content (they're "assistant" role)
 
-        // If this message had recorded tool calls, prepend a reconstructed <function_calls> block
+        // Preserve tool calls in metadata to let ai/llm rehydrate <function_calls>
+        let metadata: ChatMessage["metadata"] | undefined;
         if ((msg as any).toolCalls && Array.isArray((msg as any).toolCalls) && (msg as any).toolCalls.length > 0) {
-            try {
-                const block = buildFunctionCallsBlock((msg as any).toolCalls);
-                content = `${block}\n${content}`;
-            } catch {
-                // ignore malformed toolCalls
-            }
+            const normalized: ToolCall[] = (msg as any).toolCalls.map((call: any, i: number) => ({
+                id: call.id || `${call.function?.name || 'call'}_${i}`,
+                function: {
+                    name: call.function.name,
+                    arguments: call.function.arguments,
+                }
+            }));
+            metadata = { toolCalls: normalized } as ChatMessage["metadata"];
         }
 
         return {
             content,
             role: role,
-            tool_call_id: msg.toolCallId || undefined
+            tool_call_id: msg.toolCallId || undefined,
+            metadata,
         };
     });
 }
@@ -502,7 +506,6 @@ async function processToolExecutionResults(
             timestamp,
         } as ToolCompletedData, agent.name, async (programmaticMessage) => {
             // Defer programmatic responses until tool logs + tool result messages are persisted
-            const ops = createOperations(context.dbInstance);
             const threadId = message.threadId!;
             const queuedMsg: NewMessage = {
                 threadId,
@@ -717,7 +720,9 @@ async function processAgentMessage(
 
     // Build LLM context and history
     const llmContextData = buildLLMContext(agent, processingContext);
-    const llmHistory = buildLLMHistory(processingContext.chatHistory, agent);
+    let llmHistory = buildLLMHistory(processingContext.chatHistory, agent);
+    // Remove tool messages from provider-bound history; ai/llm will rehydrate tool-calls via metadata on assistant turns
+    llmHistory = llmHistory.filter(m => m.role !== 'tool');
 
     // Get agent's available tools
     const agentTools = agent.allowedTools?.map(toolKey =>
@@ -975,6 +980,7 @@ async function processAgentMessage(
     }
 
     const savedMessage = await ops.createMessage(agentResponseMessage);
+    
 
     // Check if the response contains @mentions for other agents
     const mentions = savedMessage.content?.match(/@(\w+)/g);

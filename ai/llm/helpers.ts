@@ -37,12 +37,13 @@ export function formatMessages({ messages, instructions, config, tools }: ChatRe
     formattedMessages = [{ role: 'system', content: systemContent }, ...formattedMessages];
   }
 
+  // Convert tool messages to assistant text so providers that require structured tool_calls don't reject the payload.
+  // We still rehydrate <function_calls> from metadata.toolCalls separately for assistant messages.
   formattedMessages = formattedMessages.map((m) => ({
     ...m,
-    role: m.role === "tool" ? "assistant" : m.role,
-    content: m.role === "tool" ?
-      `Here's the result of the tool call id ${m.tool_call_id}: ${m.content}`
-      : m.content
+    // Present tool results as regular context to the model to avoid provider tool-call constraints
+    role: m.role === 'tool' ? 'user' : m.role,
+    content: m.content,
   }));
 
   return formattedMessages;
@@ -140,8 +141,15 @@ export async function processStream(
   extractContent: (data: any) => string | null
 ): Promise<string> {
   const decoder = new TextDecoder('utf-8');
+  // fullResponse should be the RAW response including any <function_calls> blocks,
+  // while chunks passed to onChunk are filtered to exclude tool-call tokens.
   let fullResponse = '';
   let buffer = '';
+  // Filter out <function_calls> blocks from streaming content
+  const filterState: {
+    inside: boolean;
+    pending: string; // stores boundary overlap for start/end tags across tokens
+  } = { inside: false, pending: '' };
 
   try {
     while (true) {
@@ -150,9 +158,11 @@ export async function processStream(
       if (done) {
         // Process any remaining buffered data
         if (buffer) {
-          processBufferedLines(buffer, onChunk, extractContent, (content) => {
-            fullResponse += content;
-          });
+          processBufferedLines(buffer, (filtered) => {
+            if (filtered) onChunk(filtered);
+          }, extractContent, (raw) => {
+            fullResponse += raw; // accumulate RAW content for downstream parsing
+          }, filterState);
         }
         break;
       }
@@ -168,8 +178,11 @@ export async function processStream(
         if (data) {
           const content = extractContent(data);
           if (content) {
-            onChunk(content);
+            // Accumulate RAW content
             fullResponse += content;
+            // Emit filtered chunk (handle cross-token boundaries)
+            const filtered = filterToolCallTokensStreaming(content, filterState);
+            if (filtered) onChunk(filtered);
           }
         }
       });
@@ -184,9 +197,10 @@ export async function processStream(
 
 function processBufferedLines(
   buffer: string,
-  onChunk: (chunk: string) => void,
+  onFilteredChunk: (chunk: string) => void,
   extractContent: (data: any) => string | null,
-  onContent: (content: string) => void
+  onContent: (content: string) => void,
+  state: { inside: boolean; pending: string }
 ): void {
   const lines = buffer.split('\n');
   lines.forEach(line => {
@@ -194,11 +208,71 @@ function processBufferedLines(
     if (data) {
       const content = extractContent(data);
       if (content) {
-        onChunk(content);
+        const filtered = filterToolCallTokensStreaming(content, state);
+        if (filtered) onFilteredChunk(filtered);
         onContent(content);
       }
     }
   });
+}
+
+function filterToolCallTokensStreaming(
+  input: string,
+  state: { inside: boolean; pending: string }
+): string {
+  const startTag = '<function_calls>';
+  const endTag = '</function_calls>';
+
+  let s = state.pending + input;
+  state.pending = '';
+  let output = '';
+
+  // Helper to compute the longest suffix of text that is a prefix of tag
+  const suffixPrefix = (text: string, tag: string): number => {
+    const maxLen = Math.min(text.length, tag.length - 1);
+    for (let len = maxLen; len > 0; len--) {
+      if (text.slice(-len) === tag.slice(0, len)) return len;
+    }
+    return 0;
+  };
+
+  // Process iteratively removing balanced blocks
+  while (s.length > 0) {
+    if (!state.inside) {
+      const idx = s.indexOf(startTag);
+      if (idx === -1) {
+        // No start tag in this chunk
+        // Keep a trailing overlap as pending to detect a tag split across tokens
+        const overlap = suffixPrefix(s, startTag);
+        if (overlap > 0) {
+          output += s.slice(0, s.length - overlap);
+          state.pending = s.slice(s.length - overlap);
+        } else {
+          output += s;
+        }
+        s = '';
+      } else {
+        // Output before tag, then enter inside
+        output += s.slice(0, idx);
+        s = s.slice(idx + startTag.length);
+        state.inside = true;
+      }
+    } else {
+      const endIdx = s.indexOf(endTag);
+      if (endIdx === -1) {
+        // Entire remainder is inside the tag; keep overlap to catch end tag
+        const overlap = suffixPrefix(s, endTag);
+        state.pending = s.slice(s.length - overlap);
+        s = '';
+      } else {
+        // Skip content inside and consume end tag, exit inside
+        s = s.slice(endIdx + endTag.length);
+        state.inside = false;
+      }
+    }
+  }
+
+  return output;
 }
 
 // =============================================================================

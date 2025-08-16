@@ -44,6 +44,48 @@ export interface RunnableTool
     ) => Promise<any>;
 }
 
+// Event-queue types
+export type EventType =
+    | "USER_MESSAGE"
+    | "AGENT_MESSAGE"
+    | "TOOL_CALL"
+    | "TOOL_RESULT"
+    | "SYSTEM";
+
+export interface QueueEvent<T = unknown> {
+    id?: string;
+    threadId: string;
+    type: EventType;
+    payload: T;
+    parentEventId?: string;
+    traceId?: string;
+    priority?: number;
+}
+
+export type NewQueueEvent<T = unknown> = Omit<QueueEvent<T>, "id">;
+
+export interface MessagePayload {
+    senderId: string;
+    senderType: "user" | "agent" | "tool" | "system";
+    content?: string;
+    toolCalls?: unknown[];
+    toolCallId?: string;
+    metadata?: unknown;
+}
+
+export interface ToolCallPayload {
+    agentName: string; // agent that requested the tool
+    call: { id?: string; function: { name: string; arguments: string } };
+}
+
+export interface ToolResultPayload {
+    agentName: string; // agent that requested the tool
+    callId: string;
+    output?: unknown;
+    error?: unknown;
+    content?: string;
+}
+
 // Agent types
 export type AgentType = "agentic" | "programmatic";
 
@@ -223,6 +265,11 @@ export interface ChatCallbacks {
     onToolCallStream?: (data: ToolCallStreamData) => void | Promise<void> | ToolCallStreamData;
     onLLMCompleted?: (data: LLMCompletedData, respond?: (message: { content: string; senderId?: string; senderType?: "user" | "agent" | "tool" | "system" }) => void) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
     onIntercepted?: (data: InterceptorData) => void | Promise<void> | InterceptorData; // New callback for interceptions
+    // Unified event callback used by the event-queue engine.
+    onEvent?: (
+        event: QueueEvent<unknown>,
+        process: (eventOverride?: QueueEvent<unknown>) => Promise<{ producedEvents: NewQueueEvent[] }>
+    ) => Promise<void | { event: QueueEvent<unknown> } | { producedEvents: NewQueueEvent[] } | { drop: true }> | void | { event: QueueEvent<unknown> } | { producedEvents: NewQueueEvent[] } | { drop: true };
 }
 
 // API Configuration for OpenAPI schema tools

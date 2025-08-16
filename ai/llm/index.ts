@@ -405,9 +405,9 @@ export async function executeChat(
         messages: processedMessages
     });
 
-    // Rehydrate function call examples into content, if present in metadata
+    // Rehydrate <function_calls> for assistant messages from metadata.toolCalls so providers can see structured tool calls
     messages = messages.map(m => {
-        if (m.metadata && (m.metadata as any).toolCalls && Array.isArray((m.metadata as any).toolCalls)) {
+        if (m.role === 'assistant' && m.metadata && (m.metadata as any).toolCalls && Array.isArray((m.metadata as any).toolCalls)) {
             const toolCalls = (m.metadata as any).toolCalls as any[];
             try {
                 const block = buildFunctionCallsBlock(toolCalls);
@@ -454,8 +454,7 @@ export async function executeChat(
         fullResponse = await processStream(reader, stream || (() => { }), providerAPI.extractContent);
     }
 
-    // Parse tool calls from response unconditionally and strip them from the final answer
-    // This guarantees downstream callbacks (e.g., onMessageSent) receive clean content
+    // Parse tool calls from response and strip them from the final answer
     let cleanResponse = fullResponse;
     let tool_calls: any[] = [];
     {

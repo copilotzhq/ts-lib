@@ -6,8 +6,35 @@ import { NewMessage, Thread, Message, Task, ToolLog, Queue, NewTask, NewToolLog,
  * Database operations factory - creates operation functions bound to a specific database instance
  */
 export function createOperations(db: any): any {
+    // Ephemeral in-process cache (per operations instance)
+    type CacheEntry = { value: any; expiresAt: number };
+    const cache = new Map<string, CacheEntry>();
+    const msgHistoryKeysByThread = new Map<string, Set<string>>();
+    const TTL_SHORT = 5_000;   // threads, tasks, histories
+    const TTL_LONG = 30_000;   // catalogs (agents, tools, apis)
+
+    const makeKey = (name: string, parts: unknown[]) => `${name}:${parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join('|')}`;
+    const getCached = (key: string) => {
+        const entry = cache.get(key);
+        if (!entry) return undefined;
+        if (Date.now() > entry.expiresAt) { cache.delete(key); return undefined; }
+        return entry.value;
+    };
+    const setCached = (key: string, value: any, ttl: number) => { cache.set(key, { value, expiresAt: Date.now() + ttl }); return value; };
+    const indexMsgHistoryKey = (threadId: string, key: string) => {
+        if (!msgHistoryKeysByThread.has(threadId)) msgHistoryKeysByThread.set(threadId, new Set());
+        msgHistoryKeysByThread.get(threadId)!.add(key);
+    };
+    const invalidateMsgHistory = (threadId: string) => {
+        const keys = msgHistoryKeysByThread.get(threadId);
+        if (keys) { keys.forEach(k => cache.delete(k)); keys.clear(); }
+    };
+
     return {
         async getMessageHistory(threadId: string, userId: string, limit: number = 50): Promise<NewMessage[]> {
+            const cacheKey = makeKey('getMessageHistory', [threadId, userId, limit]);
+            const cached = getCached(cacheKey);
+            if (cached) return cached;
             const allMessages: (Message & { threadLevel: number })[] = [];
             let currentThreadId: string | null = threadId;
             let threadLevel = 0;
@@ -60,11 +87,14 @@ export function createOperations(db: any): any {
 
             // Remove the threadLevel property before returning
             const result = allMessages.slice(-limit).map(({ threadLevel, ...msg }) => msg);
-
-            return result;
+            indexMsgHistoryKey(threadId, cacheKey);
+            return setCached(cacheKey, result, TTL_SHORT);
         },
 
         async getThreadById(threadId: string): Promise<Thread | undefined> {
+            const cacheKey = makeKey('getThreadById', [threadId]);
+            const cached = getCached(cacheKey);
+            if (cached !== undefined) return cached;
             const [thread] = await db
                 .select()
                 .from(threads)
@@ -73,10 +103,13 @@ export function createOperations(db: any): any {
                     eq(threads.status, "active")
                 ))
                 .limit(1);
-            return thread;
+            return setCached(cacheKey, thread, TTL_SHORT);
         },
 
         async getThreadByExternalId(externalId: string): Promise<Thread | undefined> {
+            const cacheKey = makeKey('getThreadByExternalId', [externalId]);
+            const cached = getCached(cacheKey);
+            if (cached !== undefined) return cached;
             const [thread] = await db
                 .select()
                 .from(threads)
@@ -85,20 +118,24 @@ export function createOperations(db: any): any {
                     eq(threads.status, "active")
                 ))
                 .limit(1);
-            return thread;
+            return setCached(cacheKey, thread, TTL_SHORT);
         },
 
         async getTaskById(taskId: string): Promise<Task | undefined> {
+            const cacheKey = makeKey('getTaskById', [taskId]);
+            const cached = getCached(cacheKey);
+            if (cached !== undefined) return cached;
             const [task] = await db
                 .select()
                 .from(tasks)
                 .where(eq(tasks.id, taskId))
                 .limit(1);
-            return task;
+            return setCached(cacheKey, task, TTL_SHORT);
         },
 
         async createMessage(message: NewMessage): Promise<Message> {
             const [newMessage] = await db.insert(messages).values(message).returning();
+            if (message.threadId) invalidateMsgHistory(message.threadId);
             return newMessage;
         },
 
@@ -150,15 +187,19 @@ export function createOperations(db: any): any {
             if (!thread) {
                 [thread] = await db.insert(threads).values({ id: threadId, ...threadData }).returning();
             }
+            cache.delete(makeKey('getThreadById', [threadId]));
+            if ((threadData as any).externalId) cache.delete(makeKey('getThreadByExternalId', [(threadData as any).externalId]));
             return thread;
         },
 
         async archiveThread(threadId: string, summary: string): Promise<Thread[]> {
-            return await db
+            const res = await db
                 .update(threads)
                 .set({ status: "archived", summary })
                 .where(eq(threads.id, threadId))
                 .returning();
+            cache.delete(makeKey('getThreadById', [threadId]));
+            return res;
         },
 
         async createTask(taskData: NewTask): Promise<Task> {
@@ -184,16 +225,25 @@ export function createOperations(db: any): any {
             };
             
             const [newAgent] = await db.insert(agents).values(cleanAgentData).returning();
+            cache.delete(makeKey('getAllAgents', []));
+            cache.delete(makeKey('getAgentByName', [cleanAgentData.name]));
             return newAgent;
         },
 
         async getAllAgents(): Promise<any[]> {
-            return await db.select().from(agents);
+            const cacheKey = makeKey('getAllAgents', []);
+            const cached = getCached(cacheKey);
+            if (cached) return cached;
+            const rows = await db.select().from(agents);
+            return setCached(cacheKey, rows, TTL_LONG);
         },
 
         async getAgentByName(name: string): Promise<any | undefined> {
+            const cacheKey = makeKey('getAgentByName', [name]);
+            const cached = getCached(cacheKey);
+            if (cached !== undefined) return cached;
             const [agent] = await db.select().from(agents).where(eq(agents.name, name)).limit(1);
-            return agent;
+            return setCached(cacheKey, agent, TTL_LONG);
         },
 
         async getAgentByExternalId(externalId: string): Promise<any | undefined> {
@@ -223,6 +273,8 @@ export function createOperations(db: any): any {
                         })
                         .where(eq(agents.id, agentData.id))
                         .returning();
+                    cache.delete(makeKey('getAllAgents', []));
+                    cache.delete(makeKey('getAgentByName', [updated.name]));
                     return updated;
                 }
             }
@@ -245,6 +297,8 @@ export function createOperations(db: any): any {
                         })
                         .where(eq(agents.name, agentData.name))
                         .returning();
+                    cache.delete(makeKey('getAllAgents', []));
+                    cache.delete(makeKey('getAgentByName', [updated.name]));
                     return updated;
                 }
             }
@@ -267,16 +321,25 @@ export function createOperations(db: any): any {
             };
             
             const [newAPI] = await db.insert(apis).values(cleanApiData).returning();
+            cache.delete(makeKey('getAllAPIs', []));
+            cache.delete(makeKey('getAPIByName', [cleanApiData.name]));
             return newAPI;
         },
 
         async getAllAPIs(): Promise<any[]> {
-            return await db.select().from(apis);
+            const cacheKey = makeKey('getAllAPIs', []);
+            const cached = getCached(cacheKey);
+            if (cached) return cached;
+            const rows = await db.select().from(apis);
+            return setCached(cacheKey, rows, TTL_LONG);
         },
 
         async getAPIByName(name: string): Promise<any | undefined> {
+            const cacheKey = makeKey('getAPIByName', [name]);
+            const cached = getCached(cacheKey);
+            if (cached !== undefined) return cached;
             const [api] = await db.select().from(apis).where(eq(apis.name, name)).limit(1);
-            return api;
+            return setCached(cacheKey, api, TTL_LONG);
         },
 
         async getAPIByExternalId(externalId: string): Promise<any | undefined> {
@@ -303,6 +366,8 @@ export function createOperations(db: any): any {
                         })
                         .where(eq(apis.id, apiData.id))
                         .returning();
+                    cache.delete(makeKey('getAllAPIs', []));
+                    cache.delete(makeKey('getAPIByName', [updated.name]));
                     return updated;
                 }
             }
@@ -323,6 +388,8 @@ export function createOperations(db: any): any {
                         })
                         .where(eq(apis.name, apiData.name))
                         .returning();
+                    cache.delete(makeKey('getAllAPIs', []));
+                    cache.delete(makeKey('getAPIByName', [updated.name]));
                     return updated;
                 }
             }
@@ -341,16 +408,25 @@ export function createOperations(db: any): any {
                 metadata: toolData.metadata || null,
             };
             const [newTool] = await db.insert(tools).values(cleanToolData).returning();
+            cache.delete(makeKey('getAllTools', []));
+            cache.delete(makeKey('getToolByKey', [cleanToolData.key]));
             return newTool;
         },
 
         async getAllTools(): Promise<any[]> {
-            return await db.select().from(tools);
+            const cacheKey = makeKey('getAllTools', []);
+            const cached = getCached(cacheKey);
+            if (cached) return cached;
+            const rows = await db.select().from(tools);
+            return setCached(cacheKey, rows, TTL_LONG);
         },
 
         async getToolByKey(key: string): Promise<any | undefined> {
+            const cacheKey = makeKey('getToolByKey', [key]);
+            const cached = getCached(cacheKey);
+            if (cached !== undefined) return cached;
             const [tool] = await db.select().from(tools).where(eq(tools.key, key)).limit(1);
-            return tool;
+            return setCached(cacheKey, tool, TTL_LONG);
         },
 
         async getToolByExternalId(externalId: string): Promise<any | undefined> {
@@ -376,6 +452,8 @@ export function createOperations(db: any): any {
                         })
                         .where(eq(tools.id, toolData.id))
                         .returning();
+                    cache.delete(makeKey('getAllTools', []));
+                    cache.delete(makeKey('getToolByKey', [updated.key]));
                     return updated;
                 }
             }
@@ -394,6 +472,8 @@ export function createOperations(db: any): any {
                         })
                         .where(eq(tools.name, toolData.name))
                         .returning();
+                    cache.delete(makeKey('getAllTools', []));
+                    cache.delete(makeKey('getToolByKey', [updated.key]));
                     return updated;
                 }
             }
@@ -439,6 +519,7 @@ export function createOperations(db: any): any {
                     })
                     .where(eq(users.id, existing.id))
                     .returning();
+                if (updated.externalId) cache.delete(makeKey('getUserByExternalId', [updated.externalId]));
                 return updated;
             }
             const [created] = await db
@@ -450,6 +531,7 @@ export function createOperations(db: any): any {
                     metadata: userData.metadata || null,
                 })
                 .returning();
+            if (created.externalId) cache.delete(makeKey('getUserByExternalId', [created.externalId]));
             return created;
         },
         async getUserByExternalId(externalId: string): Promise<any | undefined> {
