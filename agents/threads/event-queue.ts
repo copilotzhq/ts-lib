@@ -427,22 +427,19 @@ const messageProcessor: EventProcessor<MessagePayload> = {
                 });
             }
 
-            // Mentions: if no tool calls, route to mentioned agents by scheduling the agent message again (as sender=agent)
-            if ((!toolCalls || toolCalls.length === 0) && answer) {
-                const mentions = answer.match(/@(\w+)/g);
-                if (mentions && mentions.length > 0) {
-                    producedEvents.push({
-                        threadId: event.threadId,
-                        type: "AGENT_MESSAGE",
-                        payload: {
-                            senderId: agent.name,
-                            senderType: "agent",
-                            content: answer,
-                        } as MessagePayload,
-                        parentEventId: event.id,
-                        traceId: event.traceId,
-                    });
-                }
+            // Always enqueue an AGENT_MESSAGE for the agent answer. Routing is computed when this event is processed.
+            if (answer) {
+                producedEvents.push({
+                    threadId: event.threadId,
+                    type: "AGENT_MESSAGE",
+                    payload: {
+                        senderId: agent.name,
+                        senderType: "agent",
+                        content: answer,
+                    } as MessagePayload,
+                    parentEventId: event.id,
+                    traceId: event.traceId,
+                });
             }
         }
 
@@ -552,7 +549,7 @@ const toolResultProcessor: EventProcessor<ToolResultPayload> = {
         const producedEvents: NewQueueEvent[] = [
             {
                 threadId: event.threadId,
-                type: "USER_MESSAGE", // Trigger processing loop; the message will be routed back to the agent via senderType: tool
+                type: "AGENT_MESSAGE", // Trigger processing loop; the message will be routed back to the agent via senderType: tool
                 payload: {
                     senderId: payload.agentName,
                     senderType: "tool",

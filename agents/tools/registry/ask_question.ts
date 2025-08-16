@@ -1,4 +1,4 @@
-import chatManagement from "../../threads/index.ts";
+import { createThread } from "../../index.ts";
 import { createOperations } from "../../database/operations.ts";
 import { ToolExecutionContext, AgentConfig, Message } from "../../Interfaces.ts";
 
@@ -43,7 +43,7 @@ export default {
 
         try {
             // Send the question to the target agent in a new thread
-            await chatManagement(
+            await createThread(
                 {
                     content: question,
                     threadId: questionThreadId,
