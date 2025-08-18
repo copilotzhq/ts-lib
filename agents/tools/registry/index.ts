@@ -12,6 +12,7 @@ import list_directory from "./list_directory.ts";
 import verbal_pause from "./verbal_pause.ts";
 import get_current_time from "./get_current_time.ts";
 import search_files from "./search_files.ts";
+import knowledge_search from "./knowledge_search.ts";
 import fetch_text from "./fetch_text.ts";
 import run_command from "./run_command.ts";
 import wait from "./wait.ts";
@@ -28,6 +29,7 @@ export const nativeTools: { [key: string]: RunnableTool } = {
     verbal_pause,
     get_current_time,
     search_files,
+    knowledge_search,
     fetch_text,
     run_command,
     wait

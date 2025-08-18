@@ -279,6 +279,8 @@ export interface ChunkingStrategy {
 // =============================================================================
 
 export interface DatabaseOperations {
+  initialize(): Promise<void>;
+
   // Documents
   insertDocument(doc: Omit<DocumentEntity, 'id' | 'createdAt' | 'updatedAt'>): Promise<string>;
   getDocument(id: string): Promise<DocumentEntity | null>;

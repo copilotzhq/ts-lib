@@ -1,19 +1,78 @@
 /**
- * Knowledge Base Database Schema
- * PostgreSQL schema definitions for ominipg integration
+ * Knowledge Base Database Schema (Drizzle + DDL)
  */
+
+import { pgTable, uuid, varchar, text, jsonb, timestamp, integer } from "../../db/drizzle.ts";
+
+// =============================================================================
+// Drizzle table definitions
+// =============================================================================
+
+export const collections = pgTable("collections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  metadata: jsonb("metadata").$type<Record<string, any>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const documents = pgTable("documents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: varchar("title", { length: 500 }).notNull(),
+  content: text("content").notNull(),
+  documentType: varchar("document_type", { length: 50 }).notNull(),
+  sourceType: varchar("source_type", { length: 50 }).notNull(),
+  sourceUrl: text("source_url"),
+  fileName: varchar("file_name", { length: 255 }),
+  fileSize: integer("file_size"),
+  mimeType: varchar("mime_type", { length: 100 }),
+  metadata: jsonb("metadata").$type<Record<string, any>>(),
+  extractedAt: timestamp("extracted_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  status: varchar("status", { enum: ["processing", "completed", "failed", "indexed"] }).default("processing").notNull(),
+  errorMessage: text("error_message"),
+});
+
+export const chunks = pgTable("chunks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  documentId: uuid("document_id").notNull(),
+  content: text("content").notNull(),
+  startIndex: integer("start_index").notNull(),
+  endIndex: integer("end_index").notNull(),
+  chunkIndex: integer("chunk_index").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, any>>(),
+  // Drizzle has no native vector type; we expose both shapes for compatibility
+  embedding: text("embedding"), // when pgvector is present, DDL will define true vector type
+  embeddingJson: text("embedding_json"), // JSON fallback
+  embeddingModel: varchar("embedding_model", { length: 100 }),
+  embeddedAt: timestamp("embedded_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const document_collections = pgTable("document_collections", {
+  documentId: uuid("document_id").notNull(),
+  collectionId: uuid("collection_id").notNull(),
+  addedAt: timestamp("added_at").defaultNow(),
+});
+
+export const knowledgeBaseSchema = {
+  collections,
+  documents,
+  chunks,
+  document_collections,
+};
 
 // =============================================================================
 // SCHEMA DDL STATEMENTS
 // =============================================================================
 
-export const knowledgeBaseSchema = [
-  // Enable required extensions
+export const knowledgeBaseDDL: string[] = [
   `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
-  `CREATE EXTENSION IF NOT EXISTS "vector"`, // For pgvector if available
-  `CREATE EXTENSION IF NOT EXISTS "pg_trgm"`, // For text search
-  
-  // Collections table
+  `CREATE EXTENSION IF NOT EXISTS "vector"`,
+  `CREATE EXTENSION IF NOT EXISTS "pg_trgm"`,
+
   `CREATE TABLE IF NOT EXISTS collections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL UNIQUE,
@@ -23,7 +82,6 @@ export const knowledgeBaseSchema = [
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
 
-  // Documents table
   `CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(500) NOT NULL,
@@ -42,7 +100,6 @@ export const knowledgeBaseSchema = [
     error_message TEXT
   )`,
 
-  // Chunks table (for text segmentation and embeddings)
   `CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -51,14 +108,13 @@ export const knowledgeBaseSchema = [
     end_index INTEGER NOT NULL,
     chunk_index INTEGER NOT NULL,
     metadata JSONB DEFAULT '{}',
-    embedding VECTOR(1536), -- Default to OpenAI dimensions, can be adjusted
+    embedding VECTOR(1536),
     embedding_model VARCHAR(100),
     embedded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(document_id, chunk_index)
   )`,
 
-  // Document-Collection relationship (many-to-many)
   `CREATE TABLE IF NOT EXISTS document_collections (
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
@@ -66,7 +122,6 @@ export const knowledgeBaseSchema = [
     PRIMARY KEY (document_id, collection_id)
   )`,
 
-  // Indexing for performance
   `CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at)`,
@@ -77,24 +132,16 @@ export const knowledgeBaseSchema = [
   `CREATE INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks USING GIN(to_tsvector('english', content))`,
   `CREATE INDEX IF NOT EXISTS idx_chunks_metadata ON chunks USING GIN(metadata)`,
   
-  // Vector similarity search index (if pgvector is available)
   `CREATE INDEX IF NOT EXISTS idx_chunks_embedding_cosine ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
   
   `CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name)`,
   `CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id)`,
-
 ];
 
-// =============================================================================
-// ALTERNATIVE SCHEMA WITHOUT PGVECTOR (fallback)
-// =============================================================================
-
-export const knowledgeBaseSchemaNoPgVector = [
-  // Enable required extensions (without vector)
+export const knowledgeBaseDDLNoPgVector: string[] = [
   `CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
   `CREATE EXTENSION IF NOT EXISTS "pg_trgm"`,
-  
-  // Collections table
+
   `CREATE TABLE IF NOT EXISTS collections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL UNIQUE,
@@ -104,7 +151,6 @@ export const knowledgeBaseSchemaNoPgVector = [
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
 
-  // Documents table
   `CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(500) NOT NULL,
@@ -123,7 +169,6 @@ export const knowledgeBaseSchemaNoPgVector = [
     error_message TEXT
   )`,
 
-  // Chunks table without vector column
   `CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -132,14 +177,13 @@ export const knowledgeBaseSchemaNoPgVector = [
     end_index INTEGER NOT NULL,
     chunk_index INTEGER NOT NULL,
     metadata JSONB DEFAULT '{}',
-    embedding_json TEXT, -- Store as JSON string
+    embedding_json TEXT,
     embedding_model VARCHAR(100),
     embedded_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(document_id, chunk_index)
   )`,
 
-  // Document-Collection relationship
   `CREATE TABLE IF NOT EXISTS document_collections (
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
@@ -147,20 +191,18 @@ export const knowledgeBaseSchemaNoPgVector = [
     PRIMARY KEY (document_id, collection_id)
   )`,
 
-  // Basic indexes
   `CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_metadata ON documents USING GIN(metadata)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_content_fts ON documents USING GIN(to_tsvector('english', content))`,
-  
+
   `CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)`,
   `CREATE INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks USING GIN(to_tsvector('english', content))`,
   `CREATE INDEX IF NOT EXISTS idx_chunks_metadata ON chunks USING GIN(metadata)`,
-  
+
   `CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name)`,
   `CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id)`,
-
 ];
 
 // =============================================================================
@@ -168,22 +210,17 @@ export const knowledgeBaseSchemaNoPgVector = [
 // =============================================================================
 
 export const migrations = {
-  // Add vector column if pgvector becomes available
   addVectorSupport: [
     `ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding VECTOR(1536)`,
     `CREATE INDEX IF NOT EXISTS idx_chunks_embedding_cosine ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
     `ALTER TABLE chunks DROP COLUMN IF EXISTS embedding_json`
   ],
-
-  // Remove vector column and fallback to JSON
   removeVectorSupport: [
     `ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_json TEXT`,
     `UPDATE chunks SET embedding_json = embedding::text WHERE embedding IS NOT NULL`,
     `DROP INDEX IF EXISTS idx_chunks_embedding_cosine`,
     `ALTER TABLE chunks DROP COLUMN IF EXISTS embedding`
   ],
-
-  // Add full-text search improvements
   enhanceTextSearch: [
     `CREATE INDEX IF NOT EXISTS idx_documents_title_fts ON documents USING GIN(to_tsvector('english', title))`,
     `CREATE INDEX IF NOT EXISTS idx_chunks_content_trigram ON chunks USING GIN(content gin_trgm_ops)`,
@@ -207,9 +244,9 @@ export const schemaValidation = {
 // =============================================================================
 
 export const defaultSchemaConfig = {
-  embeddingDimensions: 1536, // OpenAI default
-  useVector: true, // Try to use pgvector if available
-  fallbackToJson: true, // Fallback to JSON storage if pgvector unavailable
+  embeddingDimensions: 1536,
+  useVector: true,
+  fallbackToJson: true,
   enableFullTextSearch: true,
   enableTrigrams: true
-}; 
+};

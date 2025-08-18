@@ -1,14 +1,8 @@
-import {
-  pgTable,
-  text,
-  timestamp,
-  uuid,
-  varchar,
-  jsonb,
-  integer
-} from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid, varchar, jsonb, integer } from "../../db/drizzle.ts";
 
 import type { ProviderConfig } from "../../ai/llm/types.ts";
+import { queue as eventQueue, schemaDDL as eventQueueDDL } from "../../event-queue/database/schema.ts";
+import { knowledgeBaseSchema, knowledgeBaseDDL, } from "../../knowledge/database/schema.ts";
 
 export const agents: any = pgTable("agents", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -27,7 +21,7 @@ export const agents: any = pgTable("agents", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const tools:any = pgTable("tools", {
+export const tools: any = pgTable("tools", {
   id: uuid("id").primaryKey().defaultRandom(),
   key: varchar("key", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
@@ -40,7 +34,7 @@ export const tools:any = pgTable("tools", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const apis:any = pgTable("apis", {
+export const apis: any = pgTable("apis", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   externalId: varchar("external_id", { length: 255 }),
@@ -55,7 +49,7 @@ export const apis:any = pgTable("apis", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const mcpServers:any = pgTable("mcp_servers", {
+export const mcpServers: any = pgTable("mcp_servers", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   externalId: varchar("external_id", { length: 255 }),
@@ -84,7 +78,7 @@ export const users: any = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const threads:any = pgTable("threads", {
+export const threads: any = pgTable("threads", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   externalId: varchar("external_id", { length: 255 }),
@@ -104,7 +98,7 @@ export const threads:any = pgTable("threads", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const tasks:any = pgTable("tasks", {
+export const tasks: any = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   externalId: varchar("external_id", { length: 255 }),
@@ -121,7 +115,7 @@ export const tasks:any = pgTable("tasks", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const messages:any = pgTable("messages", {
+export const messages: any = pgTable("messages", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id")
     .notNull()
@@ -139,38 +133,9 @@ export const messages:any = pgTable("messages", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const tool_logs:any = pgTable("tool_logs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  threadId: uuid("thread_id")
-    .notNull()
-    .references(() => threads.id),
-  taskId: uuid("task_id").references(() => tasks.id),
-  agentId: uuid("agent_id").references(() => agents.id),
-  toolName: varchar("tool_name", { length: 255 }).notNull(),
-  toolInput: jsonb("tool_input"),
-  toolOutput: jsonb("tool_output"),
-  status: varchar("status", { enum: ["success", "error"] }).notNull(),
-  errorMessage: text("error_message"),
-  metadata: jsonb("metadata").$type<Record<string, any>>(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
 
-export const queue:any = pgTable("queue", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  threadId: uuid("thread_id")
-    .notNull()
-    .references(() => threads.id),
-  message: jsonb("message").notNull().$type<object>(),
-  status: varchar("status", {
-    enum: ["pending", "processing", "completed", "failed"],
-  })
-    .default("pending")
-    .notNull(),
-  metadata: jsonb("metadata").$type<Record<string, any>>(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+// Replace local queue definition with centralized event-queue schema
+export const queue: any = eventQueue;
 
 export const schema = {
   agents,
@@ -178,11 +143,11 @@ export const schema = {
   threads,
   tasks,
   messages,
-  tool_logs,
   queue,
   apis,
   mcpServers,
   users,
+  knowledgeBase: knowledgeBaseSchema,
 };
 
 
@@ -215,40 +180,42 @@ interface CustomAuth {
 interface DynamicAuth {
   type: 'dynamic';
   authEndpoint: {
-      url: string; // Auth endpoint URL (e.g., '/auth/login', '/oauth/token')
-      method?: 'GET' | 'POST' | 'PUT'; // HTTP method (default: POST)
-      headers?: Record<string, string>; // Headers for auth request
-      body?: any; // Auth request body (credentials, client_id, etc.)
-      credentials?: {
-          username?: string;
-          password?: string;
-          client_id?: string;
-          client_secret?: string;
-          grant_type?: string;
-          [key: string]: any; // Additional auth parameters
-      };
+    url: string; // Auth endpoint URL (e.g., '/auth/login', '/oauth/token')
+    method?: 'GET' | 'POST' | 'PUT'; // HTTP method (default: POST)
+    headers?: Record<string, string>; // Headers for auth request
+    body?: any; // Auth request body (credentials, client_id, etc.)
+    credentials?: {
+      username?: string;
+      password?: string;
+      client_id?: string;
+      client_secret?: string;
+      grant_type?: string;
+      [key: string]: any; // Additional auth parameters
+    };
   };
   tokenExtraction: {
-      path: string; // JSONPath to extract token (e.g., 'access_token', 'data.token', 'response.authKey')
-      type: 'bearer' | 'apiKey'; // How to use the extracted token
-      headerName?: string; // For apiKey type: where to put the token (default: 'Authorization')
-      prefix?: string; // Token prefix (e.g., 'Bearer ', 'Token ', default: 'Bearer ' for bearer type)
+    path: string; // JSONPath to extract token (e.g., 'access_token', 'data.token', 'response.authKey')
+    type: 'bearer' | 'apiKey'; // How to use the extracted token
+    headerName?: string; // For apiKey type: where to put the token (default: 'Authorization')
+    prefix?: string; // Token prefix (e.g., 'Bearer ', 'Token ', default: 'Bearer ' for bearer type)
   };
   refreshConfig?: {
-      refreshPath?: string; // JSONPath to refresh token (e.g., 'refresh_token')
-      refreshEndpoint?: string; // Endpoint for token refresh
-      refreshBeforeExpiry?: number; // Refresh N seconds before expiry (default: 300)
-      expiryPath?: string; // JSONPath to token expiry (e.g., 'expires_in', 'exp')
+    refreshPath?: string; // JSONPath to refresh token (e.g., 'refresh_token')
+    refreshEndpoint?: string; // Endpoint for token refresh
+    refreshBeforeExpiry?: number; // Refresh N seconds before expiry (default: 300)
+    expiryPath?: string; // JSONPath to token expiry (e.g., 'expires_in', 'exp')
   };
   cache?: {
-      enabled?: boolean; // Whether to cache tokens (default: true)
-      duration?: number; // Cache duration in seconds (default: 3600)
+    enabled?: boolean; // Whether to cache tokens (default: true)
+    duration?: number; // Cache duration in seconds (default: 3600)
   };
 }
 
 type AuthConfig = ApiKeyAuth | BearerAuth | BasicAuth | CustomAuth | DynamicAuth;
 
 export const schemaDDL: string[] = [
+  ...eventQueueDDL,
+  ...knowledgeBaseDDL,
   `CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`,
   `CREATE TABLE IF NOT EXISTS "agents" (
 	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
@@ -335,29 +302,6 @@ export const schemaDDL: string[] = [
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );`,
-  `CREATE TABLE IF NOT EXISTS "queue" (
-	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
-	"thread_id" uuid NOT NULL,
-	"message" jsonb NOT NULL,
-	"status" varchar DEFAULT 'pending' NOT NULL,
-	"metadata" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
-);`,
-  `CREATE TABLE IF NOT EXISTS "apis" (
-	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
-	"name" varchar(255) NOT NULL,
-	"external_id" varchar(255),
-	"description" text,
-	"open_api_schema" jsonb,
-	"base_url" text,
-	"headers" jsonb,
-	"auth" jsonb,
-	"timeout" integer,
-	"metadata" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
-);`,
   `CREATE TABLE IF NOT EXISTS "mcp_servers" (
 	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
 	"name" varchar(255) NOT NULL,
@@ -379,34 +323,32 @@ export const schemaDDL: string[] = [
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );`,
+  // Central queue table is created by eventQueueDDL. Ensure FK to threads inside agent DB.
+  `CREATE TABLE IF NOT EXISTS "apis" (
+"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+"name" varchar(255) NOT NULL,
+"external_id" varchar(255),
+"description" text,
+"open_api_schema" jsonb,
+"base_url" text,
+"headers" jsonb,
+"auth" jsonb,
+"timeout" integer,
+"metadata" jsonb,
+"created_at" timestamp DEFAULT now() NOT NULL,
+"updated_at" timestamp DEFAULT now() NOT NULL
+);`,
+  // `DO $$ BEGIN
+  // ALTER TABLE "queue" ADD CONSTRAINT "queue_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
+  // EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN
- ALTER TABLE "messages" ADD CONSTRAINT "messages_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;`,
+  ALTER TABLE "messages" ADD CONSTRAINT "messages_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
+  EXCEPTION
+   WHEN duplicate_object THEN null;
+  END $$;`,
   `DO $$ BEGIN
- ALTER TABLE "messages" ADD CONSTRAINT "messages_sender_user_id_users_id_fk" FOREIGN KEY ("sender_user_id") REFERENCES "users"("id") ON DELETE no action ON UPDATE no action;
-EXCEPTION
-  WHEN duplicate_object THEN null;
-END $$;`,
-  `DO $$ BEGIN
- ALTER TABLE "tool_logs" ADD CONSTRAINT "tool_logs_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;`,
-  `DO $$ BEGIN
- ALTER TABLE "tool_logs" ADD CONSTRAINT "tool_logs_task_id_tasks_id_fk" FOREIGN KEY ("task_id") REFERENCES "tasks"("id") ON DELETE no action ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;`,
-  `DO $$ BEGIN
- ALTER TABLE "tool_logs" ADD CONSTRAINT "tool_logs_agent_id_agents_id_fk" FOREIGN KEY ("agent_id") REFERENCES "agents"("id") ON DELETE no action ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;`,
-  `DO $$ BEGIN
- ALTER TABLE "queue" ADD CONSTRAINT "queue_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
-EXCEPTION
- WHEN duplicate_object THEN null;
-END $$;`
+  ALTER TABLE "messages" ADD CONSTRAINT "messages_sender_user_id_users_id_fk" FOREIGN KEY ("sender_user_id") REFERENCES "users"("id") ON DELETE no action ON UPDATE no action;
+  EXCEPTION
+    WHEN duplicate_object THEN null;
+  END $$;`
 ]; 

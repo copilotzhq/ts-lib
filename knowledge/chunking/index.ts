@@ -279,7 +279,7 @@ class SemanticChunker implements ChunkingStrategy {
     startIndex: number;
     endIndex: number;
   }> {
-    const sections = [];
+    const sections: Array<{ content: string; title?: string; startIndex: number; endIndex: number }> = [];
     
     // Look for markdown-style headers or clear section breaks
     const headerRegex = /^(#{1,6}\s+.+|.+\n[=-]{3,})/gm;

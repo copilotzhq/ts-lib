@@ -1,10 +1,11 @@
-import { threads, messages, tasks, tool_logs, queue, agents, apis, tools, mcpServers, users } from "./schema.ts";
-import { and, eq, desc, or, inArray, sql } from "drizzle-orm";
-import { NewMessage, Thread, Message, Task, ToolLog, Queue, NewTask, NewToolLog, NewThread } from "../Interfaces.ts";
-
+import { threads, messages, tasks, agents, apis, tools, mcpServers, users } from "./schema.ts";
+import { and, eq, sql } from "../../db/drizzle.ts";
+import type { NewMessage, Thread, Message, Task, NewTask, NewThread } from "../Interfaces.ts";
+import { createOperations as createEventQueueOperations } from "../../event-queue/database/operations.ts";
 /**
  * Database operations factory - creates operation functions bound to a specific database instance
  */
+
 export function createOperations(db: any): any {
     // Ephemeral in-process cache (per operations instance)
     type CacheEntry = { value: any; expiresAt: number };
@@ -31,6 +32,7 @@ export function createOperations(db: any): any {
     };
 
     return {
+        ...createEventQueueOperations(db),
         async getMessageHistory(threadId: string, userId: string, limit: number = 50): Promise<NewMessage[]> {
             const cacheKey = makeKey('getMessageHistory', [threadId, userId, limit]);
             const cached = getCached(cacheKey);
@@ -121,6 +123,15 @@ export function createOperations(db: any): any {
             return setCached(cacheKey, thread, TTL_SHORT);
         },
 
+        async getThreadByIdRegardlessOfStatus(threadId: string): Promise<Thread | undefined> {
+            const [thread] = await db
+                .select()
+                .from(threads)
+                .where(eq(threads.id, threadId))
+                .limit(1);
+            return thread;
+        },
+
         async getTaskById(taskId: string): Promise<Task | undefined> {
             const cacheKey = makeKey('getTaskById', [taskId]);
             const cached = getCached(cacheKey);
@@ -137,49 +148,6 @@ export function createOperations(db: any): any {
             const [newMessage] = await db.insert(messages).values(message).returning();
             if (message.threadId) invalidateMsgHistory(message.threadId);
             return newMessage;
-        },
-
-        async createToolLogs(logs: NewToolLog[]): Promise<void> {
-            if (logs.length > 0) {
-                await db.insert(tool_logs).values(logs as any);
-            }
-        },
-
-        async addToQueue(threadId: string, message: NewMessage): Promise<Queue> {
-            const [newQueueItem] = await db.insert(queue).values({ threadId, message }).returning();
-            return newQueueItem;
-        },
-
-        async getProcessingQueueItem(threadId: string): Promise<Queue | undefined> {
-            const [item] = await db
-                .select()
-                .from(queue)
-                .where(and(eq(queue.threadId, threadId), eq(queue.status, "processing")))
-                .limit(1);
-            return item;
-        },
-
-        async getThreadByIdRegardlessOfStatus(threadId: string): Promise<Thread | undefined> {
-            const [thread] = await db
-                .select()
-                .from(threads)
-                .where(eq(threads.id, threadId))
-                .limit(1);
-            return thread;
-        },
-
-        async getNextPendingQueueItem(threadId: string): Promise<Queue | undefined> {
-            const [item] = await db
-                .select()
-                .from(queue)
-                .where(and(eq(queue.threadId, threadId), eq(queue.status, "pending")))
-                .orderBy(desc(queue.createdAt))
-                .limit(1);
-            return item;
-        },
-
-        async updateQueueItemStatus(queueId: string, status: "processing" | "completed" | "failed"): Promise<void> {
-            await db.update(queue).set({ status }).where(eq(queue.id, queueId));
         },
 
         async findOrCreateThread(threadId: string, threadData: NewThread): Promise<Thread> {
@@ -223,7 +191,7 @@ export function createOperations(db: any): any {
                 llmOptions: agentData.llmOptions || null,
                 metadata: agentData.metadata || null,
             };
-            
+
             const [newAgent] = await db.insert(agents).values(cleanAgentData).returning();
             cache.delete(makeKey('getAllAgents', []));
             cache.delete(makeKey('getAgentByName', [cleanAgentData.name]));
@@ -319,7 +287,7 @@ export function createOperations(db: any): any {
                 timeout: apiData.timeout || null,
                 metadata: apiData.metadata || null,
             };
-            
+
             const [newAPI] = await db.insert(apis).values(cleanApiData).returning();
             cache.delete(makeKey('getAllAPIs', []));
             cache.delete(makeKey('getAPIByName', [cleanApiData.name]));
@@ -545,139 +513,3 @@ export function createOperations(db: any): any {
  * Operations type for better TypeScript support
  */
 export type Operations = ReturnType<typeof createOperations>;
-
-// Legacy exports for backward compatibility (these still require db parameter)
-export async function getMessageHistory(db: any, threadId: string, userId: string, limit: number = 50): Promise<NewMessage[]> {
-    return createOperations(db).getMessageHistory(threadId, userId, limit);
-}
-
-export async function getThreadById(db: any, threadId: string): Promise<Thread | undefined> {
-    return createOperations(db).getThreadById(threadId);
-}
-
-export async function getTaskById(db: any, taskId: string): Promise<Task | undefined> {
-    return createOperations(db).getTaskById(taskId);
-}
-
-export async function createMessage(db: any, message: NewMessage): Promise<Message> {
-    return createOperations(db).createMessage(message);
-}
-
-export async function createToolLogs(db: any, logs: NewToolLog[]): Promise<void> {
-    return createOperations(db).createToolLogs(logs);
-}
-
-export async function addToQueue(db: any, threadId: string, message: NewMessage): Promise<Queue> {
-    return createOperations(db).addToQueue(threadId, message);
-}
-
-export async function getProcessingQueueItem(db: any, threadId: string): Promise<Queue | undefined> {
-    return createOperations(db).getProcessingQueueItem(threadId);
-}
-
-export async function getThreadByIdRegardlessOfStatus(db: any, threadId: string): Promise<Thread | undefined> {
-    return createOperations(db).getThreadByIdRegardlessOfStatus(threadId);
-}
-
-export async function getNextPendingQueueItem(db: any, threadId: string): Promise<Queue | undefined> {
-    return createOperations(db).getNextPendingQueueItem(threadId);
-}
-
-export async function updateQueueItemStatus(db: any, queueId: string, status: "processing" | "completed" | "failed"): Promise<void> {
-    return createOperations(db).updateQueueItemStatus(queueId, status);
-}
-
-export async function findOrCreateThread(db: any, threadId: string, threadData: NewThread): Promise<Thread> {
-    return createOperations(db).findOrCreateThread(threadId, threadData);
-}
-
-export async function archiveThread(db: any, threadId: string, summary: string): Promise<Thread[]> {
-    return createOperations(db).archiveThread(threadId, summary);
-}
-
-export async function createTask(db: any, taskData: NewTask): Promise<Task> {
-    return createOperations(db).createTask(taskData);
-}
-
-// Legacy exports for agent operations
-export async function createAgent(db: any, agentData: any): Promise<any> {
-    return createOperations(db).createAgent(agentData);
-}
-
-export async function getAllAgents(db: any): Promise<any[]> {
-    return createOperations(db).getAllAgents();
-}
-
-export async function getAgentByName(db: any, name: string): Promise<any | undefined> {
-    return createOperations(db).getAgentByName(name);
-}
-
-export async function getAgentByExternalId(db: any, externalId: string): Promise<any | undefined> {
-    return createOperations(db).getAgentByExternalId(externalId);
-}
-
-export async function upsertAgent(db: any, agentData: any): Promise<any> {
-    return createOperations(db).upsertAgent(agentData);
-}
-
-// Legacy exports for API operations
-export async function createAPI(db: any, apiData: any): Promise<any> {
-    return createOperations(db).createAPI(apiData);
-}
-
-export async function getAllAPIs(db: any): Promise<any[]> {
-    return createOperations(db).getAllAPIs();
-}
-
-export async function getAPIByName(db: any, name: string): Promise<any | undefined> {
-    return createOperations(db).getAPIByName(name);
-}
-
-export async function getAPIByExternalId(db: any, externalId: string): Promise<any | undefined> {
-    return createOperations(db).getAPIByExternalId(externalId);
-}
-
-export async function upsertAPI(db: any, apiData: any): Promise<any> {
-    return createOperations(db).upsertAPI(apiData);
-}
-
-// Legacy exports for tool operations
-export async function createTool(db: any, toolData: any): Promise<any> {
-    return createOperations(db).createTool(toolData);
-}
-
-export async function getAllTools(db: any): Promise<any[]> {
-    return createOperations(db).getAllTools();
-}
-
-export async function getToolByKey(db: any, key: string): Promise<any | undefined> {
-    return createOperations(db).getToolByKey(key);
-}
-
-export async function getToolByExternalId(db: any, externalId: string): Promise<any | undefined> {
-    return createOperations(db).getToolByExternalId(externalId);
-}
-export async function upsertTool(db: any, toolData: any): Promise<any> {
-    return createOperations(db).upsertTool(toolData);
-}
-
-export async function upsertUser(db: any, userData: any): Promise<any> {
-    return createOperations(db).upsertUser(userData);
-}
-
-export async function getUserByExternalId(db: any, externalId: string): Promise<any | undefined> {
-    return createOperations(db).getUserByExternalId(externalId);
-}
-
-// Legacy exports for MCP server operations
-export async function createMCPServer(db: any, mcpData: any): Promise<any> {
-    return createOperations(db).createMCPServer(mcpData);
-}
-
-export async function getAllMCPServers(db: any): Promise<any[]> {
-    return createOperations(db).getAllMCPServers();
-}
-
-export async function getMCPServerByName(db: any, name: string): Promise<any | undefined> {
-    return createOperations(db).getMCPServerByName(name);
-} 

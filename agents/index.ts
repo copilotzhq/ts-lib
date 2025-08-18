@@ -17,6 +17,7 @@ export * from "./tools/mcp-generator.ts";
 
 // Export database
 export * from "./database/index.ts";
+export * as knowledgeDatabase from "../knowledge/database/index.ts";
 
 export * as utils from "./utils/index.ts";
 
@@ -67,18 +68,14 @@ export async function createThread(
     };
 
     // Enqueue the initial event (message gets persisted by the worker)
-    type Envelope = { _kind: 'event'; event: { threadId: string; type: 'USER_MESSAGE' | 'AGENT_MESSAGE'; payload: Interfaces.MessagePayload } };
-    const envelope: Envelope = { _kind: 'event', event: {
-        threadId,
-        type: (initialMessage.senderType || 'user') === 'user' ? 'USER_MESSAGE' : 'AGENT_MESSAGE',
+    const queued = await ops.addToQueue(threadId, {
+        eventType: 'MESSAGE',
         payload: {
             senderId: senderId,
             senderType: initialMessage.senderType || 'user',
             content: initialMessage.content,
-        }
-    }};
-
-    const queued = await ops.addToQueue(threadId, envelope as unknown as Interfaces.NewMessage);
+        } as Interfaces.MessagePayload,
+    });
 
     // Process the queue for this thread
     await startThreadEventWorker(db, threadId, workerContext);
@@ -211,7 +208,7 @@ export async function runEventQueue({
             // Enqueue the user message event and process the queue
             await enqueueEvent(db, {
                 threadId: threadId,
-                type: "USER_MESSAGE",
+                type: "MESSAGE",
                 payload: { senderId: "user", senderType: "user", content: question }
             });
             await startThreadEventWorker(db, threadId, context);

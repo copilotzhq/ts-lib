@@ -4,7 +4,6 @@ import type {
     threads,
     tasks,
     messages,
-    tool_logs,
     queue,
     mcpServers,
     apis,
@@ -46,8 +45,7 @@ export interface RunnableTool
 
 // Event-queue types
 export type EventType =
-    | "USER_MESSAGE"
-    | "AGENT_MESSAGE"
+    | "MESSAGE"
     | "TOOL_CALL"
     | "TOOL_RESULT"
     | "SYSTEM";
@@ -128,9 +126,6 @@ export type NewTask = typeof tasks.$inferInsert;
 
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
-
-export type ToolLog = typeof tool_logs.$inferSelect;
-export type NewToolLog = typeof tool_logs.$inferInsert;
 
 export type Queue = typeof queue.$inferSelect;
 export type NewQueue = typeof queue.$inferInsert;

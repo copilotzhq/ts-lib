@@ -67,7 +67,7 @@ export class WebExtractor implements DocumentExtractor {
       const content = this.normalizeContent(extractedContent.text);
 
       // Build metadata
-      const metadata = {
+      const metadata: NonNullable<ExtractionResult['metadata']> = {
         title: extractedContent.title || this.extractTitleFromUrl(url) || 'Web Page',
         sourceUrl: url,
         contentType,
@@ -93,8 +93,8 @@ export class WebExtractor implements DocumentExtractor {
         );
         
         if (additionalContent) {
-          metadata.hasLinkedContent = true;
-          metadata.linkedPages = extractedContent.links.length;
+          (metadata as any).hasLinkedContent = true;
+          (metadata as any).linkedPages = extractedContent.links.length;
         }
       }
 
@@ -274,7 +274,8 @@ export class WebExtractor implements DocumentExtractor {
         }
 
       } catch (error) {
-        console.warn(`Failed to fetch linked content: ${error.message}`);
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`Failed to fetch linked content: ${message}`);
       }
     }
 
