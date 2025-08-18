@@ -8,7 +8,7 @@ import { pgTable, uuid, varchar, text, jsonb, timestamp, integer } from "../../d
 // Drizzle table definitions
 // =============================================================================
 
-export const collections = pgTable("collections", {
+export const collections: any = pgTable("collections", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
@@ -17,7 +17,8 @@ export const collections = pgTable("collections", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-export const documents = pgTable("documents", {
+
+export const documents: any = pgTable("documents", {
   id: uuid("id").primaryKey().defaultRandom(),
   title: varchar("title", { length: 500 }).notNull(),
   content: text("content").notNull(),
@@ -35,7 +36,8 @@ export const documents = pgTable("documents", {
   errorMessage: text("error_message"),
 });
 
-export const chunks = pgTable("chunks", {
+
+export const chunks: any = pgTable("chunks", {
   id: uuid("id").primaryKey().defaultRandom(),
   documentId: uuid("document_id").notNull(),
   content: text("content").notNull(),
@@ -51,11 +53,13 @@ export const chunks = pgTable("chunks", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const document_collections = pgTable("document_collections", {
+
+export const document_collections: any = pgTable("document_collections", {
   documentId: uuid("document_id").notNull(),
   collectionId: uuid("collection_id").notNull(),
   addedAt: timestamp("added_at").defaultNow(),
 });
+
 
 export const knowledgeBaseSchema = {
   collections,
@@ -127,13 +131,13 @@ export const knowledgeBaseDDL: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_metadata ON documents USING GIN(metadata)`,
   `CREATE INDEX IF NOT EXISTS idx_documents_content_fts ON documents USING GIN(to_tsvector('english', content))`,
-  
+
   `CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks(document_id)`,
   `CREATE INDEX IF NOT EXISTS idx_chunks_content_fts ON chunks USING GIN(to_tsvector('english', content))`,
   `CREATE INDEX IF NOT EXISTS idx_chunks_metadata ON chunks USING GIN(metadata)`,
-  
+
   `CREATE INDEX IF NOT EXISTS idx_chunks_embedding_cosine ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
-  
+
   `CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name)`,
   `CREATE INDEX IF NOT EXISTS idx_document_collections_collection ON document_collections(collection_id)`,
 ];
@@ -209,7 +213,7 @@ export const knowledgeBaseDDLNoPgVector: string[] = [
 // MIGRATION UTILITIES
 // =============================================================================
 
-export const migrations = {
+export const migrations: Record<string, string[]> = {
   addVectorSupport: [
     `ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding VECTOR(1536)`,
     `CREATE INDEX IF NOT EXISTS idx_chunks_embedding_cosine ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
@@ -232,7 +236,7 @@ export const migrations = {
 // SCHEMA VALIDATION
 // =============================================================================
 
-export const schemaValidation = {
+export const schemaValidation: Record<string, string | ((tableName: string) => string)> = {
   checkPgVectorSupport: `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')`,
   checkPgTrgmSupport: `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm')`,
   checkTableExists: (tableName: string) => `SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = '${tableName}')`,

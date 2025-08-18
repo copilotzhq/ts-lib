@@ -228,7 +228,7 @@ const kbEmbedRequestProcessor: KBEventProcessor<KBEmbedRequestPayload> = {
       if (!target) continue;
       try {
         const { result } = await runAI(
-          { db: (deps.context as any).dbInstance, threadId: event.threadId, correlationId: crypto.randomUUID() },
+          { db: (deps.context as any).dbInstance, threadId: event.threadId, traceId: crypto.randomUUID() },
           { type: 'embedding', input: target.content, config: { provider: payload.provider as any, model: payload.model } } as any
         );
         const vector = Array.isArray((result as any)?.embeddings?.[0]) ? (result as any).embeddings[0] : (result as any)?.embeddings;
@@ -278,7 +278,7 @@ const kbQueryProcessor: KBEventProcessor<KBQueryPayload> = {
 
     try {
       const { result } = await runAI(
-        { db: (deps.context as any).dbInstance, threadId: event.threadId, correlationId: crypto.randomUUID() },
+        { db: (deps.context as any).dbInstance, threadId: event.threadId, traceId: crypto.randomUUID() },
         { type: 'embedding', input: payload.query, config: { provider: provider as any, model } } as any
       );
       const vector = Array.isArray((result as any)?.embeddings?.[0]) ? (result as any).embeddings[0] : (result as any)?.embeddings;
@@ -336,7 +336,7 @@ const kbSearchProcessor: KBEventProcessor<KBSearchPayload> = {
         });
       } else if (type === 'semantic') {
         const { result } = await runAI(
-          { db: (deps.context as any).dbInstance, threadId: event.threadId, correlationId: crypto.randomUUID() },
+          { db: (deps.context as any).dbInstance, threadId: event.threadId, traceId: crypto.randomUUID() },
           { type: 'embedding', input: payload.query, config: { provider: provider as any, model } } as any
         );
         const vector = Array.isArray((result as any)?.embeddings?.[0]) ? (result as any).embeddings[0] : (result as any)?.embeddings;
@@ -347,7 +347,7 @@ const kbSearchProcessor: KBEventProcessor<KBSearchPayload> = {
         });
       } else {
         const { result } = await runAI(
-          { db: (deps.context as any).dbInstance, threadId: event.threadId, correlationId: crypto.randomUUID() },
+          { db: (deps.context as any).dbInstance, threadId: event.threadId, traceId: crypto.randomUUID() },
           { type: 'embedding', input: payload.query, config: { provider: provider as any, model } } as any
         );
         const vector = Array.isArray((result as any)?.embeddings?.[0]) ? (result as any).embeddings[0] : (result as any)?.embeddings;
