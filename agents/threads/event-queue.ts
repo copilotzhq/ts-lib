@@ -381,15 +381,6 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                 answer = answer.replace(selfPrefixPattern, '');
                 const selfMentionPattern = new RegExp(`^@${escapeRegex(agent.name)}:\\s*`, 'i');
                 answer = answer.replace(selfMentionPattern, '');
-
-                // Persist agent message
-                await ops.createMessage({
-                    threadId: event.threadId,
-                    senderId: agent.name,
-                    senderType: "agent",
-                    content: answer,
-                    toolCalls: toolCalls,
-                });
             }
 
             // Emit tool calls as events without executing here
@@ -424,6 +415,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                         senderId: agent.name,
                         senderType: "agent",
                         content: answer,
+                        toolCalls: toolCalls,
                     } as MessagePayload,
                     parentEventId: event.id,
                     traceId: event.traceId,
@@ -468,7 +460,6 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
             }
         );
 
-        // Persist logs and a tool result message
         const result = results[0];
         const call = payload.call;
         const toolName = call.function.name;
@@ -476,7 +467,6 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
             if (typeof input === 'string') { try { return JSON.parse(input); } catch { return input; } }
             return input;
         };
-
 
         // Emit TOOL_RESULT event
         const producedEvents: NewQueueEvent[] = [
@@ -518,19 +508,11 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
             content = `tool output: No output returned`;
         }
 
-        // Persist tool result message (from the tool, attributed to the agent for routing)
-        await ops.createMessage({
-            threadId: event.threadId,
-            senderId: payload.agentName,
-            senderType: "tool",
-            content,
-            toolCallId: payload.callId,
-        });
-
+        // Enqueue a MESSAGE event; the MESSAGE handler will persist it once
         const producedEvents: NewQueueEvent[] = [
             {
                 threadId: event.threadId,
-                type: "MESSAGE", // Trigger processing loop; the message will be routed back to the agent via senderType: tool
+                type: "MESSAGE", // Trigger processing loop; persistence happens in MESSAGE handler
                 payload: {
                     senderId: payload.agentName,
                     senderType: "tool",
@@ -538,6 +520,7 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
                     toolName: (payload as any)?.toolName || undefined,
                     toolInput: (payload as any)?.input || undefined,
                     toolOutput: (payload as any)?.output || undefined,
+                    toolCallId: payload.callId,
                 } as MessagePayload,
                 parentEventId: event.id,
                 traceId: event.traceId,

@@ -288,20 +288,6 @@ export const schemaDDL: string[] = [
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );`,
-  `CREATE TABLE IF NOT EXISTS "tool_logs" (
-	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
-	"thread_id" uuid NOT NULL,
-	"task_id" uuid,
-	"agent_id" uuid,
-	"tool_name" varchar(255) NOT NULL,
-	"tool_input" jsonb,
-	"tool_output" jsonb,
-	"status" varchar NOT NULL,
-	"error_message" text,
-	"metadata" jsonb,
-	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
-);`,
   `CREATE TABLE IF NOT EXISTS "mcp_servers" (
 	"id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
 	"name" varchar(255) NOT NULL,
@@ -338,9 +324,6 @@ export const schemaDDL: string[] = [
 "created_at" timestamp DEFAULT now() NOT NULL,
 "updated_at" timestamp DEFAULT now() NOT NULL
 );`,
-  // `DO $$ BEGIN
-  // ALTER TABLE "queue" ADD CONSTRAINT "queue_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE NO ACTION ON UPDATE NO ACTION;
-  // EXCEPTION WHEN duplicate_object THEN NULL; END $$;`,
   `DO $$ BEGIN
   ALTER TABLE "messages" ADD CONSTRAINT "messages_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
   EXCEPTION

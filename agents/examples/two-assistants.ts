@@ -1,4 +1,4 @@
-import { run, getNativeTools } from "copilotz/agents";
+import { runCli, getNativeTools } from "copilotz/agents";
 
 // Get all native tool keys
 const allNativeToolKeys = Object.keys(getNativeTools());
@@ -46,7 +46,7 @@ const callbacks = {
 
 
 if (import.meta.main) {
-    run({
+    runCli({
         participants: ['AssistantAgent'],
         agents: [AssistantAgent, ApiAgent],
         tools: [],

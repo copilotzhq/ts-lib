@@ -70,9 +70,6 @@ async function executeLLM(request: LLMRequest & { dbInstance?: unknown; metadata
 
     // (Event emission handled by AI worker)
     const result = await executeChat(chatRequest, config, env, stream);
-    const duration = Date.now() - start;
-
-    // (Queue used for logging; removed ai_logs persistence)
 
     // Convert ChatResponse to LLMResponse by adding missing BaseAIResponse fields
     return {

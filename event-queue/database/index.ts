@@ -10,6 +10,9 @@ export interface EventQueueDatabaseConfig {
   schemaSQL?: string | string[];
 }
 
+// Memoize connections by URL+syncUrl to avoid duplicate initialization
+const connectionCache: Map<string, Promise<any>> = new Map();
+
 export async function createDatabase(config?: EventQueueDatabaseConfig): Promise<any> {
   const schemaSQL = config?.schemaSQL || queueSchemaDDL;
   const finalSchemaSQL = Array.isArray(schemaSQL) ? schemaSQL : [schemaSQL];
@@ -21,11 +24,20 @@ export async function createDatabase(config?: EventQueueDatabaseConfig): Promise
     schemaSQL: finalSchemaSQL,
   };
 
-  const ominipg = await Ominipg.connect(finalConfig);
-  const dbInstance = await withDrizzle(ominipg, drizzle, queueSchema);
-  (dbInstance as any).operations = createOperations(dbInstance) as unknown as Operations;
+  const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;
+  if (connectionCache.has(cacheKey)) {
+    return await connectionCache.get(cacheKey)!;
+  }
 
-  return dbInstance;
+  const connectPromise = (async () => {
+    const ominipg = await Ominipg.connect(finalConfig);
+    const dbInstance = await withDrizzle(ominipg, drizzle, queueSchema);
+    (dbInstance as any).operations = createOperations(dbInstance) as unknown as Operations;
+    return dbInstance;
+  })();
+
+  connectionCache.set(cacheKey, connectPromise);
+  return await connectPromise;
 }
 
 export * from "./schema.ts";

@@ -344,7 +344,7 @@ export async function executeChat(
 
     // Validate API key
     if (!mergedConfig.apiKey && provider !== 'ollama') {
-        throw new Error(`API key is required for ${provider}. Set it in config.apiKey or environment variable ${provider.toUpperCase()}_API_KEY`);
+        throw new Error(`API key is required for ${provider}. Set it in config.apiKey or environment variable DEFAULT_${provider.toUpperCase()}_API_KEY`);
     }
 
     // Get provider API configuration

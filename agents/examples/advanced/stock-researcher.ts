@@ -11,7 +11,7 @@
  * 5. OpenAPI schema auto-generation for financial APIs
  */
 
-import { run, createDatabase } from "../../index.ts";
+import { runCli, createDatabase } from "../../index.ts";
 import type { AgentConfig, APIConfig, ChatCallbacks } from "../../index.ts";
 
 // Alpha Vantage API OpenAPI Schema
@@ -417,7 +417,7 @@ export async function runStockResearch(companies: string[]) {
         console.log("👥 Team: ResearchCoordinator + StockResearcher + StockAnalyst + ReportWriter");
         console.log("🤝 Collaboration: Conversational teamwork with @mentions and ask_question\n");
 
-       await run({
+       await runCli({
         participants: ["ResearchCoordinator"],
         agents: [coordinatorAgent, researchAgent, analysisAgent, reportAgent],
         apis: [createAlphaVantageConfig()],

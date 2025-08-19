@@ -10,6 +10,9 @@ export interface KnowledgeDatabaseConfig {
   schemaSQL?: string[];
 }
 
+// Memoize knowledge DB connections by URL+syncUrl
+const connectionCache: Map<string, Promise<any>> = new Map();
+
 export async function createKnowledgeDatabase(config?: KnowledgeDatabaseConfig): Promise<any> {
   const finalSchemaSQL = Array.isArray(config?.schemaSQL) && (config!.schemaSQL!.length > 0)
     ? (config as KnowledgeDatabaseConfig).schemaSQL!
@@ -22,11 +25,20 @@ export async function createKnowledgeDatabase(config?: KnowledgeDatabaseConfig):
     schemaSQL: finalSchemaSQL,
   };
 
-  const ominipg = await Ominipg.connect(finalConfig);
-  const dbInstance = await withDrizzle(ominipg, drizzle, knowledgeBaseSchema);
-  // Attach knowledge operations for convenience (similar to agents db)
-  (dbInstance as any).kbOps = createKnowledgeOperations(dbInstance);
-  return dbInstance;
+  const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;
+  if (connectionCache.has(cacheKey)) {
+    return await connectionCache.get(cacheKey)!;
+  }
+
+  const connectPromise = (async () => {
+    const ominipg = await Ominipg.connect(finalConfig);
+    const dbInstance = await withDrizzle(ominipg, drizzle, knowledgeBaseSchema);
+    (dbInstance as any).kbOps = createKnowledgeOperations(dbInstance);
+    return dbInstance;
+  })();
+
+  connectionCache.set(cacheKey, connectPromise);
+  return await connectPromise;
 }
 
 export type KnowledgeDbInstance = Awaited<ReturnType<typeof createKnowledgeDatabase>>;

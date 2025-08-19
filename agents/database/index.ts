@@ -10,6 +10,9 @@ export interface DatabaseConfig {
   schemaSQL?: string | string[];
 }
 
+// Simple connection memoization to avoid duplicate initializations for the same target
+const connectionCache: Map<string, Promise<any>> = new Map();
+
 export async function createDatabase(config?: DatabaseConfig): Promise<any> {
   const agentsSQL = config?.schemaSQL || schemaDDL;
   const finalAgentSQL = Array.isArray(agentsSQL) ? agentsSQL : [agentsSQL];
@@ -21,13 +24,21 @@ export async function createDatabase(config?: DatabaseConfig): Promise<any> {
     schemaSQL: [...finalAgentSQL],
   };
 
-  const ominipg = await Ominipg.connect(finalConfig);
-  const dbInstance = await withDrizzle(ominipg, drizzle, {...schema });
+  const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;
+  if (connectionCache.has(cacheKey)) {
+    return await connectionCache.get(cacheKey)!;
+  }
 
-  // Add operations to the database instance
-  dbInstance.operations = createOperations(dbInstance);
+  const connectPromise = (async () => {
+    const ominipg = await Ominipg.connect(finalConfig);
+    const dbInstance = await withDrizzle(ominipg, drizzle, { ...schema });
+    // Add operations to the database instance
+    (dbInstance as any).operations = createOperations(dbInstance);
+    return dbInstance;
+  })();
 
-  return dbInstance;
+  connectionCache.set(cacheKey, connectPromise);
+  return await connectPromise;
 }
 
 

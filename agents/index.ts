@@ -87,8 +87,8 @@ export async function createThread(
     };
 }
 
-// Export the run function for interactive session
-export async function run({
+// Export the runCli function for interactive session
+export async function runCli({
     initialMessage,
     participants,
     agents,
@@ -121,6 +121,53 @@ export async function run({
         dbConfig,
         dbInstance,
     });
+}
+
+// Non-interactive runner: single-shot createThread convenience
+export async function run({
+    initialMessage,
+    participants,
+    agents,
+    tools,
+    apis,
+    mcpServers,
+    callbacks,
+    dbConfig,
+    dbInstance,
+    stream,
+}: {
+    initialMessage?: Interfaces.ChatInitMessage;
+    agents: Interfaces.AgentConfig[];
+    participants?: string[];
+    tools?: Interfaces.RunnableTool[];
+    apis?: Interfaces.APIConfig[];
+    mcpServers?: Interfaces.MCPServerConfig[];
+    callbacks?: Interfaces.ChatCallbacks;
+    dbConfig?: Interfaces.DatabaseConfig;
+    dbInstance?: unknown;
+    stream?: boolean;
+}): Promise<Interfaces.ChatManagementResult> {
+    if (!initialMessage?.content) {
+        throw new Error("initialMessage with content is required for run()");
+    }
+
+    const message: Interfaces.ChatInitMessage = {
+        ...initialMessage,
+        participants: initialMessage.participants || participants,
+    };
+
+    const context: Interfaces.ChatContext = {
+        agents,
+        tools,
+        apis,
+        mcpServers,
+        callbacks,
+        dbConfig,
+        dbInstance,
+        stream: stream ?? false,
+    };
+
+    return await createThread(message, context);
 }
 
 // Experimental: interactive session using the new event-queue engine

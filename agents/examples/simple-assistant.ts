@@ -1,4 +1,4 @@
-import { run, getNativeTools, type ChatCallbacks, type RunnableTool } from "copilotz/agents";
+import { runCli, getNativeTools, type ChatCallbacks, type RunnableTool } from "copilotz/agents";
 
 // Get all native tool keys
 const allNativeToolKeys = Object.keys(getNativeTools());
@@ -35,7 +35,7 @@ const callbacks: ChatCallbacks = {
 }
 
 if (import.meta.main) {
-    run({
+    runCli({
         agents: [AssistantAgent],
         tools: tools,
         callbacks: callbacks,
