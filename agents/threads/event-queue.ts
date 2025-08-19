@@ -472,23 +472,11 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
         const result = results[0];
         const call = payload.call;
         const toolName = call.function.name;
-        // const parseInput = (input: unknown): unknown => {
-        //     if (typeof input === 'string') { try { return JSON.parse(input); } catch { return input; } }
-        //     return input;
-        // };
+        const parseInput = (input: unknown): unknown => {
+            if (typeof input === 'string') { try { return JSON.parse(input); } catch { return input; } }
+            return input;
+        };
 
-        // const logEntry: NewToolLog = {
-        //     threadId: event.threadId,
-        //     agentId: null as unknown as string | undefined,
-        //     taskId: (context.activeTaskId as unknown as string | undefined) || undefined,
-        //     toolName,
-        //     toolInput: parseInput(call.function.arguments) as unknown,
-        //     toolOutput: result.output as unknown,
-        //     status: result.error ? "error" : "success",
-        //     errorMessage: result.error ? String(result.error) : undefined,
-        //     metadata: undefined as unknown as Record<string, unknown> | undefined,
-        // };
-        // await ops.createToolLogs([logEntry]);
 
         // Emit TOOL_RESULT event
         const producedEvents: NewQueueEvent[] = [
@@ -498,6 +486,8 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
                 payload: {
                     agentName: agent.name,
                     callId: payload.call.id || toolName,
+                    toolName,
+                    input: parseInput(call.function.arguments),
                     output: result.output,
                     error: result.error,
                 } as ToolResultPayload,
@@ -525,7 +515,7 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
         } else if (output) {
             content = typeof output === 'string' ? `tool output: ${output}` : `tool output: ${JSON.stringify(output)}`;
         } else {
-            content = `tool completed: No output returned`;
+            content = `tool output: No output returned`;
         }
 
         // Persist tool result message (from the tool, attributed to the agent for routing)
@@ -545,6 +535,9 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
                     senderId: payload.agentName,
                     senderType: "tool",
                     content: content,
+                    toolName: (payload as any)?.toolName || undefined,
+                    toolInput: (payload as any)?.input || undefined,
+                    toolOutput: (payload as any)?.output || undefined,
                 } as MessagePayload,
                 parentEventId: event.id,
                 traceId: event.traceId,
