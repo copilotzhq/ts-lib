@@ -391,20 +391,20 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
             }
 
             // Always enqueue an AGENT_MESSAGE for the agent answer. Routing is computed when this event is processed.
-            if (answer) {
+            // if (answer) {
                 producedEvents.push({
                     threadId: event.threadId,
                     type: "MESSAGE",
                     payload: {
                         senderId: agent.name,
                         senderType: "agent",
-                        content: answer,
+                        content: answer || "",
                         toolCalls: toolCalls,
                     } as MessagePayload,
                     parentEventId: event.id,
                     traceId: event.traceId,
                 });
-            }
+            // }
         }
 
         return { producedEvents };
