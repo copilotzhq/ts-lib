@@ -11,131 +11,9 @@
  * 5. OpenAPI schema auto-generation for financial APIs
  */
 
-import { runCli, createDatabase } from "../../index.ts";
-import type { AgentConfig, APIConfig, ChatCallbacks } from "../../index.ts";
+import { runCLI, type AgentConfig, type APIConfig, type ChatCallbacks } from "copilotz/agents";
+import openApiSchema from "./openApiSchema.ts";
 
-// Alpha Vantage API OpenAPI Schema
-const alphaVantageSchema = {
-    "openapi": "3.0.0",
-    "info": {
-        "title": "Alpha Vantage API",
-        "version": "1.0.0",
-        "description": "Financial data and market intelligence API"
-    },
-    "servers": [
-        {
-            "url": "https://www.alphavantage.co",
-            "description": "Alpha Vantage API Server"
-        }
-    ],
-    "paths": {
-        "/query": {
-            "get": {
-                "operationId": "getStockQuote",
-                "summary": "Get real-time stock quote",
-                "parameters": [
-                    {
-                        "name": "function",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string", "enum": ["GLOBAL_QUOTE"] },
-                        "description": "API function to call"
-                    },
-                    {
-                        "name": "symbol",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" },
-                        "description": "Stock symbol (e.g., AAPL, MSFT)"
-                    }
-                ]
-            }
-        }
-    },
-    "components": {
-        "schemas": {
-            "GlobalQuote": {
-                "type": "object",
-                "properties": {
-                    "Global Quote": {
-                        "type": "object",
-                        "properties": {
-                            "01. symbol": { "type": "string" },
-                            "02. open": { "type": "string" },
-                            "03. high": { "type": "string" },
-                            "04. low": { "type": "string" },
-                            "05. price": { "type": "string" },
-                            "06. volume": { "type": "string" },
-                            "07. latest trading day": { "type": "string" },
-                            "08. previous close": { "type": "string" },
-                            "09. change": { "type": "string" },
-                            "10. change percent": { "type": "string" }
-                        }
-                    }
-                }
-            }
-        }
-    }
-};
-
-// Add company overview endpoint
-alphaVantageSchema.paths["/query"].get.parameters.push({
-    "name": "function",
-    "in": "query",
-    "schema": { "type": "string", "enum": ["GLOBAL_QUOTE", "OVERVIEW", "SYMBOL_SEARCH"] }
-});
-
-// Enhanced schema with more endpoints
-const enhancedAlphaVantageSchema = {
-    ...alphaVantageSchema,
-    "paths": {
-        "/query": {
-            "get": {
-                "operationId": "queryFinancialData",
-                "summary": "Query Alpha Vantage financial data API",
-                "parameters": [
-                    {
-                        "name": "function",
-                        "in": "query",
-                        "required": true,
-                        "schema": {
-                            "type": "string",
-                            "enum": ["GLOBAL_QUOTE", "OVERVIEW", "SYMBOL_SEARCH", "TIME_SERIES_DAILY", "INCOME_STATEMENT"]
-                        },
-                        "description": "API function to call"
-                    },
-                    {
-                        "name": "symbol",
-                        "in": "query",
-                        "schema": { "type": "string" },
-                        "description": "Stock symbol (e.g., AAPL, MSFT)"
-                    },
-                    {
-                        "name": "keywords",
-                        "in": "query",
-                        "schema": { "type": "string" },
-                        "description": "Keywords for symbol search"
-                    }
-                ]
-            }
-        }
-    }
-};
-
-// Database connection management
-let dbInstance: any = null;
-
-async function getDatabase() {
-    if (!dbInstance) {
-        dbInstance = await createDatabase({
-            url: Deno.env.get("DATABASE_URL") || ":memory:"
-        });
-        console.log("📦 Database connection established for stock research");
-    }
-    return dbInstance;
-}
-
-// Alpha Vantage API configuration
 function createAlphaVantageConfig(): APIConfig {
     const apiKey = Deno.env.get("DEFAULT_ALPHA_VANTAGE_KEY");
     if (!apiKey) {
@@ -145,7 +23,7 @@ function createAlphaVantageConfig(): APIConfig {
     return {
         name: "alphavantage",
         description: "Alpha Vantage financial data and market intelligence API",
-        openApiSchema: enhancedAlphaVantageSchema,
+        openApiSchema: openApiSchema,
         baseUrl: "https://www.alphavantage.co",
         auth: {
             type: 'apiKey',
@@ -330,37 +208,11 @@ const reportAgent: AgentConfig = {
 
 // Advanced callbacks with streaming and monitoring
 const stockResearchCallbacks: ChatCallbacks = {
-    // Monitor API calls to Alpha Vantage
-    onToolCalling: async (data) => {
-        if (data.toolName === "queryFinancialData") {
-            const toolInput = JSON.parse(data.toolInput);
-            console.log(`📈 Calling Alpha Vantage API: ${toolInput.function} ${toolInput.symbol || toolInput.keywords || ''}`);
-        }
-    },
-
-    // Handle API responses and errors
-    onToolCompleted: async (data) => {
-        if (data.toolName === "queryFinancialData") {
-            if (data.error) {
-                console.log(`❌ Alpha Vantage API error: ${data.error}`);
-                // Provide helpful error context
-                if (data.error.includes("API call frequency")) {
-                    return {
-                        ...data,
-                        toolOutput: {
-                            error: "API_RATE_LIMIT",
-                            message: "Alpha Vantage API rate limit reached. Please wait before making more requests.",
-                            suggestion: "Consider upgrading to premium API key for higher limits."
-                        }
-                    };
-                }
-            }
-        }
-        console.log('Tool completed', data.toolName);
-        return data;
-    },
 
     // Stream content for real-time feedback
+    onEvent: (event) => {
+        console.log(event);
+    },
     onContentStream: (data) => {
         // Only stream content for the report writer to show progress
         Deno.stdout.writeSync(new TextEncoder().encode(data.token));
@@ -368,113 +220,15 @@ const stockResearchCallbacks: ChatCallbacks = {
             Deno.stdout.writeSync(new TextEncoder().encode('\n'));
         }
     },
-
-    onToolCallStream: (data) => {
-        if (data.token) {
-            console.log('Tool call stream', data);
-        }
-    },
-
-    // // Log agent interactions
-    // onMessageSent: async (data) => {
-    //     const timestamp = new Date().toISOString();
-    //     console.log(`💬 [${timestamp}] ${data.senderId}: ${data.content}`);
-    // },
-
-    // Monitor interceptions (if any callbacks modify data)
-    // onIntercepted: async (data) => {
-    //     console.log(`🔄 Intercepted ${data.callbackType} for ${data.agentName}`);
-    //     console.log(`   → Modified: ${JSON.stringify(data.interceptedValue).substring(0, 100)}...`);
-    // }
 };
 
-/**
- * Main function to run stock research
- */
-export async function runStockResearch(companies: string[]) {
-    console.log("🏦 Starting Advanced Stock Research System");
-    console.log("=========================================\n");
 
-    try {
-        // Get persistent database connection
-        const db = await getDatabase();
-
-        // Create research query
-        const researchQuery = `
-                      
-            For each company that you are asked to research:
-            1. Find the stock symbol if not provided
-            2. Get current stock quote and key metrics
-            3. Gather company overview/fundamentals
-            4. Analyze the financial data and market position
-            5. Create a comprehensive research report
-            
-            Coordinate between the research, analysis, and reporting teams to deliver 
-            professional-grade investment research reports.
-        `;
-
-        console.log(`🎯 Researching: ${companies.join(", ")}`);
-        console.log("👥 Team: ResearchCoordinator + StockResearcher + StockAnalyst + ReportWriter");
-        console.log("🤝 Collaboration: Conversational teamwork with @mentions and ask_question\n");
-
-       await runCli({
+// Main execution
+if (import.meta.main) {
+    await runCLI({
         participants: ["ResearchCoordinator"],
         agents: [coordinatorAgent, researchAgent, analysisAgent, reportAgent],
         apis: [createAlphaVantageConfig()],
         callbacks: stockResearchCallbacks,
-        dbInstance: db,
-        initialMessage: {
-            content: researchQuery,
-            threadName: `Stock Research: ${companies.join(", ")}`
-        }
-       })
-
-
-    } catch (error) {
-        console.error("❌ Stock research failed:", error);
-        throw error;
-    }
-}
-
-/**
- * Example usage patterns
- */
-async function examples() {
-    console.log("📚 Stock Research Examples");
-    console.log("=========================\n");
-
-    // Example 1: Single company research
-    console.log("1. Single Company Research:");
-    await runStockResearch(["Castle Biosciences Inc"]);
-
-    // // Example 2: Sector comparison
-    // console.log("\n2. Tech Sector Comparison:");
-    // await runStockResearch(["Apple", "Microsoft", "Google"]);
-
-    // // Example 3: Portfolio analysis
-    // console.log("\n3. Diversified Portfolio Analysis:");
-    // await runStockResearch(["AAPL", "JPM", "JNJ", "XOM", "BRK.B"]);
-}
-
-// Main execution
-if (import.meta.main) {
-    const args = Deno.args;
-
-    if (args.length === 0) {
-        console.log("Usage:");
-        console.log("  deno run --allow-all stock-researcher.ts [company1] [company2] ...");
-        console.log("  deno run --allow-all stock-researcher.ts examples");
-        console.log("\nExample:");
-        console.log("  deno run --allow-all stock-researcher.ts 'Apple Inc' 'Microsoft'");
-        console.log("\nEnvironment Variables:");
-        console.log("  DEFAULT_ALPHA_VANTAGE_KEY - Your Alpha Vantage API key");
-        console.log("  DATABASE_URL - Database connection string (optional)");
-        Deno.exit(1);
-    }
-
-    if (args[0] === "examples") {
-        await examples();
-    } else {
-        await runStockResearch(args);
-    }
+    })
 } 

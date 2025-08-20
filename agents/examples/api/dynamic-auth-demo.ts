@@ -7,7 +7,7 @@
  * that requires login to get a token for subsequent requests.
  */
 
-import { createThread, AgentConfig, APIConfig, DynamicAuth } from "../../index.ts";
+import { runCLI, AgentConfig, APIConfig, DynamicAuth } from "../../index.ts";
 
 // Mock API schema that requires dynamic authentication
 const mockApiSchema = {
@@ -91,56 +91,20 @@ const secureApiAgent: AgentConfig = {
     }
 };
 
-/**
- * Demo function
- */
-async function runDynamicAuthDemo() {
-    console.log("🔐 Dynamic Authentication Demo");
-    console.log("=".repeat(40));
-    console.log("This demo shows how dynamic authentication works:");
-    console.log("1. Agent calls API endpoint");
-    console.log("2. System detects authentication needed");
-    console.log("3. Automatically calls auth endpoint to get token");
-    console.log("4. Caches token for subsequent requests");
-    console.log("5. Auto-refreshes token when needed");
-    console.log("");
-
-    try {
-        // Note: This will fail because jsonplaceholder doesn't have auth endpoints,
-        // but it demonstrates the configuration and flow
-        console.log("🚀 Starting secure API session...");
-        
-        const result = await createThread(
-            {
-                threadId: crypto.randomUUID(),
-                content: "Please get some posts from the secure API and tell me about them.",
-                participants: ["SecureApiAgent"]
-            },
-            {
-                agents: [secureApiAgent],
-                apis: [jwtAuthConfig],
-                dbConfig: { url: ':memory:' },
-                stream: false,
-            }
-        );
-
-        console.log(`✅ Demo completed! Thread ID: ${result.threadId}`);
-
-    } catch (error) {
-        console.log("⚠️ Expected error (demo API doesn't have auth endpoints):");
-        console.log(`   ${error instanceof Error ? error.message : 'Unknown error'}`);
-        console.log("");
-        console.log("✨ In a real scenario with proper auth endpoints, this would work seamlessly!");
-        console.log("📋 The system would:");
-        console.log("   1. Call /auth/login with credentials");
-        console.log("   2. Extract token from response.access_token");
-        console.log("   3. Use token for authenticated API calls");
-        console.log("   4. Refresh token automatically when needed");
-    }
-}
 
 
 // Main execution
 if (import.meta.main) {
-    await runDynamicAuthDemo();
+    await runCLI(
+        {
+            initialMessage: {
+                content: "Please get some posts from the secure API and tell me about them.",
+                senderId: "user",
+                participants: ["SecureApiAgent"]
+            },
+            participants: ["SecureApiAgent"],
+            agents: [secureApiAgent],
+            apis: [jwtAuthConfig],
+        }
+    );
 } 

@@ -2,7 +2,7 @@ import {
   assert,
   assertExists,
 } from "jsr:@std/assert";
-import { createThread } from "../index.ts";
+import { run } from "../index.ts";
 import { createDatabase, queue } from "../database/index.ts";
 import { eq } from "drizzle-orm";
 import type {
@@ -90,58 +90,32 @@ Deno.test("AgentV2 Simple Test", async () => {
   let db: any;
 
   // 3. Send a message to a new thread with enhanced callbacks
-  const result = await createThread(
-    {
+  db = await createDatabase({ url: ":memory:" });
+  const result = await run({
+    initialMessage: {
       content: "Hello, @Albert! Please ask Robin a question what is the size of Japan.",
       participants: ["Albert"],
     },
-    {
-      agents: [
-        Albert,
-        Robin,
-        Charlie,
-      ],
-      tools: [user_test_tool],
-      stream: true, // Enable streaming
-      callbacks: {
-        onToolCalling: (data: ToolCallingData) => {
-          // console.log('onToolCalling', data);
-        },
-        onToolCompleted: (data: ToolCompletedData) => {
-          // console.log('onToolCompleted', data);
-        },
-        onMessageReceived: (data: MessageReceivedData) => {
-          // console.log('onMessageReceived', data);
-        },
-        onMessageSent: (data: MessageSentData) => {
-          // console.log('onMessageSent', data);
-        },
-        onTokenStream: (data: TokenStreamData) => { },
-        onLLMCompleted: (data: LLMCompletedData) => {
-          console.log(`\n🔍 LLM Interaction Debug for ${data.agentName}:`);
-          console.log(`📚 Message History (${data.messageHistory.length} messages):`);
-          data.messageHistory.forEach((msg, i) => {
-            console.log(`  ${i + 1}. [${msg.role}]: ${JSON.stringify(msg.content)}\n`);
-          });
-          // console.log(`🔧 Available Tools: [${data.availableTools.join(', ')}]`);
-          console.log(`📤 LLM Response: ${data.llmResponse?.success ? '✅ Success' : '❌ Failed'}`);
-          if (data.llmResponse?.success) {
-            console.log(`   Answer: ${JSON.stringify(data.llmResponse.answer)}`);
-            console.log(`   Tool Calls: ${data.llmResponse.toolCalls?.length || 0}`);
-            if (data.llmResponse.tokens) console.log(`   Tokens: ${data.llmResponse.tokens}`);
-          } else {
-            console.log(`   Error: ${data.llmResponse?.error}`);
-          }
-          console.log(`⏱️ Duration: ${data.duration}ms`);
-          console.log(`⏰ Timestamp: ${data.timestamp.toISOString()}\n`);
-        },
+    agents: [Albert, Robin, Charlie],
+    tools: [user_test_tool],
+    stream: true,
+    callbacks: {
+      onToolCalling: (data: ToolCallingData) => {},
+      onToolCompleted: (data: ToolCompletedData) => {},
+      onMessageReceived: (data: MessageReceivedData) => {},
+      onMessageSent: (data: MessageSentData) => {},
+      onTokenStream: (data: TokenStreamData) => {},
+      onLLMCompleted: (data: LLMCompletedData) => {
+        console.log(`\n🔍 LLM Interaction Debug for ${data.agentName}:`);
+        console.log(`📚 Message History (${data.messageHistory.length} messages):`);
+        data.messageHistory.forEach((msg, i) => {
+          console.log(`  ${i + 1}. [${msg.role}]: ${JSON.stringify(msg.content)}\n`);
+        });
+        console.log(`📤 LLM Response: ${data.llmResponse?.success ? '✅ Success' : '❌ Failed'}`);
       },
     },
-    (dbInstance) => {
-      db = dbInstance;
-      console.log("💾 Database instance created");
-    }
-  );
+    dbInstance: db,
+  });
 
   // 4. Assert that the message was queued
   assertExists(result.queueId);
@@ -177,28 +151,22 @@ Deno.test("AgentV2 Participants Filter Test", async () => {
   };
 
   // 3. Send a message targeting only Albert and Robin (excluding Charlie)
-  const result = await createThread(
-    {
+  db = await createDatabase({ url: ":memory:" });
+  const result = await run({
+    initialMessage: {
       content: "Hello! This conversation should only include Albert and Robin. How are you doing @Albert?",
-      participants: ["Albert", "Robin"], // Charlie should be filtered out
+      participants: ["Albert", "Robin"],
     },
-    {
-      agents: [Albert, Robin, Charlie], // All 3 agents available in context
-      tools: [user_test_tool],
-      callbacks: {
-        onLLMCompleted: (data: LLMCompletedData) => {
-          console.log(`\n🎯 Participants Filter Test - Agent: ${data.agentName}`);
-          // Charlie should never appear in these logs since it's not a participant
-          assert(data.agentName === "Albert" || data.agentName === "Robin");
-        },
-
+    agents: [Albert, Robin, Charlie],
+    tools: [user_test_tool],
+    callbacks: {
+      onLLMCompleted: (data: LLMCompletedData) => {
+        console.log(`\n🎯 Participants Filter Test - Agent: ${data.agentName}`);
+        assert(data.agentName === "Albert" || data.agentName === "Robin");
       },
     },
-    (dbInstance) => {
-      db = dbInstance;
-      console.log("💾 Database instance created");
-    }
-  );
+    dbInstance: db,
+  });
 
   // 4. Assert that the message was queued
   assertExists(result.queueId);
@@ -270,32 +238,23 @@ Deno.test("AgentV2 Question Tool Test", async () => {
   };
 
   // Send a message asking the Questioner to use the question tool
-  const result = await createThread(
-    {
+  db = await createDatabase({ url: ":memory:" });
+  const result = await run({
+    initialMessage: {
       content: "Please ask the Expert what the capital of France is using the ask_question tool.",
-      participants: ["Helper"], // Only Helper participates in main thread
+      participants: ["Helper"],
     },
-    {
-      agents: [questioner, expert, helper], // All three agents available
-      callbacks: {
-        onLLMCompleted: (data: LLMCompletedData) => {
-          console.log(`\n❓ Question Tool Test - Agent: ${data.agentName}`);
-          console.log(`📋 System Prompt Preview:`);
-          console.log(data.systemPrompt.substring(0, 500) + "...");
-          if (data.llmResponse?.toolCalls) {
-            console.log(`🔧 Tool calls: ${data.llmResponse.toolCalls.length}`);
-            data.llmResponse.toolCalls.forEach(call => {
-              console.log(`   - ${call.function.name}: ${JSON.stringify(call.function.arguments)}`);
-            });
-          }
-        },
+    agents: [questioner, expert, helper],
+    callbacks: {
+      onLLMCompleted: (data: LLMCompletedData) => {
+        console.log(`\n❓ Question Tool Test - Agent: ${data.agentName}`);
+        if (data.llmResponse?.toolCalls) {
+          console.log(`🔧 Tool calls: ${data.llmResponse.toolCalls.length}`);
+        }
       },
     },
-    (dbInstance) => {
-      db = dbInstance;
-      console.log("💾 Database instance created");
-    }
-  );
+    dbInstance: db,
+  });
 
   // Assert that the message was queued
   assertExists(result.queueId);
@@ -348,37 +307,29 @@ Deno.test("AgentV2 Two-Participant Fallback Test", async () => {
 
   // Test 1: Two-participant conversation (user + agent) - should activate fallback
   console.log("\n🔹 Test 1: Two-participant conversation (user + Agent1)");
-  const result1 = await createThread(
-    {
+  const db1 = await createDatabase({ url: ":memory:" });
+  const result1 = await run({
+    initialMessage: {
       content: "Hello! This should automatically route to Agent1.",
-      participants: ["Agent1"], // Only Agent1 participates (+ user = 2 participants)
+      participants: ["Agent1"],
     },
-    {
-      agents: [agent1, agent2],
-      callbacks: {
-        onLLMCompleted: (data) => {
-          console.log(`   ✅ Agent responded: ${data.agentName}`);
-        },
-      },
-    }
-  );
+    agents: [agent1, agent2],
+    callbacks: { onLLMCompleted: (data: any) => { console.log(`   ✅ Agent responded: ${data.agentName}`); } },
+    dbInstance: db1,
+  });
 
   // Test 2: Three-participant conversation - should NOT activate fallback
   console.log("\n🔹 Test 2: Three-participant conversation (user + Agent1 + Agent2)");
-  const result2 = await createThread(
-    {
+  const db2 = await createDatabase({ url: ":memory:" });
+  const result2 = await run({
+    initialMessage: {
       content: "Hello! This should require explicit mentions.",
-      participants: ["Agent1", "Agent2"], // Two agents + user = 3 participants
+      participants: ["Agent1", "Agent2"],
     },
-    {
-      agents: [agent1, agent2],
-      callbacks: {
-        onLLMCompleted: (data) => {
-          console.log(`   ❌ Unexpected: ${data.agentName} responded without mention`);
-        },
-      },
-    }
-  );
+    agents: [agent1, agent2],
+    callbacks: { onLLMCompleted: (data: any) => { console.log(`   ❌ Unexpected: ${data.agentName} responded without mention`); } },
+    dbInstance: db2,
+  });
 
   assertExists(result1.queueId);
   assertExists(result2.queueId);
@@ -449,68 +400,37 @@ Deno.test("AgentV2 Tools Integration Test", async () => {
 
   // Test 1: Ask agent to explore the current directory
   console.log("\n🔧 Test 1: Directory exploration");
-  const result1 = await createThread(
-    {
-      content: "Please explore the current directory and tell me what files are here. Use the list_directory tool.",
-      participants: ["Developer"],
-    },
-    {
-      agents: [developerAgent],
-      callbacks: {
-        onToolCalling: (data) => {
-          console.log(`   🔨 ${data.agentName} is calling tool: ${data.toolName}`);
-        },
-        onToolCompleted: (data) => {
-          console.log(`   ✅ Tool ${data.toolName} completed ${data.error ? "with error" : "successfully"}`);
-        },
-        onLLMCompleted: (data) => {
-          if (data.llmResponse?.success && data.llmResponse?.toolCalls && data.llmResponse.toolCalls.length > 0) {
-            console.log(`   🤖 ${data.agentName} wants to use ${data.llmResponse.toolCalls.length} tool(s)`);
-          }
-        },
-      },
+  const result1 = await run({
+    initialMessage: { content: "Please explore the current directory and tell me what files are here. Use the list_directory tool.", participants: ["Developer"] },
+    agents: [developerAgent],
+    callbacks: {
+      onToolCalling: (data: any) => { console.log(`   🔨 ${data.agentName} is calling tool: ${data.toolName}`); },
+      onToolCompleted: (data: any) => { console.log(`   ✅ Tool ${data.toolName} completed ${data.error ? "with error" : "successfully"}`); },
+      onLLMCompleted: (data: any) => { if (data.llmResponse?.success && data.llmResponse?.toolCalls?.length) { console.log(`   🤖 ${data.agentName} wants to use ${data.llmResponse.toolCalls.length} tool(s)`); } },
     }
-  );
+  });
 
   // Test 2: Ask agent to read a specific file
   console.log("\n🔧 Test 2: File reading");
-  const result2 = await createThread(
-    {
-      content: "Please read the content of deno.json file and tell me about the project configuration.",
-      participants: ["Developer"],
-    },
-    {
-      agents: [developerAgent],
-      callbacks: {
-        onToolCalling: (data) => {
-          console.log(`   🔨 ${data.agentName} is calling tool: ${data.toolName} with args:`, JSON.stringify(data.toolInput).substring(0, 100));
-        },
-        onToolCompleted: (data) => {
-          console.log(`   ✅ Tool ${data.toolName} completed`);
-        },
-      },
+  const result2 = await run({
+    initialMessage: { content: "Please read the content of deno.json file and tell me about the project configuration.", participants: ["Developer"] },
+    agents: [developerAgent],
+    callbacks: {
+      onToolCalling: (data: any) => { console.log(`   🔨 ${data.agentName} is calling tool: ${data.toolName} with args:`, JSON.stringify(data.toolInput).substring(0, 100)); },
+      onToolCompleted: (data: any) => { console.log(`   ✅ Tool ${data.toolName} completed`); },
     }
-  );
+  });
 
   // Test 3: Ask agent to make an API call
   console.log("\n🔧 Test 3: API request");
-  const result3 = await createThread(
-    {
-      content: "Please make an HTTP request to https://api.github.com/zen to get a random zen quote and share it with me.",
-      participants: ["Developer"],
-    },
-    {
-      agents: [developerAgent],
-      callbacks: {
-        onToolCalling: (data) => {
-          console.log(`   🔨 ${data.agentName} is calling tool: ${data.toolName}`);
-        },
-        onToolCompleted: (data) => {
-          console.log(`   ✅ Tool ${data.toolName} completed`);
-        },
-      },
+  const result3 = await run({
+    initialMessage: { content: "Please make an HTTP request to https://api.github.com/zen to get a random zen quote and share it with me.", participants: ["Developer"] },
+    agents: [developerAgent],
+    callbacks: {
+      onToolCalling: (data: any) => { console.log(`   🔨 ${data.agentName} is calling tool: ${data.toolName}`); },
+      onToolCompleted: (data: any) => { console.log(`   ✅ Tool ${data.toolName} completed`); },
     }
-  );
+  });
 
   // Verify all tests completed
   assertExists(result1.queueId);

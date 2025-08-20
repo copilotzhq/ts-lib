@@ -1,4 +1,4 @@
-import type { APIConfig } from "copilotz/agents";
+import type { APIConfig } from "../../Interfaces.ts";
 
 export function getToolNames(openApiSchema: APIConfig['openApiSchema']): string[] {
     return [...Object.keys(openApiSchema.paths).flatMap(path => {

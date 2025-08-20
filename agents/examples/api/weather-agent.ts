@@ -8,7 +8,7 @@
  * using the National Weather Service API.
  */
 
-import { createThread, AgentConfig, APIConfig, ChatCallbacks } from "../../index.ts";
+import { runCLI, AgentConfig, APIConfig, ChatCallbacks } from "../../index.ts";
 
 // Load the OpenAPI schema for the National Weather Service API
 const weatherApiSchema = JSON.parse(
@@ -57,7 +57,7 @@ const weatherAgent: AgentConfig = {
         // Only weather API tools - generated from OpenAPI schema
         // Using operationId directly since it takes precedence in tool generation
         "getGridPoint",
-        "getForecast", 
+        "getForecast",
         "getActiveAlerts"
     ],
     llmOptions: {
@@ -69,54 +69,26 @@ const weatherAgent: AgentConfig = {
 
 // Callbacks to monitor weather API calls
 const weatherCallbacks: ChatCallbacks = {
-    onToolCalling: (data) => {
-        console.log(`🌤️  Calling weather API: ${data.toolName}`);
-    },
-    onToolCompleted: (data) => {
-        if (data.error) {
-            console.log(`❌ Weather API failed: ${data.toolName} - ${data.error}`);
-        } else {
-            console.log(`✅ Weather API completed: ${data.toolName} (${data.duration}ms)`);
-        }
-    },
-    onMessageSent: (data) => {
-        console.log(`🤖 ${data.senderId}: ${data.content}`);
+    onContentStream: (data) => {
+        Deno.stdout.write(new TextEncoder().encode(data.token));
     }
+
 };
 
-/**
- * Example function to test weather queries
- */
-async function testWeatherAgent() {
-    console.log("🌦️  Starting Weather Agent Example");
-    console.log("==================================\n");
-
-    try {
-        const result = await createThread(
-            {
-                threadId: crypto.randomUUID(),
-                content: "What's the weather forecast for Seattle, Washington? Also check if there are any active weather alerts for Washington state.",
-                participants: ["WeatherSpecialist"]
-            },
-            {
-                agents: [weatherAgent],
-                apis: [weatherApiConfig], // Our Weather API configuration
-                callbacks: weatherCallbacks,
-                dbConfig: { url: ':memory:' },
-                stream: false,
-            }
-        );
-       
-
-    } catch (error) {
-        console.error("❌ Weather agent test failed:", error);
-    }
-}
 
 // Main execution
 if (import.meta.main) {
 
-    await testWeatherAgent();
-
-    console.log("\n✨ Weather Agent Example Complete!");
+    await runCLI(
+        {
+            initialMessage: {
+                content: "What's the weather forecast for Seattle, Washington? Also check if there are any active weather alerts for Washington state.",
+                senderId: "user",
+                participants: ["WeatherSpecialist"]
+            },
+            agents: [weatherAgent],
+            apis: [weatherApiConfig], // Our Weather API configuration
+            callbacks: weatherCallbacks
+        }
+    );
 } 

@@ -1,5 +1,5 @@
-import type { ToolCompletedData, ToolCompletedResponse } from "copilotz/agents";
-import { utils } from "copilotz/agents";
+import type { ToolCompletedData, ToolCompletedResponse } from "../../Interfaces.ts";
+import * as utils from "../index.ts";
 
 type Media = { key: string, value: string };
 type HandleMediaInput = { medias: Media[], output: ToolCompletedData['toolOutput'], sanitized: ToolCompletedData['toolOutput'] };

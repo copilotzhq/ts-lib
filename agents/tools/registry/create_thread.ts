@@ -1,4 +1,4 @@
-import { createThread } from "../../index.ts";
+import { run } from "../../index.ts";
 import { ToolExecutionContext } from "../../Interfaces.ts";
 
 interface CreateThreadParams {
@@ -60,7 +60,7 @@ export default {
         };
 
         // Start the thread
-        const result = await createThread(initMessage, chatContext);
+        const result = await run({ initialMessage: initMessage as any, ...(chatContext as any) });
 
         return {
             threadId,

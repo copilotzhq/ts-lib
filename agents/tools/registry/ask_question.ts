@@ -1,4 +1,4 @@
-import { createThread } from "../../index.ts";
+import { run } from "../../index.ts";
 import { createOperations } from "../../database/operations.ts";
 import { ToolExecutionContext, AgentConfig, Message } from "../../Interfaces.ts";
 
@@ -43,8 +43,8 @@ export default {
 
         try {
             // Send the question to the target agent in a new thread
-            await createThread(
-                {
+            await run({
+                initialMessage: {
                     content: question,
                     threadId: questionThreadId,
                     senderId: context.senderId,
@@ -52,14 +52,12 @@ export default {
                     threadName: `Question from ${context.senderId}`,
                     participants: [targetAgent],
                 },
-                {
-                    agents: [targetAgentConfig],
-                    tools: context.tools || [],
-                    dbInstance: db,
-                    stream: true,
-                    callbacks: context.callbacks,
-                }
-            );
+                agents: [targetAgentConfig],
+                tools: context.tools || [],
+                dbInstance: db,
+                stream: true,
+                callbacks: context.callbacks,
+            });
 
             // Poll for the answer with timeout
             const startTime = Date.now();
