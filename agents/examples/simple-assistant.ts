@@ -29,7 +29,7 @@ const tools: RunnableTool[] = [
 ]
 
 const callbacks: ChatCallbacks = {
-    onTokenStream: (data: any) => {
+    onContentStream: (data: any) => {
         Deno.stdout.write(new TextEncoder().encode(data.token));
     }
 }

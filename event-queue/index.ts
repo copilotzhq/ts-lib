@@ -20,6 +20,8 @@ export type GenericNewQueueEvent<TPayload = unknown> = NewQueueEvent<TPayload>;
 // Processor contract (mirrors agents engine)
 export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
   shouldProcess: (event: QueueEvent<TPayload>, deps: TDeps) => boolean | Promise<boolean>;
+  preProcess?: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<void>;
+  postProcess?: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<void>;
   process: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<{ producedEvents?: NewQueueEvent[] }>;
 }
 
@@ -60,29 +62,30 @@ async function runWithOnEvent<TDeps>(
   processors: Record<string, EventProcessor<any, TDeps>>,
   context?: WorkerContext
 ): Promise<{ producedEvents?: NewQueueEvent[] }> {
-  const handler = context?.callbacks?.onEvent;
+  const onEvenHandler = context?.callbacks?.onEvent;
 
-  const executeDefault = async (e: QueueEvent = event): Promise<{ producedEvents?: NewQueueEvent[] }> => {
+  const execute = async (e: QueueEvent = event, _handler?: (e: QueueEvent) => Promise<{ producedEvents?: NewQueueEvent[] } | void>): Promise<{ producedEvents?: NewQueueEvent[] }> => {
     const processor = processors[e.type];
     if (!processor) return { producedEvents: [] };
     const ok = await processor.shouldProcess(e as QueueEvent<unknown>, deps);
     if (!ok) return { producedEvents: [] };
-    const result = await processor.process(e as QueueEvent<unknown>, deps);
+    // preProcess
+    processor.preProcess && await processor.preProcess(e as QueueEvent<unknown>, deps);
+    const handler = _handler || processor.process;
+    const result = await handler(e as QueueEvent<unknown>, deps);
+    processor.postProcess && await processor.postProcess(e as QueueEvent<unknown>, deps);
     // Normalize falsy/void returns from processors to an empty producedEvents object
     return result || { producedEvents: [] };
   };
 
-  if (!handler) return executeDefault(event);
-
   try {
-    const resp = await handler(event, async (overrideEvent?: QueueEvent<unknown>) => executeDefault((overrideEvent || event) as QueueEvent));
-    if (!resp) return executeDefault(event);
+    const resp = await execute(event, onEvenHandler);
     if ((resp as { drop?: boolean }).drop) return { producedEvents: [] };
-    if ((resp as { event?: QueueEvent<unknown> }).event) return executeDefault((resp as { event: QueueEvent<unknown> }).event as QueueEvent);
+    if ((resp as { event?: QueueEvent<unknown> }).event) return execute((resp as { event: QueueEvent<unknown> }).event as QueueEvent);
     if ((resp as { producedEvents?: NewQueueEvent[] }).producedEvents) return { producedEvents: (resp as { producedEvents: NewQueueEvent[] }).producedEvents };
-    return executeDefault(event);
+    return execute(event);
   } catch (_err) {
-    return executeDefault(event);
+    return execute(event);
   }
 }
 

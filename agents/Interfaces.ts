@@ -151,71 +151,6 @@ export interface ChatInitMessage {
     };
 }
 
-// Callback data types
-export interface ToolCallingData {
-    threadId: string;
-    agentName: string;
-    toolName: string;
-    toolInput: any;
-    toolCallId: string;
-    timestamp: Date;
-}
-
-export interface ToolCompletedData {
-    threadId: string;
-    agentName: string;
-    toolName: string;
-    toolInput: any;
-    toolCallId: string;
-    toolOutput?: any;
-    error?: string;
-    duration?: number;
-    timestamp: Date;
-}
-
-export interface MessageReceivedData {
-    threadId: string;
-    senderId: string;
-    senderType: "user" | "agent" | "tool" | "system";
-    content: string;
-    timestamp: Date;
-}
-
-export interface MessageSentData {
-    threadId: string;
-    senderId: string;
-    senderType: "user" | "agent" | "tool" | "system";
-    content: string;
-    timestamp: Date;
-}
-
-export interface LLMCompletedData {
-    threadId: string;
-    agentName: string;
-    systemPrompt: string;
-    messageHistory: any[]; // LLM-formatted message history
-    availableTools: string[]; // Tool names available to the agent
-    llmConfig?: any; // LLM configuration used
-    llmResponse?: {
-        success: boolean;
-        answer?: string;
-        toolCalls?: any[];
-        error?: string;
-        tokens?: number;
-        model?: string;
-        provider?: string;
-    };
-    duration?: number; // LLM call duration in milliseconds
-    timestamp: Date;
-}
-
-export interface TokenStreamData {
-    threadId: string;
-    agentName: string;
-    token: string;
-    isComplete: boolean;
-}
-
 export interface ContentStreamData {
     threadId: string;
     agentName: string;
@@ -223,47 +158,14 @@ export interface ContentStreamData {
     isComplete: boolean;
 }
 
-export interface ToolCallStreamData {
-    threadId: string;
-    agentName: string;
-    token: string;
-    isComplete: boolean;
-}
 
-// Interceptor data types
-export interface InterceptorData {
-    threadId: string;
-    agentName: string;
-    callbackType: string; // Which callback triggered the interception
-    originalValue: any;
-    interceptedValue: any;
-    timestamp: Date;
-}
-
-
-// Tool callbacks with interceptor support
-
-export type ToolCallingResponse = ToolCallingData | undefined;
-export type ToolCompletedResponse = ToolCompletedData | undefined;
-export type MessageReceivedResponse = MessageReceivedData | undefined;
-export type MessageSentResponse = MessageSentData | undefined;
-export type LLMCompletedResponse = LLMCompletedData | undefined;
 
 // Enhanced callback types that can return values for interception
 export interface ChatCallbacks {
-    onToolCalling?: (data: ToolCallingData, respond?: (message: MessageSentData) => void) => void | Promise<void | ToolCallingResponse> | ToolCallingResponse;
-    onToolCompleted?: (data: ToolCompletedData, respond?: (message: MessageSentData) => void) => void | Promise<void | ToolCompletedResponse> | ToolCompletedResponse;
-    onMessageReceived?: (data: MessageReceivedData, respond?: (message: MessageSentData) => void) => void | Promise<void | MessageReceivedResponse> | MessageReceivedResponse;
-    onMessageSent?: (data: MessageSentData, respond?: (message: MessageSentData) => void) => void | Promise<void | MessageSentResponse> | MessageSentResponse;
-    onTokenStream?: (data: TokenStreamData) => void | Promise<void> | TokenStreamData;
     onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
-    onToolCallStream?: (data: ToolCallStreamData) => void | Promise<void> | ToolCallStreamData;
-    onLLMCompleted?: (data: LLMCompletedData, respond?: (message: { content: string; senderId?: string; senderType?: "user" | "agent" | "tool" | "system" }) => void) => void | Promise<void | LLMCompletedResponse> | LLMCompletedResponse;
-    onIntercepted?: (data: InterceptorData) => void | Promise<void> | InterceptorData; // New callback for interceptions
-    // Unified event callback used by the event-queue engine.
     onEvent?: (
         event: QueueEvent<unknown>,
-        process: (eventOverride?: QueueEvent<unknown>) => Promise<{ producedEvents: NewQueueEvent[] }>
+        _process: (eventOverride?: QueueEvent<unknown>) => Promise<{ producedEvents: NewQueueEvent[] }>
     ) => Promise<void | { event: QueueEvent<unknown> } | { producedEvents: NewQueueEvent[] } | { drop: true }> | void | { event: QueueEvent<unknown> } | { producedEvents: NewQueueEvent[] } | { drop: true };
 }
 

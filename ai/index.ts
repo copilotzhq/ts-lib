@@ -5,7 +5,6 @@
 import type {
   AIRequest,
   AIResponse,
-  AIServiceOverloads,
   LLMRequest,
   LLMResponse,
   LLMErrorResponse,

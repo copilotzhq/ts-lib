@@ -11,7 +11,6 @@ import type {
     LLMContextData,
     NewMessage,
     ContentStreamData,
-    ToolCallStreamData,
     RunnableTool,
     Thread,
     ToolExecutionResult
@@ -249,7 +248,7 @@ function discoverTargetAgentsForMessage(payload: MessagePayload, thread: Thread,
     }
 
     // Mentions
-    const mentions = payload.content?.match(/@(\w+)/g);
+    const mentions = payload.content?.match(/(?<!\w)@([\w](?:[\w.-]*[\w])?)/g);
     if (mentions && mentions.length > 0) {
         const names = mentions.map((m: string) => m.substring(1));
         const mentionedAgents = availableAgents.filter(a => names.includes(a.name));
@@ -272,7 +271,7 @@ function discoverTargetAgentsForMessage(payload: MessagePayload, thread: Thread,
 // Processors
 const messageProcessor: AgentsEventProcessor<MessagePayload> = {
     shouldProcess: () => true,
-    process: async (event, deps) => {
+    preProcess: async (event, deps) => {
         const { ops, db: _db, thread, context } = deps;
         const payload = event.payload;
 
@@ -288,6 +287,10 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
             };
             await ops.createMessage(incomingMsg);
         }
+    },
+    process: async (event, deps) => {
+        const { ops, db: _db, thread, context } = deps;
+        const payload = event.payload;
 
         // Resolve targets
         const availableAgents = context.agents || [];
@@ -308,16 +311,8 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
             const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
 
             // Streaming callback: ai/llm filters out <function_calls> already.
-            const streamCallback = (context.stream && (context.callbacks?.onTokenStream || context.callbacks?.onContentStream))
+            const streamCallback = (context.stream && (context.callbacks?.onContentStream))
                 ? (token: string) => {
-                    if (context.callbacks?.onTokenStream) {
-                        context.callbacks.onTokenStream({
-                            threadId: event.threadId,
-                            agentName: agent.name,
-                            token,
-                            isComplete: false,
-                        });
-                    }
                     if (context.callbacks?.onContentStream) {
                         context.callbacks.onContentStream({
                             threadId: event.threadId,
@@ -346,14 +341,6 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
 
             // finalize stream
             if (streamCallback) {
-                if (context.callbacks?.onTokenStream) {
-                    context.callbacks.onTokenStream({
-                        threadId: event.threadId,
-                        agentName: agent.name,
-                        token: "",
-                        isComplete: true,
-                    });
-                }
                 if (context.callbacks?.onContentStream) {
                     context.callbacks.onContentStream({
                         threadId: event.threadId,
@@ -377,10 +364,8 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
             }
 
             if (answer) {
-                const selfPrefixPattern = new RegExp(`^\\[${escapeRegex(agent.name)}\\]:\\s*`, 'i');
+                const selfPrefixPattern = new RegExp(`^(\\[${escapeRegex(agent.name)}\\]:\\s*|@${escapeRegex(agent.name)}\\b(:\\s*|\\s+))`, 'i');
                 answer = answer.replace(selfPrefixPattern, '');
-                const selfMentionPattern = new RegExp(`^@${escapeRegex(agent.name)}:\\s*`, 'i');
-                answer = answer.replace(selfMentionPattern, '');
             }
 
             // Emit tool calls as events without executing here

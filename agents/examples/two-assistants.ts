@@ -39,7 +39,7 @@ const ApiAgent = {
 
 
 const callbacks = {
-    onTokenStream: (data: any) => {
+    onContentStream: (data: any) => {
         Deno.stdout.write(new TextEncoder().encode(data.token));
     }
 }
