@@ -270,12 +270,10 @@ function discoverTargetAgentsForMessage(payload: MessagePayload, thread: Thread,
 
 // Processors
 const messageProcessor: AgentsEventProcessor<MessagePayload> = {
-    shouldProcess: () => true,
+    // Persist incoming message once before processing
     preProcess: async (event, deps) => {
-        const { ops, db: _db, thread, context } = deps;
+        const { ops } = deps;
         const payload = event.payload;
-
-        // Persist incoming message if it has content
         if (payload.content && payload.content.length > 0) {
             const incomingMsg: NewMessage = {
                 threadId: event.threadId,
@@ -288,6 +286,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
             await ops.createMessage(incomingMsg);
         }
     },
+    shouldProcess: () => true,
     process: async (event, deps) => {
         const { ops, db: _db, thread, context } = deps;
         const payload = event.payload;
@@ -478,7 +477,7 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
 const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
     shouldProcess: () => true,
     process: async (event, deps) => {
-        const { ops, thread: _thread } = deps;
+        const { thread: _thread } = deps;
         // Schedule a follow-up message event to let the agent continue after tool result
         const payload = event.payload;
         const output = payload.output;
@@ -497,7 +496,7 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
         const producedEvents: NewQueueEvent[] = [
             {
                 threadId: event.threadId,
-                type: "MESSAGE", // Trigger processing loop; persistence happens in MESSAGE handler
+                type: "MESSAGE",
                 payload: {
                     senderId: payload.agentName,
                     senderType: "tool",
@@ -511,6 +510,7 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
                 traceId: event.traceId,
             }
         ];
+
         return { producedEvents };
     }
 };

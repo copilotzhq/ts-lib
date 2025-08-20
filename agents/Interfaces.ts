@@ -163,10 +163,7 @@ export interface ContentStreamData {
 // Enhanced callback types that can return values for interception
 export interface ChatCallbacks {
     onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
-    onEvent?: (
-        event: QueueEvent<unknown>,
-        _process: (eventOverride?: QueueEvent<unknown>) => Promise<{ producedEvents: NewQueueEvent[] }>
-    ) => Promise<void | { event: QueueEvent<unknown> } | { producedEvents: NewQueueEvent[] } | { drop: true }> | void | { event: QueueEvent<unknown> } | { producedEvents: NewQueueEvent[] } | { drop: true };
+    onEvent?: (event: QueueEvent<unknown>) => Promise<{ producedEvents?: NewQueueEvent[] } | void> | { producedEvents?: NewQueueEvent[] } | void;
 }
 
 // API Configuration for OpenAPI schema tools

@@ -19,10 +19,10 @@ export type GenericNewQueueEvent<TPayload = unknown> = NewQueueEvent<TPayload>;
 
 // Processor contract (mirrors agents engine)
 export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
+  // Optional preprocessing step (e.g., persist incoming messages)
+  preProcess?: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<{ producedEvents?: NewQueueEvent[] } | void> | { producedEvents?: NewQueueEvent[] } | void;
   shouldProcess: (event: QueueEvent<TPayload>, deps: TDeps) => boolean | Promise<boolean>;
-  preProcess?: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<void>;
-  postProcess?: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<void>;
-  process: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<{ producedEvents?: NewQueueEvent[] }>;
+  process: (event: QueueEvent<TPayload>, deps: TDeps) => Promise<{ producedEvents?: NewQueueEvent[] } | void> | { producedEvents?: NewQueueEvent[] } | void;
 }
 
 export type OnEventResponse =
@@ -33,7 +33,8 @@ export type OnEventResponse =
 
 export interface WorkerContext {
   callbacks?: {
-    onEvent?: (ev: QueueEvent<unknown>, runDefault: (override?: QueueEvent<unknown>) => Promise<{ producedEvents?: NewQueueEvent[] }>) => Promise<OnEventResponse | void> | OnEventResponse | void;
+    // Optional: allow listeners to append produced events
+    onEvent?: (ev: QueueEvent<unknown>) => Promise<{ producedEvents?: NewQueueEvent[] } | void> | { producedEvents?: NewQueueEvent[] } | void;
   };
 }
 
@@ -56,38 +57,7 @@ export async function enqueueEvents(db: unknown, events: NewQueueEvent[]): Promi
   }
 }
 
-async function runWithOnEvent<TDeps>(
-  event: QueueEvent,
-  deps: TDeps,
-  processors: Record<string, EventProcessor<any, TDeps>>,
-  context?: WorkerContext
-): Promise<{ producedEvents?: NewQueueEvent[] }> {
-  const onEvenHandler = context?.callbacks?.onEvent;
-
-  const execute = async (e: QueueEvent = event, _handler?: (e: QueueEvent) => Promise<{ producedEvents?: NewQueueEvent[] } | void>): Promise<{ producedEvents?: NewQueueEvent[] }> => {
-    const processor = processors[e.type];
-    if (!processor) return { producedEvents: [] };
-    const ok = await processor.shouldProcess(e as QueueEvent<unknown>, deps);
-    if (!ok) return { producedEvents: [] };
-    // preProcess
-    processor.preProcess && await processor.preProcess(e as QueueEvent<unknown>, deps);
-    const handler = _handler || processor.process;
-    const result = await handler(e as QueueEvent<unknown>, deps);
-    processor.postProcess && await processor.postProcess(e as QueueEvent<unknown>, deps);
-    // Normalize falsy/void returns from processors to an empty producedEvents object
-    return result || { producedEvents: [] };
-  };
-
-  try {
-    const resp = await execute(event, onEvenHandler);
-    if ((resp as { drop?: boolean }).drop) return { producedEvents: [] };
-    if ((resp as { event?: QueueEvent<unknown> }).event) return execute((resp as { event: QueueEvent<unknown> }).event as QueueEvent);
-    if ((resp as { producedEvents?: NewQueueEvent[] }).producedEvents) return { producedEvents: (resp as { producedEvents: NewQueueEvent[] }).producedEvents };
-    return execute(event);
-  } catch (_err) {
-    return execute(event);
-  }
-}
+// no longer used with preProcess + simplified onEvent
 
 // Generic worker
 export async function startEventWorker<TDeps>(
@@ -131,10 +101,44 @@ export async function startEventWorker<TDeps>(
 
     try {
       const deps = await buildDeps(ops, event, context);
-      const { producedEvents } = await runWithOnEvent(event, deps, processors, context);
 
-      if (producedEvents && producedEvents.length > 0) {
-        await enqueueEvents(db, producedEvents);
+      const processor = processors[event.type];
+
+      // Buckets to respect override semantics
+      const preEvents: NewQueueEvent[] = [];
+      let finalEvents: NewQueueEvent[] = [];
+
+      // 1) Pre-process (always runs when available)
+      if (processor?.preProcess) {
+        const pre = await processor.preProcess(event as any, deps as any);
+        if (pre && (pre as any).producedEvents) preEvents.push(...(pre as any).producedEvents);
+      }
+
+      // 2) onEvent callback with override semantics
+      const handler = context?.callbacks?.onEvent;
+      let overriddenByOnEvent = false;
+      if (handler) {
+        try {
+          const res = await handler(event);
+          if (res && (res as any).producedEvents) {
+            finalEvents = (res as any).producedEvents as NewQueueEvent[];
+            overriddenByOnEvent = true;
+          }
+        } catch (_err) { /* ignore user callback errors */ }
+      }
+
+      // 3) Default processor path (only if not overridden)
+      if (!overriddenByOnEvent && processor) {
+        const ok = await processor.shouldProcess(event as any, deps as any);
+        if (ok) {
+          const res = await processor.process(event as any, deps as any);
+          if (res && (res as any).producedEvents) finalEvents = (res as any).producedEvents as NewQueueEvent[];
+        }
+      }
+
+      const allToEnqueue = [...preEvents, ...finalEvents];
+      if (allToEnqueue.length > 0) {
+        await enqueueEvents(db, allToEnqueue);
       }
       await ops.updateQueueItemStatus(next.id, "completed");
     } catch (err) {
