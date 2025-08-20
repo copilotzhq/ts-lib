@@ -38,7 +38,7 @@ export function formatMessages({ messages, instructions, config, tools }: ChatRe
   }
 
   // Convert tool messages to assistant text so providers that require structured tool_calls don't reject the payload.
-  // We still rehydrate <function_calls> from metadata.toolCalls separately for assistant messages.
+  // We still rehydrate <function_calls> from either top-level message.toolCalls or metadata.toolCalls for assistant messages.
   formattedMessages = formattedMessages.map((m) => ({
     ...m,
     // Present tool results as regular context to the model to avoid provider tool-call constraints
@@ -334,39 +334,42 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
   const toolCalls: ToolCall[] = [];
   let cleanResponse = response;
 
+  // 1) Recover missing closing tags by balancing braces inside the last <function_calls>
+  //    If we find an opening tag without a closing one, attempt to extract until balanced JSON objects are complete,
+  //    then synthetically append the closing tag to allow the standard parser to run.
+  const startTag = '<function_calls>';
+  const endTag = '</function_calls>';
+
+  const hasStart = response.includes(startTag);
+  const hasEnd = response.includes(endTag);
+
+  if (hasStart && !hasEnd) {
+    const startIdx = response.lastIndexOf(startTag);
+    if (startIdx !== -1) {
+      const after = response.slice(startIdx + startTag.length);
+      // Attempt to extract valid JSON objects from the tail; if at least one is found, treat as valid and close the tag
+      const objs = extractJsonObjects(after);
+      if (objs.length > 0) {
+        // Reconstruct a closed block to be parsed by the standard path
+        const rebuilt = response.slice(0, startIdx) + startTag + after + endTag;
+        response = rebuilt;
+      }
+    }
+  }
+
   // Regex to match <function_calls> ... </function_calls> block(s)
   const toolCallsPattern = /<function_calls>([\s\S]*?)<\/function_calls>/g;
-
-  // Find all <function_calls> blocks
   const matches = [...response.matchAll(toolCallsPattern)];
 
   for (const match of matches) {
     const blockContent = match[1].trim();
 
-    // Parse JSON objects with proper bracket matching
     const jsonObjects = extractJsonObjects(blockContent);
-    const updatedJsonObjects: string[] = [];
-
     for (const jsonStr of jsonObjects) {
       try {
-        // Parse the JSON object
         const obj = JSON.parse(jsonStr);
-
-        // Validate required keys
         if (obj && typeof obj.name === 'string') {
-          // Generate unique execution ID for this tool call
           const executionId = crypto.randomUUID();
-
-          // Add executionId to the original tool call object for future reference
-          const enhancedObj = {
-            ...obj,
-            tool_call_id: executionId  // Add execution ID to original object
-          };
-
-          // Store the enhanced JSON string for response modification
-          updatedJsonObjects.push(JSON.stringify(enhancedObj, null, 2));
-
-          // Create tool call for execution
           toolCalls.push({
             id: executionId,
             function: {
@@ -375,15 +378,9 @@ export function parseToolCallsFromResponse(response: string): { cleanResponse: s
             }
           });
         }
-      } catch (err) {
-        // Keep invalid JSON objects unchanged
-        updatedJsonObjects.push(jsonStr);
-        continue;
-      }
+      } catch { /* ignore malformed object */ }
     }
 
-    // Remove the <function_calls> block from the content to keep agent replies clean.
-    // The tool calls (with execution IDs) are returned separately via tool_calls
     cleanResponse = cleanResponse.replace(match[0], '').trimStart();
   }
 

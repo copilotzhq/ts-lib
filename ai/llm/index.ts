@@ -405,14 +405,16 @@ export async function executeChat(
         messages: processedMessages
     });
 
-    // Rehydrate <function_calls> for assistant messages from metadata.toolCalls so providers can see structured tool calls
+    // Rehydrate <function_calls> for assistant messages from either top-level toolCalls or metadata.toolCalls
     messages = messages.map(m => {
-        if (m.role === 'assistant' && m.metadata && (m.metadata as any).toolCalls && Array.isArray((m.metadata as any).toolCalls)) {
-            const toolCalls = (m.metadata as any).toolCalls as any[];
-            try {
-                const block = buildFunctionCallsBlock(toolCalls);
-                m.content = `${block}\n${m.content}`;
-            } catch { /* ignore malformed */ }
+        if (m.role === 'assistant') {
+            const toolCalls = (m as any).toolCalls || (m.metadata && (m.metadata as any).toolCalls);
+            if (toolCalls && Array.isArray(toolCalls)) {
+                try {
+                    const block = buildFunctionCallsBlock(toolCalls);
+                    m.content = `${block}\n${m.content}`;
+                } catch { /* ignore malformed */ }
+            }
         }
         return m;
     });

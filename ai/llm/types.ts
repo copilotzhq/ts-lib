@@ -19,13 +19,16 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'tool_result';
   content: string;
   tool_call_id?: string;
+  // Prefer passing tool calls explicitly for assistant messages
+  toolCalls?: ToolCall[];
   attachments?: MediaAttachment[]; // Multimodal attachments
   metadata?: {
     timestamp?: string;
     userId?: string;
     mediaProcessed?: boolean;
     originalSize?: number;
-    toolCalls?: ToolCall[]; // Optional: recorded tool calls to rehydrate as <function_calls>
+    // Deprecated: prefer top-level toolCalls
+    toolCalls?: ToolCall[];
   };
 }
 

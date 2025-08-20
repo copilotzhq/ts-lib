@@ -182,25 +182,20 @@ function buildLLMHistory(chatHistory: NewMessage[], currentAgent: AgentConfig): 
             content = `[Tool Result]: ${content}`;
         }
 
-        // Preserve tool calls in metadata to let ai/llm rehydrate <function_calls>
-        const metaCandidate = msg as unknown as { toolCalls?: Array<{ id?: string; function: { name: string; arguments: string } }> };
-        let metadata: ChatMessage["metadata"] = undefined;
-        if (metaCandidate.toolCalls && Array.isArray(metaCandidate.toolCalls) && metaCandidate.toolCalls.length > 0) {
-            const normalized: ToolCall[] = metaCandidate.toolCalls.map((call, i) => ({
+        // Prefer top-level toolCalls on assistant messages for rehydration
+        const toolCallsCandidate = (msg as unknown as { toolCalls?: Array<{ id?: string; function: { name: string; arguments: string } }> }).toolCalls;
+        const toolCalls: ToolCall[] | undefined = (toolCallsCandidate && Array.isArray(toolCallsCandidate) && toolCallsCandidate.length > 0)
+            ? toolCallsCandidate.map((call, i) => ({
                 id: call.id || `${call.function?.name || 'call'}_${i}`,
-                function: {
-                    name: call.function.name,
-                    arguments: call.function.arguments,
-                }
-            }));
-            metadata = { toolCalls: normalized } as ChatMessage["metadata"];
-        }
+                function: { name: call.function.name, arguments: call.function.arguments },
+            }))
+            : undefined;
 
         return {
             content,
             role: role,
             tool_call_id: (msg as unknown as { toolCallId?: string }).toolCallId || undefined,
-            metadata,
+            ...(toolCalls ? { toolCalls } : {}),
         };
     });
 }
@@ -279,7 +274,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
             threadId: event.threadId,
             senderId: payload.senderId,
             senderType: payload.senderType,
-            content: payload.content,
+            content: payload.content || "",
             toolCallId: payload.toolCallId,
             toolCalls: payload.toolCalls,
         };
@@ -390,8 +385,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                 });
             }
 
-            // Always enqueue an AGENT_MESSAGE for the agent answer. Routing is computed when this event is processed.
-            // if (answer) {
+            // Always enqueue an AGENT_MESSAGE (even if only toolCalls) for agent to continue
             producedEvents.push({
                 threadId: event.threadId,
                 type: "MESSAGE",
@@ -404,7 +398,6 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                 parentEventId: event.id,
                 traceId: event.traceId,
             });
-            // }
         }
 
         return { producedEvents };
