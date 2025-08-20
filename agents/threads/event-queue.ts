@@ -274,17 +274,17 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
     preProcess: async (event, deps) => {
         const { ops } = deps;
         const payload = event.payload;
-        if (payload.content && payload.content.length > 0) {
-            const incomingMsg: NewMessage = {
-                threadId: event.threadId,
-                senderId: payload.senderId,
-                senderType: payload.senderType,
-                content: payload.content,
-                toolCallId: payload.toolCallId,
-                toolCalls: payload.toolCalls,
-            };
-            await ops.createMessage(incomingMsg);
-        }
+        // if (payload.content && payload.content.length > 0) {
+        const incomingMsg: NewMessage = {
+            threadId: event.threadId,
+            senderId: payload.senderId,
+            senderType: payload.senderType,
+            content: payload.content,
+            toolCallId: payload.toolCallId,
+            toolCalls: payload.toolCalls,
+        };
+        await ops.createMessage(incomingMsg);
+        // }
     },
     shouldProcess: () => true,
     process: async (event, deps) => {
@@ -392,18 +392,18 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
 
             // Always enqueue an AGENT_MESSAGE for the agent answer. Routing is computed when this event is processed.
             // if (answer) {
-                producedEvents.push({
-                    threadId: event.threadId,
-                    type: "MESSAGE",
-                    payload: {
-                        senderId: agent.name,
-                        senderType: "agent",
-                        content: answer || "",
-                        toolCalls: toolCalls,
-                    } as MessagePayload,
-                    parentEventId: event.id,
-                    traceId: event.traceId,
-                });
+            producedEvents.push({
+                threadId: event.threadId,
+                type: "MESSAGE",
+                payload: {
+                    senderId: agent.name,
+                    senderType: "agent",
+                    content: answer || "",
+                    toolCalls: toolCalls,
+                } as MessagePayload,
+                parentEventId: event.id,
+                traceId: event.traceId,
+            });
             // }
         }
 
