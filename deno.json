@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "license": "MIT",
   "exports": {
     "./agents": "./agents/index.ts",

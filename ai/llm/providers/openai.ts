@@ -13,12 +13,12 @@ function isGPT5Model(model: string): boolean {
 export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
   return {
     endpoint: 'https://api.openai.com/v1/chat/completions',
-    
+
     headers: (config: ProviderConfig) => ({
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.apiKey}`,
     }),
-    
+
     body: (messages: ChatMessage[], config: ProviderConfig) => {
       // Transform messages to support multimodal content
       const openaiMessages = messages.map(msg => {
@@ -26,13 +26,13 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
           role: msg.role,
           content: msg.content
         };
-        
+
         // Add media attachments if present
         if (msg.attachments?.length) {
           const mediaContent: any[] = [
             { type: 'text', text: msg.content }
           ];
-          
+
           // Process each attachment
           msg.attachments.forEach(attachment => {
             if (attachment.type === 'image') {
@@ -43,13 +43,13 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
             }
             // Note: Audio/video would be processed separately via Whisper API
           });
-          
+
           return {
             ...baseMessage,
             content: mediaContent
           };
         }
-        
+
         return baseMessage;
       });
 
@@ -67,8 +67,8 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         user: config.user,
         reasoning_effort: config.reasoningEffort,
         verbosity: config.verbosity,
-        response_format: config.responseType === 'json' 
-          ? { type: 'json_object' } 
+        response_format: config.responseType === 'json'
+          ? { type: 'json_object' }
           : undefined,
       };
 
@@ -86,11 +86,11 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
 
       return bodyConfig;
     },
-    
+
     extractContent: (data: any) => {
       return data?.choices?.[0]?.delta?.content || null;
     },
-    
+
     // Multimodal capabilities
     capabilities: {
       vision: true,
@@ -107,17 +107,17 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         document: ['txt', 'pdf', 'md', 'docx']
       }
     },
-    
+
     // Media processing functions
     processMedia: {
       // Images are handled directly in the body transformation
       preprocessImages: async (attachments: MediaAttachment[]) => {
-        return attachments.filter(att => 
-          att.type === 'image' && 
+        return attachments.filter(att =>
+          att.type === 'image' &&
           (att.data?.startsWith('data:image/') || att.url)
         );
       },
-      
+
       // Audio processing via Whisper
       processAudio: async (attachment: MediaAttachment, config: ProviderConfig) => {
         if (!config.apiKey) {
@@ -127,25 +127,25 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
             error: 'API key required for audio processing'
           };
         }
-        
+
         return await processAudioWithWhisper(
-          attachment, 
-          config, 
+          attachment,
+          config,
           config.apiKey,
           'https://api.openai.com/v1'
         );
       },
-      
+
       // Video processing via server-side frame extraction
       processVideo: async (attachment: MediaAttachment, config: ProviderConfig) => {
         const startTime = Date.now();
-        
+
         try {
           // Note: For production video processing, consider:
           // - FFmpeg for frame extraction
           // - External video processing services
           // - WebAssembly video libraries
-          
+
           return {
             success: true,
             type: 'video' as const,
@@ -169,17 +169,17 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
           };
         }
       },
-      
+
       // Document processing (text extraction + analysis)
       processDocument: async (attachment: MediaAttachment, config: ProviderConfig) => {
         const startTime = Date.now();
-        
+
         try {
           // Note: For production document processing, consider:
           // - PDF.js for PDF parsing
           // - External OCR services (Google Vision, AWS Textract)
           // - LibreOffice headless for document conversion
-          
+
           return {
             success: true,
             type: 'document' as const,

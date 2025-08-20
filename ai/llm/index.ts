@@ -424,6 +424,7 @@ export async function executeChat(
         ? providerAPI.transformMessages(messages)
         : messages;
 
+
     // Make API request
     const response = await fetch(providerAPI.endpoint, {
         method: 'POST',
@@ -433,6 +434,7 @@ export async function executeChat(
             mergedConfig
         )),
     });
+
 
 
     if (!response.ok) {
