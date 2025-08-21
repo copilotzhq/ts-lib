@@ -247,7 +247,12 @@ function discoverTargetAgentsForMessage(payload: MessagePayload, thread: Thread,
     if (mentions && mentions.length > 0) {
         const names = mentions.map((m: string) => m.substring(1));
         const mentionedAgents = availableAgents.filter(a => names.includes(a.name));
-        return filterAllowedAgents(payload.senderType, payload.senderId, mentionedAgents, availableAgents);
+        const allowedMentionedAgents = filterAllowedAgents(payload.senderType, payload.senderId, mentionedAgents, availableAgents);
+        // Only route by mentions if at least one valid, allowed agent was referenced
+        if (allowedMentionedAgents.length > 0) {
+            return allowedMentionedAgents;
+        }
+        // Otherwise ignore unrecognized/disallowed mentions and continue to fallback logic below
     }
 
     // Default two-party fallback
