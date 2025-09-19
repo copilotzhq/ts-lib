@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "license": "MIT",
   "exports": {
     "./agents": "./agents/index.ts",
@@ -30,8 +30,6 @@
     "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",
     "drizzle-orm/pg-proxy": "npm:drizzle-orm@0.44.4/pg-proxy",
     "drizzle-orm": "npm:drizzle-orm@0.44.4",
-    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
-    "modelcontextprotocol/sdk/server": "npm:@modelcontextprotocol/sdk@1.17.0/server",
     "zod": "npm:zod@3.21.4",
     "yaml": "npm:yaml@2.8.0",
     "js-tiktoken": "npm:js-tiktoken@1.0.20"
