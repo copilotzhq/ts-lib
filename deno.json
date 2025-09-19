@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.3.13",
+  "version": "0.4.0",
   "license": "MIT",
   "exports": {
     "./agents": "./agents/index.ts",
@@ -24,7 +24,7 @@
   "imports": {
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
-    "omnipg": "jsr:@oxian/ominipg@0.1.3", 
+    "omnipg": "jsr:@oxian/ominipg@^0.2.1", 
     "copilotz/agents": "./agents/index.ts",
     "copilotz/ai": "./ai/index.ts",
     "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",

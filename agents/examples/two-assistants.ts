@@ -9,15 +9,14 @@ const AssistantAgent = {
     personality: "A helpful assistant",
     description: "A helpful assistant",
     instructions: `
-Communicate with the ApiAgent to get the information you need. 
-Use the <tool_calls></tool_calls> tag to call the tools.
+Communicate with the ApiAgent to get the information you need.
 `,
     allowedTools: ['ask_question'],
     allowedAgents: ['ApiAgent'],
     llmOptions: {
         provider: "openai" as const,
-        model: "gpt-4.1-nano",
-        // temperature: 0.3,
+        model: "gpt-5-mini",
+        temperature: 1,
         maxTokens: 16384
     }
 }
@@ -32,13 +31,16 @@ const ApiAgent = {
     llmOptions: {
         provider: "openai" as const,
         model: "gpt-4o",
-        // temperature: 0.3,
+        temperature: 1,
         maxTokens: 16384
     }
 }
 
 
 const callbacks = {
+    onEvent: (event: any) => {
+        console.log(event);
+    },
     onContentStream: (data: any) => {
         Deno.stdout.write(new TextEncoder().encode(data.token));
     }

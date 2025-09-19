@@ -1,5 +1,5 @@
 import { queue } from "./schema.ts";
-import { and, eq, asc } from "../../db/drizzle.ts";
+import { and, eq, asc, desc, sql } from "../../db/drizzle.ts";
 import type { Queue } from "../Interfaces.ts";
 
 
@@ -33,7 +33,12 @@ export const createOperations = (db: any) => {
                 .select()
                 .from(queue)
                 .where(and(eq(queue.threadId, threadId), eq(queue.status, "pending")))
-                .orderBy(asc(queue.createdAt), asc(queue.id))
+                .orderBy(
+                    // Higher priority first; null treated as 0
+                    desc(sql`COALESCE(${queue.priority}, 0)`),
+                    asc(queue.createdAt),
+                    asc(queue.id)
+                )
                 .limit(1);
             return item;
         },

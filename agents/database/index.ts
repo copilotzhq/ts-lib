@@ -8,6 +8,7 @@ export interface DatabaseConfig {
   syncUrl?: string;
   pgliteExtensions?: string[];
   schemaSQL?: string | string[];
+  useWorker?: boolean;
 }
 
 // Simple connection memoization to avoid duplicate initializations for the same target
@@ -22,6 +23,7 @@ export async function createDatabase(config?: DatabaseConfig): Promise<any> {
     syncUrl: config?.syncUrl || Deno.env.get("SYNC_DATABASE_URL"),
     pgliteExtensions: config?.pgliteExtensions || ["uuid_ossp", "vector", "pg_trgm"],
     schemaSQL: [...finalAgentSQL],
+    useWorker: config?.useWorker || false,
   };
 
   const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;

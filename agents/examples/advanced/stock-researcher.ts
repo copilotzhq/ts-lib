@@ -66,7 +66,7 @@ const coordinatorAgent: AgentConfig = {
     `,
     allowedTools: [
         "ask_question",   // Ask specialists directly
-        "create_thread",  // Create focused research threads
+        // "create_thread",  // Create focused research threads
         "write_file",     // Save coordination notes
         "read_file"       // Read previous research
     ],

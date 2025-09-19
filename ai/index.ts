@@ -394,8 +394,9 @@ export async function startAIWorker(context: { db: unknown; callbacks?: AIWorker
 }
 
 // High-level: run a single AI request via the queue and return the result
-export async function runAI(context: { db: unknown; callbacks?: AIWorkerContext['callbacks']; threadId?: string; traceId?: string }, request: AIRequest): Promise<{ threadId: string; traceId: string; result?: AIResponse }> {
-  const threadId = crypto.randomUUID();
+export async function runAI(context: { db: unknown; callbacks?: AIWorkerContext['callbacks']; threadId?: string; traceId?: string; priority?: number; parentEventId?: string }, request: AIRequest): Promise<{ threadId: string; traceId: string; result?: AIResponse }> {
+  const providedThreadId = (context as any)?.threadId as string | undefined;
+  const threadId = providedThreadId || crypto.randomUUID();
 
   const traceId = (context as any).traceId || crypto.randomUUID();
 
@@ -405,12 +406,118 @@ export async function runAI(context: { db: unknown; callbacks?: AIWorkerContext[
     service: type,
     request: rest,
     traceId,
-    metadata: { module: 'ai' },
+    metadata: { module: 'ai', originThreadId: (context as any)?.threadId, originEventId: (context as any)?.parentEventId },
   };
 
   let capturedResult: AIResponse | undefined;
 
-  // Intercept AI_RESULT to capture response
+  // If we are invoked with an existing threadId (from within the agents queue),
+  // perform the AI call inline to avoid deadlocks and keep trace/thread context.
+  if (providedThreadId) {
+    try {
+      // Build AI_CALL event object
+      const aiCallEvent = {
+        threadId,
+        type: 'AI_CALL' as any,
+        payload: callPayload,
+        traceId,
+        parentEventId: (context as any)?.parentEventId,
+        priority: (context as any)?.priority,
+      } as any;
+
+      // Give onEvent a chance to override and produce events (preserving semantics)
+      let overridden = false;
+      if ((context as any)?.callbacks?.onEvent) {
+        try {
+          const res = await (context as any).callbacks.onEvent(aiCallEvent);
+          if (res && (res as any).producedEvents && Array.isArray((res as any).producedEvents)) {
+            overridden = true;
+            const produced = (res as any).producedEvents as any[];
+            // Enqueue produced events for observability and later processing
+            for (const evt of produced) {
+              await enqueueGenericEvent((context as any).db, {
+                threadId: (evt as any).threadId || threadId,
+                type: (evt as any).type,
+                payload: (evt as any).payload,
+                parentEventId: (evt as any).parentEventId ?? aiCallEvent.parentEventId,
+                traceId: (evt as any).traceId || traceId,
+                priority: (evt as any).priority ?? (context as any)?.priority,
+              } as any);
+            }
+            // Try to capture result from an overridden AI_RESULT, if present
+            const aiResult = produced.find(e => (e as any).type === 'AI_RESULT');
+            if (aiResult && (aiResult as any).payload) {
+              const p = (aiResult as any).payload as any;
+              if (p.success && p.response) {
+                capturedResult = { type: (p as any).service, ...(p.response as any) } as AIResponse;
+              } else if (p.success === false) {
+                capturedResult = { type: (p as any).service, success: false, error: p.error || 'Unknown error', processingTime: 0 } as any;
+              }
+            }
+          }
+        } catch (_e) { /* ignore callback errors */ }
+      }
+
+      if (overridden) {
+        return { threadId, traceId, result: capturedResult };
+      }
+
+      switch (type) {
+        case 'llm': {
+          const response = await executeLLM({ ...(rest as any), stream: (request as any).stream, dbInstance: (context as any).db, metadata: callPayload.metadata } as any);
+          capturedResult = { type: 'llm', ...(response as any) } as AIResponse;
+          break;
+        }
+        case 'embedding': {
+          const response = await executeEmbedding({ ...(rest as any), dbInstance: (context as any).db, metadata: callPayload.metadata } as any);
+          capturedResult = { type: 'embedding', ...(response as any) } as AIResponse;
+          break;
+        }
+        case 'speech-to-text': {
+          const response = await executeSpeechToText({ ...(rest as any), dbInstance: (context as any).db, metadata: callPayload.metadata } as any);
+          capturedResult = { type: 'speech-to-text', ...(response as any) } as AIResponse;
+          break;
+        }
+        case 'text-to-speech': {
+          const response = await executeTextToSpeech({ ...(rest as any), dbInstance: (context as any).db, metadata: callPayload.metadata } as any);
+          capturedResult = { type: 'text-to-speech', ...(response as any) } as AIResponse;
+          break;
+        }
+        case 'image-generation': {
+          const response = await executeImageGeneration({ ...(rest as any), dbInstance: (context as any).db, metadata: callPayload.metadata } as any);
+          capturedResult = { type: 'image-generation', ...(response as any) } as AIResponse;
+          break;
+        }
+        default: {
+          throw new Error(`Unsupported AI service: ${String((request as any)?.type)}`);
+        }
+      }
+    } catch (error) {
+      capturedResult = { type: type as any, success: false, error: error instanceof Error ? error.message : String(error), processingTime: 0 } as any;
+    }
+
+    // Enqueue an AI_RESULT event to preserve the event stream; onEvent will be triggered when processed
+    try {
+      await enqueueGenericEvent((context as any).db, {
+        threadId,
+        type: 'AI_RESULT' as any,
+        payload: {
+          service: type as any,
+          success: (capturedResult as any)?.success !== false,
+          response: (capturedResult as any)?.success !== false ? capturedResult : undefined,
+          error: (capturedResult as any)?.success === false ? ((capturedResult as any)?.error || 'Unknown error') : undefined,
+          traceId,
+        } as any,
+        parentEventId: (context as any)?.parentEventId,
+        traceId,
+        priority: (context as any)?.priority,
+      } as any);
+    } catch (_e) { /* ignore enqueue errors */ }
+
+    return { threadId, traceId, result: capturedResult };
+  }
+
+  // Intercept AI_RESULT to capture response (queue mode)
   const interceptingContext: AIWorkerContext = {
     db: (context as any).db,
     callbacks: {
@@ -418,6 +525,12 @@ export async function runAI(context: { db: unknown; callbacks?: AIWorkerContext[
         ev: GenericQueueEvent<unknown>,
         _runDefault: (override?: GenericQueueEvent<unknown>) => Promise<{ producedEvents?: GenericNewQueueEvent<unknown>[] }>
       ): Promise<void> => {
+        // Fan-out to user callbacks for visibility
+        try {
+          if ((context as any)?.callbacks?.onEvent) {
+            await (context as any).callbacks.onEvent(ev as any);
+          }
+        } catch (_e) { /* ignore */ }
         if ((ev.type as any) === 'AI_RESULT') {
           const payload = ev.payload as AIResultPayload;
           if (ev.threadId === threadId && payload.success && payload.response) {
@@ -436,6 +549,7 @@ export async function runAI(context: { db: unknown; callbacks?: AIWorkerContext[
     type: 'AI_CALL',
     payload: callPayload,
     traceId,
+    priority: (context as any)?.priority,
 
   } as any);
 

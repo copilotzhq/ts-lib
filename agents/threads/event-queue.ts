@@ -167,7 +167,7 @@ function buildLLMContext(
 }
 
 function buildLLMHistory(chatHistory: NewMessage[], currentAgent: AgentConfig): ChatMessage[] {
-    return chatHistory.map((msg, idx) => {
+    return chatHistory.map((msg, _i) => {
         const role = msg.senderType === "agent"
             ? (msg.senderId === currentAgent.name ? "assistant" : "user")
             : msg.senderType;
@@ -242,13 +242,22 @@ function discoverTargetAgentsForMessage(payload: MessagePayload, thread: Thread,
         return agent ? [agent] : [];
     }
 
-    // Mentions
+    // Mentions (preserve mention order)
     const mentions = payload.content?.match(/(?<!\w)@([\w](?:[\w.-]*[\w])?)/g);
     if (mentions && mentions.length > 0) {
         const names = mentions.map((m: string) => m.substring(1));
-        const mentionedAgents = availableAgents.filter(a => names.includes(a.name));
-        const allowedMentionedAgents = filterAllowedAgents(payload.senderType, payload.senderId, mentionedAgents, availableAgents);
-        // Only route by mentions if at least one valid, allowed agent was referenced
+        // Build in the order mentioned, unique by name
+        const seen = new Set<string>();
+        const orderedMentioned: AgentConfig[] = [];
+        for (const name of names) {
+            if (seen.has(name)) continue;
+            const agent = availableAgents.find(a => a.name === name);
+            if (agent) {
+                orderedMentioned.push(agent);
+                seen.add(name);
+            }
+        }
+        const allowedMentionedAgents = filterAllowedAgents(payload.senderType, payload.senderId, orderedMentioned, availableAgents);
         if (allowedMentionedAgents.length > 0) {
             return allowedMentionedAgents;
         }
@@ -297,7 +306,12 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
 
         const producedEvents: NewQueueEvent[] = [];
 
-        for (const agent of targets) {
+        // Assign descending priorities per target to enforce strict serial-per-target
+        const basePriority = 1000;
+        for (let idx = 0; idx < targets.length; idx++) {
+            const agent = targets[idx];
+            // If this event already has a priority (continuation of a chain), keep it
+            const chainPriority = typeof event.priority === 'number' ? (event.priority as number) : (basePriority - idx);
             // Build processing context
             const ctx = await buildProcessingContext(ops, event.threadId, context, agent.name);
 
@@ -324,7 +338,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                 : undefined;
 
             const aiRun = await runAI(
-                { db: deps.db as unknown, threadId: event.threadId, },
+                { db: deps.db as unknown, threadId: event.threadId, traceId: event.traceId, priority: chainPriority, parentEventId: event.id, callbacks: (context as any)?.callbacks as any },
                 {
                     type: 'llm',
                     messages: [
@@ -336,6 +350,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                     stream: streamCallback,
                 } as unknown as any
             );
+            
             const llmResponse = (aiRun.result || {}) as unknown as { success?: boolean; answer?: string; toolCalls?: Array<{ id?: string; function: { name: string; arguments: string } }>; };
 
             // finalize stream
@@ -386,6 +401,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                         } as ToolCallPayload,
                         parentEventId: event.id,
                         traceId: event.traceId,
+                        priority: chainPriority,
                     });
                 });
             }
@@ -402,6 +418,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
                 } as MessagePayload,
                 parentEventId: event.id,
                 traceId: event.traceId,
+                priority: chainPriority,
             });
         }
 
@@ -412,7 +429,7 @@ const messageProcessor: AgentsEventProcessor<MessagePayload> = {
 const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
     shouldProcess: () => true,
     process: async (event, deps) => {
-        const { ops, db, thread: _thread, context } = deps;
+        const { db, thread: _thread, context } = deps;
         const payload = event.payload;
 
         const availableAgents = context.agents || [];
@@ -450,7 +467,7 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
             return input;
         };
 
-        // Emit TOOL_RESULT event
+        // Emit TOOL_RESULT event (propagate priority)
         const producedEvents: NewQueueEvent[] = [
             {
                 threadId: event.threadId,
@@ -465,6 +482,7 @@ const toolCallProcessor: AgentsEventProcessor<ToolCallPayload> = {
                 } as ToolResultPayload,
                 parentEventId: event.id,
                 traceId: event.traceId,
+                priority: event.priority,
             }
         ];
 
@@ -490,7 +508,7 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
             content = `tool output: No output returned`;
         }
 
-        // Enqueue a MESSAGE event; the MESSAGE handler will persist it once
+        // Enqueue a MESSAGE event; the MESSAGE handler will persist it once (propagate priority)
         const producedEvents: NewQueueEvent[] = [
             {
                 threadId: event.threadId,
@@ -506,6 +524,7 @@ const toolResultProcessor: AgentsEventProcessor<ToolResultPayload> = {
                 } as MessagePayload,
                 parentEventId: event.id,
                 traceId: event.traceId,
+                priority: event.priority,
             }
         ];
 

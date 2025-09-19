@@ -8,6 +8,7 @@ export interface EventQueueDatabaseConfig {
   syncUrl?: string;
   pgliteExtensions?: string[];
   schemaSQL?: string | string[];
+  useWorker?: boolean;
 }
 
 // Memoize connections by URL+syncUrl to avoid duplicate initialization
@@ -22,6 +23,7 @@ export async function createDatabase(config?: EventQueueDatabaseConfig): Promise
     syncUrl: config?.syncUrl || Deno.env.get("SYNC_DATABASE_URL"),
     pgliteExtensions: config?.pgliteExtensions || ["uuid_ossp", "pg_trgm"],
     schemaSQL: finalSchemaSQL,
+    useWorker: config?.useWorker || false,
   };
 
   const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;

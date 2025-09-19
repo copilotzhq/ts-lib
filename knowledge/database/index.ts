@@ -8,6 +8,7 @@ export interface KnowledgeDatabaseConfig {
   syncUrl?: string;
   pgliteExtensions?: string[];
   schemaSQL?: string[];
+  useWorker?: boolean;
 }
 
 // Memoize knowledge DB connections by URL+syncUrl
@@ -23,6 +24,7 @@ export async function createKnowledgeDatabase(config?: KnowledgeDatabaseConfig):
     syncUrl: config?.syncUrl || Deno.env.get('KNOWLEDGE_SYNC_DATABASE_URL') || Deno.env.get('SYNC_DATABASE_URL'),
     pgliteExtensions: config?.pgliteExtensions || ['uuid_ossp', 'vector', 'pg_trgm'],
     schemaSQL: finalSchemaSQL,
+    useWorker: config?.useWorker || false,
   };
 
   const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;
