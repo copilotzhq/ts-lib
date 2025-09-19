@@ -32,7 +32,9 @@
     "drizzle-orm": "npm:drizzle-orm@0.44.4",
     "zod": "npm:zod@3.21.4",
     "yaml": "npm:yaml@2.8.0",
-    "js-tiktoken": "npm:js-tiktoken@1.0.20"
+    "js-tiktoken": "npm:js-tiktoken@1.0.20",
+    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
+    "modelcontextprotocol/sdk/server": "npm:@modelcontextprotocol/sdk@1.17.0/server"
   },
   "lock": false
 }
