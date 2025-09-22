@@ -1,8 +1,9 @@
 import { Ominipg, withDrizzle } from "omnipg";
-import { drizzle } from "../db/drizzle.ts";
+import { drizzle } from "./drizzle.ts";
 import { schema, schemaDDL } from "../agents/database/schema.ts";
 import { createOperations as createAgentOperations } from "../agents/database/operations.ts";
 import { createOperations as createKnowledgeOperations } from "../knowledge/database/operations.ts";
+
 
 export interface DatabaseConfig {
   url?: string;
@@ -10,6 +11,12 @@ export interface DatabaseConfig {
   pgliteExtensions?: string[];
   schemaSQL?: string | string[];
   useWorker?: boolean;
+  logMetrics?: boolean;
+}
+
+export {
+  schema,
+  schemaDDL,
 }
 
 // Global connection memoization shared across modules to avoid duplicate initializations
