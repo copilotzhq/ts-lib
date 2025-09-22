@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, varchar, jsonb, integer } from "../../db/drizzle.ts";
+import { pgTable, text, timestamp, uuid, varchar, jsonb, integer } from "../../database/drizzle.ts";
 
 import type { ProviderConfig } from "../../ai/llm/types.ts";
 import { queue as eventQueue, schemaDDL as eventQueueDDL } from "../../event-queue/database/schema.ts";

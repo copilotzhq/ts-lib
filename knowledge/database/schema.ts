@@ -2,7 +2,7 @@
  * Knowledge Base Database Schema (Drizzle + DDL)
  */
 
-import { pgTable, uuid, varchar, text, jsonb, timestamp, integer } from "../../db/drizzle.ts";
+import { pgTable, uuid, varchar, text, jsonb, timestamp, integer } from "../../database/drizzle.ts";
 
 // =============================================================================
 // Drizzle table definitions

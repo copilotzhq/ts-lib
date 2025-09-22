@@ -1,5 +1,5 @@
 import { threads, messages, tasks, agents, apis, tools, mcpServers, users } from "./schema.ts";
-import { and, eq, sql } from "../../db/drizzle.ts";
+import { and, eq, sql } from "../../database/drizzle.ts";
 import type { NewMessage, Thread, Message, Task, NewTask, NewThread } from "../Interfaces.ts";
 import { createOperations as createEventQueueOperations } from "../../event-queue/database/operations.ts";
 /**

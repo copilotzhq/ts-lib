@@ -1,5 +1,5 @@
 import { queue } from "./schema.ts";
-import { and, eq, asc, desc, sql } from "../../db/drizzle.ts";
+import { and, eq, asc, desc, sql } from "../../database/drizzle.ts";
 import type { Queue } from "../Interfaces.ts";
 
 

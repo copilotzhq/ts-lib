@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, jsonb, integer, timestamp } from "../../db/drizzle.ts";
+import { pgTable, uuid, varchar, jsonb, integer, timestamp } from "../../database/drizzle.ts";
 
 export const queue = pgTable("queue", {
   id: uuid("id").primaryKey().defaultRandom(),

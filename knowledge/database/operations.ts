@@ -17,7 +17,7 @@ import {
   ErrorCodes
 } from '../types.ts';
 import { collections, documents, chunks, document_collections, schemaValidation } from './schema.ts';
-import { and, desc, eq } from '../../db/drizzle.ts';
+import { and, desc, eq } from '../../database/drizzle.ts';
 
 import { createOperations as createEventQueueOperations } from "../../event-queue/database/operations.ts";
 
