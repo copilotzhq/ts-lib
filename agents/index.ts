@@ -1,7 +1,7 @@
 // Event-queue engine (now default)
 import { enqueueEvent, startThreadEventWorker } from "./threads/event-queue.ts";
 import { createOperations } from "./database/operations.ts";
-import { createDatabase } from "./database/index.ts";
+import { createDatabase } from "../database/index.ts";
 import type * as Interfaces from "./Interfaces.ts";
 // Export all tools from the registry
 export * from "./tools/registry/index.ts";
@@ -11,8 +11,8 @@ export * from "./Interfaces.ts";
 export * from "./tools/api-generator.ts";
 export * from "./tools/mcp-generator.ts";
 
-// Export database
-export * from "./database/index.ts";
+// Export database (root)
+export * from "../database/index.ts";
 export * as knowledgeDatabase from "../knowledge/database/index.ts";
 
 export * as utils from "./utils/index.ts";

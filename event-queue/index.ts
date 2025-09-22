@@ -1,4 +1,4 @@
-import { createDatabase } from "./database/index.ts";
+import { createDatabase } from "../database/index.ts";
 
 // Generic queue event types
 export interface QueueEvent<TPayload = unknown> {

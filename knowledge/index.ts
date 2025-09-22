@@ -1,4 +1,4 @@
-import { createDatabase as createEventDb } from "../agents/database/index.ts";
+import { createDatabase as createEventDb } from "../database/index.ts";
 import { runKnowledgeIngest, startKnowledgeWorker, enqueueKnowledgeEvent, type KBIngestPayload, type KBContext, type KBQueryPayload, type KBSearchPayload, type KBRetrievePayload, type KBCollectionsPayload, type KBQueueEvent } from "./threads/event-queue.ts";
 
 export type KnowledgeConfig = {

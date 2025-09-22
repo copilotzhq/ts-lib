@@ -5,7 +5,8 @@
   "license": "MIT",
   "exports": {
     "./agents": "./agents/index.ts",
-    "./ai": "./ai/index.ts"
+    "./ai": "./ai/index.ts",
+    "./database": "./database/index.ts"
   },  
   "unstable": [
     "bare-node-builtins",
@@ -24,9 +25,10 @@
   "imports": {
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
-    "omnipg": "jsr:@oxian/ominipg@^0.2.1", 
+    "omnipg": "jsr:@oxian/ominipg@0.2.3", 
     "copilotz/agents": "./agents/index.ts",
     "copilotz/ai": "./ai/index.ts",
+    "copilotz/database": "./database/index.ts",
     "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",
     "drizzle-orm/pg-proxy": "npm:drizzle-orm@0.44.4/pg-proxy",
     "drizzle-orm": "npm:drizzle-orm@0.44.4",

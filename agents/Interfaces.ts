@@ -15,10 +15,7 @@ import type { ProviderConfig } from "../ai/llm/types.ts";
 export type Agent = typeof agents.$inferSelect;
 export type Tool = typeof tools.$inferSelect;
 
-import type { DatabaseConfig } from "./database/index.ts";
-
-export type { DatabaseConfig }
-
+export type { DatabaseConfig } from "../database/index.ts";
 // Tool execution context - passed to tools when they're executed
 export interface ToolExecutionContext {
     threadId?: string;
