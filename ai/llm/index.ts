@@ -471,7 +471,7 @@ export async function executeChat(
     const chatResponse: ChatResponse = {
         prompt: messages,
         answer: cleanResponse,
-        tokens: countTokens(messages, fullResponse),
+        tokens: await countTokens(messages, fullResponse),
         provider,
         model: mergedConfig.model,
         ...(tool_calls.length > 0 && { toolCalls: tool_calls })

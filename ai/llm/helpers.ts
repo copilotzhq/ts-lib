@@ -1,4 +1,5 @@
-import { getEncoding } from "js-tiktoken";
+import { Tiktoken } from "js-tiktoken";
+
 import type { ChatMessage, ChatRequest, ChatResponse, ProviderConfig, ToolDefinition, ToolCall } from './types.ts';
 
 /**
@@ -85,11 +86,13 @@ function limitMessageLength(messages: ChatMessage[], limit: number): ChatMessage
 /**
  * Counts tokens in messages and response using tiktoken
  */
-export function countTokens(messages: ChatMessage[], response: string): number {
+export async function countTokens(messages: ChatMessage[], response: string): Promise<number> {
   try {
-    const encoding = getEncoding("cl100k_base");
+    const base = await fetch('https://tiktoken.pages.dev/js/o200k_base.json', {cache: 'force-cache'}).then(res => res.json());
+    const encoding = new Tiktoken(base);
     const allContent = messages.map(m => m.content).join(' ') + response;
     const tokens = encoding.encode(allContent);
+    // const tokens= [1,2];
     return tokens.length;
   } catch (error) {
     console.warn('Token counting failed:', error);
