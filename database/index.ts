@@ -27,8 +27,7 @@ import { createOperations } from "./operations/index.ts";
 
 // Import Migrations File
 // import migrations from "./migrations/migration_0001.sql" with { type: "text" };
-
-const migrations = Deno.readTextFileSync("./database/migrations/migration_0001.sql");
+import migrations from "./migrations/migration_0001.ts";;
 
 // Define the database config interface
 export interface DatabaseConfig {
