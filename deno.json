@@ -1,12 +1,13 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "license": "MIT",
   "exports": {
-    "./agents": "./agents/index.ts",
-    "./ai": "./ai/index.ts",
-    "./database": "./database/index.ts"
+    ".": "./index.ts",
+    "./database": "./database/index.ts",
+    "./types": "./interfaces/index.ts",
+    "./utils": "./utils/index.ts"
   },  
   "unstable": [
     "bare-node-builtins",
@@ -23,20 +24,17 @@
     "otel"
   ],
   "imports": {
+    "@/": "./",
     "ajv": "npm:ajv@8.17.1",
     "ajv-formats": "npm:ajv-formats@3.0.1",
     "omnipg": "jsr:@oxian/ominipg@0.2.3", 
-    "copilotz/agents": "./agents/index.ts",
-    "copilotz/ai": "./ai/index.ts",
-    "copilotz/database": "./database/index.ts",
     "drizzle-orm/pg-core": "npm:drizzle-orm@0.44.4/pg-core",
     "drizzle-orm/pg-proxy": "npm:drizzle-orm@0.44.4/pg-proxy",
     "drizzle-orm": "npm:drizzle-orm@0.44.4",
     "zod": "npm:zod@3.21.4",
     "yaml": "npm:yaml@2.8.0",
     "js-tiktoken": "npm:js-tiktoken@1.0.21/lite",
-    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
-    "modelcontextprotocol/sdk/server": "npm:@modelcontextprotocol/sdk@1.17.0/server"
+    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client"
   },
   "lock": false
 }
