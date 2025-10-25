@@ -1,7 +1,7 @@
 import type { NewMessage, Agent } from "@/interfaces/index.ts";
+import type { ChatMessage, ToolCall } from "@/connectors/llm/types.ts";
 
-
-export function historyGenerator(chatHistory: NewMessage[], currentAgent: Agent): ChatMxessage[] {
+export function historyGenerator(chatHistory: NewMessage[], currentAgent: Agent): ChatMessage[] {
     return chatHistory.map((msg, _i) => {
         const role = msg.senderType === "agent"
             ? (msg.senderId === currentAgent.name ? "assistant" : "user")

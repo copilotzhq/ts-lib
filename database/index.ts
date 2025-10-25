@@ -20,11 +20,15 @@ import {
   users,
 } from "./schemas/index.ts";
 
-// Import Migrations File
-import migrations from "./migrations/migration_0001.sql" with { type: "text" };
 
 // Import Operations
 import { createOperations } from "./operations/index.ts";
+
+
+// Import Migrations File
+// import migrations from "./migrations/migration_0001.sql" with { type: "text" };
+
+const migrations = Deno.readTextFileSync("./database/migrations/migration_0001.sql");
 
 // Define the database config interface
 export interface DatabaseConfig {

@@ -54,12 +54,6 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
         if (typeof maxComp === 'number') bodyConfig.max_completion_tokens = maxComp;
       }
 
-      // Reasoning: Only send reasoning_effort for o-series models; omit nested `reasoning` entirely
-      if (isReasoningModel(modelName) && !isGPT5Model(modelName)) {
-        const effort = (config.reasoning && config.reasoning.effort) || config.reasoningEffort;
-        if (effort) bodyConfig.reasoning_effort = effort;
-      }
-
       return bodyConfig;
     },
 

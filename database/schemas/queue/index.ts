@@ -7,7 +7,7 @@ type EventType =
   | "LLM_CALL"
   | string;
 
-export const queue = pgTable("queue", {
+export const queue: any = pgTable("queue", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id").notNull(),
   eventType: varchar("event_type", { length: 64 }).notNull().$type<EventType>(),

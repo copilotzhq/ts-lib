@@ -1,4 +1,4 @@
-import type { Tool, MCPServerConfig } from "../../../Interfaces.ts";
+import type { Tool, MCPServer } from "@/interfaces/index.ts";
 import { Client } from "modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "modelcontextprotocol/sdk/client/stdio.js";
 
@@ -12,12 +12,12 @@ interface MCPTool {
  * MCP client using the official MCP TypeScript SDK
  */
 class MCPClient {
-    private config: MCPServerConfig;
+    private config: MCPServer;
     private client?: Client;
     private transport?: StdioClientTransport;
     private connected = false;
 
-    constructor(config: MCPServerConfig) {
+    constructor(config: MCPServer) {
         this.config = config;
     }
 
@@ -163,7 +163,7 @@ function createMcpExecutor(client: MCPClient, originalToolName: string, serverNa
 /**
  * Generates Tool instances from an MCP server configuration
  */
-export async function generateMcpTools(mcpConfig: MCPServerConfig): Promise<Tool[]> {
+export async function generateMcpTools(mcpConfig: MCPServer): Promise<Tool[]> {
     const tools: Tool[] = [];
     const client = new MCPClient(mcpConfig);
 
@@ -215,7 +215,7 @@ export async function generateMcpTools(mcpConfig: MCPServerConfig): Promise<Tool
  * Generates tools from multiple MCP server configurations
  * Note: Currently only supports stdio transport via official MCP SDK
  */
-export async function generateAllMcpTools(mcpConfigs: MCPServerConfig[]): Promise<Tool[]> {
+export async function generateAllMcpTools(mcpConfigs: MCPServer[]): Promise<Tool[]> {
     const allTools: Tool[] = [];
     
     // Filter for supported transports

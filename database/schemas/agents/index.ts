@@ -1,5 +1,5 @@
 import { pgTable, uuid, text, varchar, jsonb, timestamp } from "../../drizzle.ts";
-import type { ProviderConfig } from "../../../ai/llm/types.ts";
+import type { ProviderConfig } from "@/connectors/llm/types.ts";
 
 export const agents: any = pgTable("agents", {
     id: uuid("id").primaryKey().defaultRandom(),

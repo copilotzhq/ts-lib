@@ -1,5 +1,8 @@
-import type { Tool, APIConfig, AuthConfig, DynamicAuth } from "../../../Interfaces.ts";
+import type { Tool, API } from "@/interfaces/index.ts";
 import { parse as parseYaml } from "yaml";
+
+type AuthConfig = API['auth'];
+type DynamicAuth = API['auth']['dynamic'];
 
 // Token cache for dynamic authentication
 interface CachedToken {
@@ -368,7 +371,7 @@ async function applyAuthentication(
  * Creates a tool execution function for an API operation
  */
 function createApiExecutor(
-    apiConfig: APIConfig,
+    apiConfig: API,
     path: string,
     method: string,
     operation: OpenAPIOperation,
@@ -487,7 +490,7 @@ function createApiExecutor(
 /**
  * Generates Tool instances from an OpenAPI configuration
  */
-export function generateApiTools(apiConfig: APIConfig): Tool[] {
+export function generateApiTools(apiConfig: API): Tool[] {
     const tools: Tool[] = [];
     const schema = normalizeOpenApiSchema(apiConfig.openApiSchema);
 
@@ -541,7 +544,7 @@ export function generateApiTools(apiConfig: APIConfig): Tool[] {
 /**
  * Generates tools from multiple API configurations
  */
-export function generateAllApiTools(apiConfigs: APIConfig[]): Tool[] {
+export function generateAllApiTools(apiConfigs: API[]): Tool[] {
     const allTools: Tool[] = [];
 
     apiConfigs.forEach(config => {

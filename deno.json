@@ -21,7 +21,8 @@
     "cron",
     "kv",
     "net",
-    "otel"
+    "otel",
+    "raw-imports"
   ],
   "imports": {
     "@/": "./",
