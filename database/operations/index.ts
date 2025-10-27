@@ -1,14 +1,11 @@
 import { queue, threads, messages, tasks, agents, apis, tools, mcpServers, users } from "../schemas/index.ts";
 import type { NewMessage, Thread, Message, Task, NewTask, NewThread, Queue, Agent, NewAgent, API, NewAPI, Tool, NewTool, MCPServer, NewMCPServer, User, NewUser } from "../schemas/index.ts";
+import type { DrizzleDb } from "../index.ts";
+
 /**
  * Database operations factory - creates operation functions bound to a specific database instance
  */
-
-// import the database instance type
-import type { DbInstance } from "../index.ts";
-
-// infer the type of the database instance
-export function createOperations(db: DbInstance) {
+export function createOperations(db: DrizzleDb) {
     // Ephemeral in-process cache (per operations instance)
     type CacheEntry = { value: unknown; expiresAt: number };
     const cache = new Map<string, CacheEntry>();

@@ -59,7 +59,7 @@ const connect = async (finalConfig: DatabaseConfig, debug: boolean, cacheKey: st
   // Attach schema to the database instance
   const dbInstance = withDrizzle(ominipg, drizzle, { ...schema });
   // Attach default operations used by agents/event-queue
-  const operations = createOperations(dbInstance as DbInstance);
+  const operations = createOperations(dbInstance as DrizzleDb);
 
   const dbInstanceWithOperations = Object.assign(dbInstance, { operations });
 
@@ -67,7 +67,8 @@ const connect = async (finalConfig: DatabaseConfig, debug: boolean, cacheKey: st
 }
 
 export type DbInstance = Awaited<ReturnType<typeof connect>>;
-export type CopilotzDb = DbInstance & { operations: ReturnType<typeof createOperations> };
+export type DrizzleDb = Omit<DbInstance, 'operations'>;
+export type CopilotzDb = DbInstance;
 
 const GLOBAL_CACHE_KEY = "__copilotz_db_cache__";
 const existingCache = (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] as Map<string, Promise<DbInstance>> | undefined;
