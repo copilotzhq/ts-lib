@@ -1,8 +1,5 @@
 // Import Database
-import { createDatabase } from "@/database/index.ts";
-
-// Import Database Operations
-import { createOperations as createAgentOperations, type Operations } from "@/database/operations/index.ts";
+import { createDatabase, type CopilotzDb } from "@/database/index.ts";
 
 // Import Agent Interfaces  
 import type { Thread, Event, NewEvent } from "@/interfaces/index.ts";
@@ -28,8 +25,7 @@ export interface ProcessResult {
 }
 
 export type ProcessorDeps = {
-    ops: Operations;
-    db: unknown;
+    db: CopilotzDb;
     thread: Thread;
     context: ChatContext;
 }
@@ -49,8 +45,8 @@ const processors: EventProcessors = {
 };
 
 // Public API
-export async function enqueueEvent(db: unknown, event: NewEvent): Promise<void> {
-    const ops = (db as unknown as { operations: Operations }).operations;
+export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<void> {
+    const ops = db.operations;
     await ops.addToQueue(event.threadId, {
         eventType: event.type,
         payload: event.payload as object,
@@ -62,7 +58,7 @@ export async function enqueueEvent(db: unknown, event: NewEvent): Promise<void> 
 }
 
 export async function startThreadEventWorker(
-    db: unknown,
+    db: CopilotzDb,
     threadId: string,
     context: ChatContext
 ): Promise<void> {
@@ -72,10 +68,10 @@ export async function startThreadEventWorker(
         { callbacks: { onEvent: (context.callbacks as any)?.onEvent as any } },
         processors as any,
         async (_queueOps: any, event: Event) => {
-            const agentOps = createAgentOperations(db);
-            const thread = await agentOps.getThreadById(event.threadId);
+            const ops = db.operations
+            const thread = await ops.getThreadById(event.threadId);
             if (!thread) throw new Error(`Thread not found: ${event.threadId}`);
-            return { ops: agentOps, db, thread, context } as ProcessorDeps;
+            return { ops, db, thread, context } as ProcessorDeps;
         }
     );
 }
@@ -100,7 +96,7 @@ export interface WorkerContext {
 
 // Generic worker
 export async function startEventWorker<TDeps>(
-    db: unknown,
+    db: CopilotzDb,
     threadId: string,
     context: WorkerContext,
     processors: Record<string, EventProcessor<any, TDeps>>,
@@ -110,7 +106,7 @@ export async function startEventWorker<TDeps>(
 
     const dbInstance = db || await createDatabase({});
 
-    const ops = (dbInstance as unknown as { operations: Operations }).operations;
+    const ops = dbInstance.operations;
 
     const processing = await ops.getProcessingQueueItem(threadId);
 

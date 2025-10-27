@@ -50,7 +50,8 @@ export interface MessagePayload {
 export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
     // Persist incoming message once before processing
     preProcess: async (event: Event, deps: ProcessorDeps) => {
-        const { ops } = deps;
+        const { db } = deps;
+        const ops = db.operations;
         const payload = event.payload as MessagePayload;
         const incomingMsg: NewMessage = {
             threadId: event.threadId,
@@ -64,7 +65,8 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
     },
     shouldProcess: () => true,
     process: async (event: Event, deps: ProcessorDeps) => {
-        const { ops, db: _db, thread, context } = deps;
+        const { db, thread, context } = deps;
+        const ops = db.operations;
         const payload = event.payload as MessagePayload;
 
         // Resolve targets

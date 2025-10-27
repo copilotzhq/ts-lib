@@ -1,27 +1,29 @@
 import { queue, threads, messages, tasks, agents, apis, tools, mcpServers, users } from "../schemas/index.ts";
-import { and, eq, sql, desc, asc } from "../drizzle.ts";
-import type { NewMessage, Thread, Message, Task, NewTask, NewThread, Queue } from "../schemas/index.ts";
-
+import type { NewMessage, Thread, Message, Task, NewTask, NewThread, Queue, Agent, NewAgent, API, NewAPI, Tool, NewTool, MCPServer, NewMCPServer, User, NewUser } from "../schemas/index.ts";
 /**
  * Database operations factory - creates operation functions bound to a specific database instance
  */
 
-export function createOperations(db: any): any {
+// import the database instance type
+import type { DbInstance } from "../index.ts";
+
+// infer the type of the database instance
+export function createOperations(db: DbInstance) {
     // Ephemeral in-process cache (per operations instance)
-    type CacheEntry = { value: any; expiresAt: number };
+    type CacheEntry = { value: unknown; expiresAt: number };
     const cache = new Map<string, CacheEntry>();
     const msgHistoryKeysByThread = new Map<string, Set<string>>();
-    const TTL_SHORT = 5_000;   // threads, tasks, histories
+    const TTL_SHORT = 0;   // threads, tasks, histories
     const TTL_LONG = 30_000;   // catalogs (agents, tools, apis)
 
     const makeKey = (name: string, parts: unknown[]) => `${name}:${parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join('|')}`;
-    const getCached = (key: string) => {
+    const getCached = <T,>(key: string): T | undefined => {
         const entry = cache.get(key);
         if (!entry) return undefined;
         if (Date.now() > entry.expiresAt) { cache.delete(key); return undefined; }
-        return entry.value;
+        return entry.value as T;
     };
-    const setCached = (key: string, value: any, ttl: number) => { cache.set(key, { value, expiresAt: Date.now() + ttl }); return value; };
+    const setCached = <T,>(key: string, value: T, ttl: number): T => { cache.set(key, { value, expiresAt: Date.now() + ttl }); return value; };
     const indexMsgHistoryKey = (threadId: string, key: string) => {
         if (!msgHistoryKeysByThread.has(threadId)) msgHistoryKeysByThread.set(threadId, new Set());
         msgHistoryKeysByThread.get(threadId)!.add(key);
@@ -56,11 +58,9 @@ export function createOperations(db: any): any {
          * @returns The processing queue item
          */
         async getProcessingQueueItem(threadId: string): Promise<Queue | undefined> {
-            const [item] = await db
-                .select()
-                .from(queue)
-                .where(and(eq(queue.threadId, threadId), eq(queue.status, "processing")))
-                .limit(1);
+            const item = await db.query.queue.findFirst({
+                where: (q, { eq, and }) => and(eq(q.threadId, threadId), eq(q.status, "processing")),
+            });
             return item;
         },
 
@@ -70,17 +70,14 @@ export function createOperations(db: any): any {
          * @returns The next pending queue item
          */
         async getNextPendingQueueItem(threadId: string): Promise<Queue | undefined> {
-            const [item] = await db
-                .select()
-                .from(queue)
-                .where(and(eq(queue.threadId, threadId), eq(queue.status, "pending")))
-                .orderBy(
-                    // Higher priority first; null treated as 0
-                    desc(sql`COALESCE(${queue.priority}, 0)`),
-                    asc(queue.createdAt),
-                    asc(queue.id)
-                )
-                .limit(1);
+            const item = await db.query.queue.findFirst({
+                where: (q, { eq, and }) => and(eq(q.threadId, threadId), eq(q.status, "pending")),
+                orderBy: (q, { desc, asc, sql }) => [
+                    desc(sql`COALESCE(${q.priority}, 0)`),
+                    asc(q.createdAt),
+                    asc(q.id)
+                ],
+            });
             return item;
         },
 
@@ -90,7 +87,7 @@ export function createOperations(db: any): any {
          * @param status - The new status of the queue item
          */
         async updateQueueItemStatus(queueId: string, status: "processing" | "completed" | "failed"): Promise<void> {
-            await db.update(queue).set({ status }).where(eq(queue.id, queueId));
+            await db.queryRaw(`UPDATE queue SET status = $1, updated_at = NOW() WHERE id = $2`, [status, queueId]);
         },
         /**
          * Get the message history for a given thread and user
@@ -101,33 +98,28 @@ export function createOperations(db: any): any {
          */
         async getMessageHistory(threadId: string, userId: string, limit: number = 50): Promise<NewMessage[]> {
             const cacheKey = makeKey('getMessageHistory', [threadId, userId, limit]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<NewMessage[]>(cacheKey);
             if (cached) return cached;
             const allMessages: (Message & { threadLevel: number })[] = [];
             let currentThreadId: string | null = threadId;
             let threadLevel = 0;
 
             while (currentThreadId) {
-                const [thread]: (Thread | undefined)[] = await db
-                    .select()
-                    .from(threads)
-                    .where(
-                        and(
-                            eq(threads.id, currentThreadId),
-                            eq(threads.status, "active"),
-                            sql`${threads.participants} ? ${userId}`
-                        )
-                    )
-                    .limit(1);
+                const thread: Thread | undefined = await db.query.threads.findFirst({
+                    where: (t, { eq, and, sql }) => and(
+                        eq(t.id, currentThreadId),
+                        eq(t.status, "active"),
+                        sql`${t.participants} ? ${userId}`
+                    ),
+                });
 
                 if (!thread) {
                     break;
                 }
 
-                const threadMessages: Message[] = await db
-                    .select()
-                    .from(messages)
-                    .where(eq(messages.threadId, currentThreadId))
+                const threadMessages: Message[] = await db.query.messages.findMany({
+                    where: (m, { eq }) => eq(m.threadId, currentThreadId),
+                });
 
                 // Add thread level to each message for sorting
                 const messagesWithLevel = threadMessages.map(msg => ({
@@ -154,7 +146,7 @@ export function createOperations(db: any): any {
             });
 
             // Remove the threadLevel property before returning
-            const result = allMessages.slice(-limit).map(({ threadLevel, ...msg }) => msg);
+            const result = allMessages.slice(-limit).map(({ threadLevel: _threadLevel, ...msg }) => msg);
             indexMsgHistoryKey(threadId, cacheKey);
             return setCached(cacheKey, result, TTL_SHORT);
         },
@@ -166,16 +158,14 @@ export function createOperations(db: any): any {
          */
         async getThreadById(threadId: string): Promise<Thread | undefined> {
             const cacheKey = makeKey('getThreadById', [threadId]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Thread | undefined>(cacheKey);
             if (cached !== undefined) return cached;
-            const [thread] = await db
-                .select()
-                .from(threads)
-                .where(and(
-                    eq(threads.id, threadId),
-                    eq(threads.status, "active")
-                ))
-                .limit(1);
+            const thread = await db.query.threads.findFirst({
+                where: (t, { eq, and }) => and(
+                    eq(t.id, threadId),
+                    eq(t.status, "active")
+                ),
+            });
             return setCached(cacheKey, thread, TTL_SHORT);
         },
 
@@ -186,16 +176,14 @@ export function createOperations(db: any): any {
          */
         async getThreadByExternalId(externalId: string): Promise<Thread | undefined> {
             const cacheKey = makeKey('getThreadByExternalId', [externalId]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Thread | undefined>(cacheKey);
             if (cached !== undefined) return cached;
-            const [thread] = await db
-                .select()
-                .from(threads)
-                .where(and(
-                    eq(threads.externalId, externalId),
-                    eq(threads.status, "active")
-                ))
-                .limit(1);
+            const thread = await db.query.threads.findFirst({
+                where: (t, { eq, and }) => and(
+                    eq(t.externalId, externalId),
+                    eq(t.status, "active")
+                ),
+            });
             return setCached(cacheKey, thread, TTL_SHORT);
         },
 
@@ -205,11 +193,9 @@ export function createOperations(db: any): any {
          * @returns The thread
          */
         async getThreadByIdRegardlessOfStatus(threadId: string): Promise<Thread | undefined> {
-            const [thread] = await db
-                .select()
-                .from(threads)
-                .where(eq(threads.id, threadId))
-                .limit(1);
+            const thread = await db.query.threads.findFirst({
+                where: (t, { eq }) => eq(t.id, threadId),
+            });
             return thread;
         },
 
@@ -220,13 +206,11 @@ export function createOperations(db: any): any {
          */
         async getTaskById(taskId: string): Promise<Task | undefined> {
             const cacheKey = makeKey('getTaskById', [taskId]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Task | undefined>(cacheKey);
             if (cached !== undefined) return cached;
-            const [task] = await db
-                .select()
-                .from(tasks)
-                .where(eq(tasks.id, taskId))
-                .limit(1);
+            const task = await db.query.tasks.findFirst({
+                where: (t, { eq }) => eq(t.id, taskId),
+            });
             return setCached(cacheKey, task, TTL_SHORT);
         },
 
@@ -248,12 +232,14 @@ export function createOperations(db: any): any {
          * @returns The created thread
          */
         async findOrCreateThread(threadId: string, threadData: NewThread): Promise<Thread> {
-            let [thread]: Thread[] = await db.select().from(threads).where(eq(threads.id, threadId)).limit(1);
+            let thread = await db.query.threads.findFirst({
+                where: (t, { eq }) => eq(t.id, threadId),
+            });
             if (!thread) {
                 [thread] = await db.insert(threads).values({ id: threadId, ...threadData }).returning();
             }
             cache.delete(makeKey('getThreadById', [threadId]));
-            if ((threadData as any).externalId) cache.delete(makeKey('getThreadByExternalId', [(threadData as any).externalId]));
+            if (threadData.externalId) cache.delete(makeKey('getThreadByExternalId', [threadData.externalId]));
             return thread;
         },
 
@@ -264,13 +250,12 @@ export function createOperations(db: any): any {
          * @returns The archived thread
          */
         async archiveThread(threadId: string, summary: string): Promise<Thread[]> {
-            const res = await db
-                .update(threads)
-                .set({ status: "archived", summary })
-                .where(eq(threads.id, threadId))
-                .returning();
+            const result = await db.queryRaw(
+                `UPDATE threads SET status = 'archived', summary = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+                [summary, threadId]
+            );
             cache.delete(makeKey('getThreadById', [threadId]));
-            return res;
+            return result.rows as Thread[];
         },
 
         /**
@@ -289,7 +274,7 @@ export function createOperations(db: any): any {
          * @returns The created agent
          */
         // Agent operations
-        async createAgent(agentData: any): Promise<any> {
+        async createAgent(agentData: NewAgent): Promise<Agent> {
             // Ensure we only pass fields that exist in the schema
             const cleanAgentData = {
                 name: agentData.name,
@@ -315,11 +300,11 @@ export function createOperations(db: any): any {
          * Get all agents
          * @returns All agents
          */
-        async getAllAgents(): Promise<any[]> {
+        async getAllAgents(): Promise<Agent[]> {
             const cacheKey = makeKey('getAllAgents', []);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Agent[]>(cacheKey);
             if (cached) return cached;
-            const rows = await db.select().from(agents);
+            const rows = await db.query.agents.findMany();
             return setCached(cacheKey, rows, TTL_LONG);
         },
 
@@ -328,11 +313,13 @@ export function createOperations(db: any): any {
          * @param name - The name of the agent to get
          * @returns The agent
          */
-        async getAgentByName(name: string): Promise<any | undefined> {
+        async getAgentByName(name: string): Promise<Agent | undefined> {
             const cacheKey = makeKey('getAgentByName', [name]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Agent | undefined>(cacheKey);
             if (cached !== undefined) return cached;
-            const [agent] = await db.select().from(agents).where(eq(agents.name, name)).limit(1);
+            const agent = await db.query.agents.findFirst({
+                where: (a, { eq }) => eq(a.name, name),
+            });
             return setCached(cacheKey, agent, TTL_LONG);
         },
 
@@ -341,8 +328,10 @@ export function createOperations(db: any): any {
          * @param externalId - The external ID of the agent to get
          * @returns The agent
          */
-        async getAgentByExternalId(externalId: string): Promise<any | undefined> {
-            const [agent] = await db.select().from(agents).where(eq(agents.externalId, externalId)).limit(1);
+        async getAgentByExternalId(externalId: string): Promise<Agent | undefined> {
+            const agent = await db.query.agents.findFirst({
+                where: (a, { eq }) => eq(a.externalId, externalId),
+            });
             return agent;
         },
 
@@ -351,60 +340,66 @@ export function createOperations(db: any): any {
          * @param agentData - The data to upsert the agent with
          * @returns The upserted agent
          */
-        async upsertAgent(agentData: any): Promise<any> {
+        async upsertAgent(agentData: Partial<NewAgent> & { id?: string; name?: string }): Promise<Agent> {
             // Prefer id, then name
             if (agentData.id) {
-                const [existing] = await db.select().from(agents).where(eq(agents.id, agentData.id)).limit(1);
+                const existing = await db.query.agents.findFirst({
+                    where: (a, { eq }) => eq(a.id, agentData.id),
+                });
                 if (existing) {
-                    const [updated] = await db
-                        .update(agents)
-                        .set({
-                            name: agentData.name ?? existing.name,
-                            externalId: agentData.externalId ?? existing.externalId,
-                            role: agentData.role ?? existing.role,
-                            personality: agentData.personality ?? existing.personality,
-                            instructions: agentData.instructions ?? existing.instructions,
-                            description: agentData.description ?? existing.description,
-                            agentType: agentData.agentType ?? existing.agentType,
-                            allowedAgents: agentData.allowedAgents ?? existing.allowedAgents,
-                            allowedTools: agentData.allowedTools ?? existing.allowedTools,
-                            llmOptions: agentData.llmOptions ?? existing.llmOptions,
-                            metadata: agentData.metadata ?? existing.metadata,
-                        })
-                        .where(eq(agents.id, agentData.id))
-                        .returning();
+                    const result = await db.queryRaw(
+                        `UPDATE agents SET name = $1, external_id = $2, role = $3, personality = $4, instructions = $5, description = $6, agent_type = $7, allowed_agents = $8, allowed_tools = $9, llm_options = $10, metadata = $11, updated_at = NOW() WHERE id = $12 RETURNING *`,
+                        [
+                            agentData.name ?? existing.name,
+                            agentData.externalId ?? existing.externalId,
+                            agentData.role ?? existing.role,
+                            agentData.personality ?? existing.personality,
+                            agentData.instructions ?? existing.instructions,
+                            agentData.description ?? existing.description,
+                            agentData.agentType ?? existing.agentType,
+                            JSON.stringify(agentData.allowedAgents ?? existing.allowedAgents),
+                            JSON.stringify(agentData.allowedTools ?? existing.allowedTools),
+                            JSON.stringify(agentData.llmOptions ?? existing.llmOptions),
+                            JSON.stringify(agentData.metadata ?? existing.metadata),
+                            agentData.id
+                        ]
+                    );
+                    const updated = result.rows[0] as Agent;
                     cache.delete(makeKey('getAllAgents', []));
                     cache.delete(makeKey('getAgentByName', [updated.name]));
                     return updated;
                 }
             }
             if (agentData.name) {
-                const [existingByName] = await db.select().from(agents).where(eq(agents.name, agentData.name)).limit(1);
+                const existingByName = await db.query.agents.findFirst({
+                    where: (a, { eq }) => eq(a.name, agentData.name),
+                });
                 if (existingByName) {
-                    const [updated] = await db
-                        .update(agents)
-                        .set({
-                            externalId: agentData.externalId ?? existingByName.externalId,
-                            role: agentData.role ?? existingByName.role,
-                            personality: agentData.personality ?? existingByName.personality,
-                            instructions: agentData.instructions ?? existingByName.instructions,
-                            description: agentData.description ?? existingByName.description,
-                            agentType: agentData.agentType ?? existingByName.agentType,
-                            allowedAgents: agentData.allowedAgents ?? existingByName.allowedAgents,
-                            allowedTools: agentData.allowedTools ?? existingByName.allowedTools,
-                            llmOptions: agentData.llmOptions ?? existingByName.llmOptions,
-                            metadata: agentData.metadata ?? existingByName.metadata,
-                        })
-                        .where(eq(agents.name, agentData.name))
-                        .returning();
+                    const result = await db.queryRaw(
+                        `UPDATE agents SET external_id = $1, role = $2, personality = $3, instructions = $4, description = $5, agent_type = $6, allowed_agents = $7, allowed_tools = $8, llm_options = $9, metadata = $10, updated_at = NOW() WHERE name = $11 RETURNING *`,
+                        [
+                            agentData.externalId ?? existingByName.externalId,
+                            agentData.role ?? existingByName.role,
+                            agentData.personality ?? existingByName.personality,
+                            agentData.instructions ?? existingByName.instructions,
+                            agentData.description ?? existingByName.description,
+                            agentData.agentType ?? existingByName.agentType,
+                            JSON.stringify(agentData.allowedAgents ?? existingByName.allowedAgents),
+                            JSON.stringify(agentData.allowedTools ?? existingByName.allowedTools),
+                            JSON.stringify(agentData.llmOptions ?? existingByName.llmOptions),
+                            JSON.stringify(agentData.metadata ?? existingByName.metadata),
+                            agentData.name
+                        ]
+                    );
+                    const updated = result.rows[0] as Agent;
                     cache.delete(makeKey('getAllAgents', []));
                     cache.delete(makeKey('getAgentByName', [updated.name]));
                     return updated;
                 }
             }
-            return this.createAgent(agentData);
+            return this.createAgent(agentData as NewAgent);
         },
-        
+
         // API operations
 
         /**
@@ -412,7 +407,7 @@ export function createOperations(db: any): any {
          * @param apiData - The data to create the API with
          * @returns The created API
          */
-        async createAPI(apiData: any): Promise<any> {
+        async createAPI(apiData: NewAPI): Promise<API> {
             // Ensure we only pass fields that exist in the schema
             const cleanApiData = {
                 name: apiData.name,
@@ -436,11 +431,11 @@ export function createOperations(db: any): any {
          * Get all APIs
          * @returns All APIs
          */
-        async getAllAPIs(): Promise<any[]> {
+        async getAllAPIs(): Promise<API[]> {
             const cacheKey = makeKey('getAllAPIs', []);
-            const cached = getCached(cacheKey);
+            const cached = getCached<API[]>(cacheKey);
             if (cached) return cached;
-            const rows = await db.select().from(apis);
+            const rows = await db.query.apis.findMany();
             return setCached(cacheKey, rows, TTL_LONG);
         },
 
@@ -450,11 +445,13 @@ export function createOperations(db: any): any {
          * @returns The API
          */
 
-        async getAPIByName(name: string): Promise<any | undefined> {
+        async getAPIByName(name: string): Promise<API | undefined> {
             const cacheKey = makeKey('getAPIByName', [name]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<API | undefined>(cacheKey);
             if (cached !== undefined) return cached;
-            const [api] = await db.select().from(apis).where(eq(apis.name, name)).limit(1);
+            const api = await db.query.apis.findFirst({
+                where: (a, { eq }) => eq(a.name, name),
+            });
             return setCached(cacheKey, api, TTL_LONG);
         },
 
@@ -463,8 +460,10 @@ export function createOperations(db: any): any {
          * @param externalId - The external ID of the API to get
          * @returns The API
          */
-        async getAPIByExternalId(externalId: string): Promise<any | undefined> {
-            const [api] = await db.select().from(apis).where(eq(apis.externalId, externalId)).limit(1);
+        async getAPIByExternalId(externalId: string): Promise<API | undefined> {
+            const api = await db.query.apis.findFirst({
+                where: (a, { eq }) => eq(a.externalId, externalId),
+            });
             return api;
         },
 
@@ -473,53 +472,59 @@ export function createOperations(db: any): any {
          * @param apiData - The data to upsert the API with
          * @returns The upserted API
          */
-        async upsertAPI(apiData: any): Promise<any> {
+        async upsertAPI(apiData: Partial<NewAPI> & { id?: string; name?: string }): Promise<API> {
             if (apiData.id) {
-                const [existing] = await db.select().from(apis).where(eq(apis.id, apiData.id)).limit(1);
+                const existing = await db.query.apis.findFirst({
+                    where: (a, { eq }) => eq(a.id, apiData.id),
+                });
                 if (existing) {
-                    const [updated] = await db
-                        .update(apis)
-                        .set({
-                            name: apiData.name ?? existing.name,
-                            externalId: apiData.externalId ?? existing.externalId,
-                            description: apiData.description ?? existing.description,
-                            openApiSchema: apiData.openApiSchema ?? existing.openApiSchema,
-                            baseUrl: apiData.baseUrl ?? existing.baseUrl,
-                            headers: apiData.headers ?? existing.headers,
-                            auth: apiData.auth ?? existing.auth,
-                            timeout: apiData.timeout ?? existing.timeout,
-                            metadata: apiData.metadata ?? existing.metadata,
-                        })
-                        .where(eq(apis.id, apiData.id))
-                        .returning();
+                    const result = await db.queryRaw(
+                        `UPDATE apis SET name = $1, external_id = $2, description = $3, open_api_schema = $4, base_url = $5, headers = $6, auth = $7, timeout = $8, metadata = $9, updated_at = NOW() WHERE id = $10 RETURNING *`,
+                        [
+                            apiData.name ?? existing.name,
+                            apiData.externalId ?? existing.externalId,
+                            apiData.description ?? existing.description,
+                            JSON.stringify(apiData.openApiSchema ?? existing.openApiSchema),
+                            apiData.baseUrl ?? existing.baseUrl,
+                            JSON.stringify(apiData.headers ?? existing.headers),
+                            JSON.stringify(apiData.auth ?? existing.auth),
+                            apiData.timeout ?? existing.timeout,
+                            JSON.stringify(apiData.metadata ?? existing.metadata),
+                            apiData.id
+                        ]
+                    );
+                    const updated = result.rows[0] as API;
                     cache.delete(makeKey('getAllAPIs', []));
                     cache.delete(makeKey('getAPIByName', [updated.name]));
                     return updated;
                 }
             }
             if (apiData.name) {
-                const [existingByName] = await db.select().from(apis).where(eq(apis.name, apiData.name)).limit(1);
+                const existingByName = await db.query.apis.findFirst({
+                    where: (a, { eq }) => eq(a.name, apiData.name),
+                });
                 if (existingByName) {
-                    const [updated] = await db
-                        .update(apis)
-                        .set({
-                            externalId: apiData.externalId ?? existingByName.externalId,
-                            description: apiData.description ?? existingByName.description,
-                            openApiSchema: apiData.openApiSchema ?? existingByName.openApiSchema,
-                            baseUrl: apiData.baseUrl ?? existingByName.baseUrl,
-                            headers: apiData.headers ?? existingByName.headers,
-                            auth: apiData.auth ?? existingByName.auth,
-                            timeout: apiData.timeout ?? existingByName.timeout,
-                            metadata: apiData.metadata ?? existingByName.metadata,
-                        })
-                        .where(eq(apis.name, apiData.name))
-                        .returning();
+                    const result = await db.queryRaw(
+                        `UPDATE apis SET external_id = $1, description = $2, open_api_schema = $3, base_url = $4, headers = $5, auth = $6, timeout = $7, metadata = $8, updated_at = NOW() WHERE name = $9 RETURNING *`,
+                        [
+                            apiData.externalId ?? existingByName.externalId,
+                            apiData.description ?? existingByName.description,
+                            JSON.stringify(apiData.openApiSchema ?? existingByName.openApiSchema),
+                            apiData.baseUrl ?? existingByName.baseUrl,
+                            JSON.stringify(apiData.headers ?? existingByName.headers),
+                            JSON.stringify(apiData.auth ?? existingByName.auth),
+                            apiData.timeout ?? existingByName.timeout,
+                            JSON.stringify(apiData.metadata ?? existingByName.metadata),
+                            apiData.name
+                        ]
+                    );
+                    const updated = result.rows[0] as API;
                     cache.delete(makeKey('getAllAPIs', []));
                     cache.delete(makeKey('getAPIByName', [updated.name]));
                     return updated;
                 }
             }
-            return this.createAPI(apiData);
+            return this.createAPI(apiData as NewAPI);
         },
 
         // Tool operations
@@ -529,7 +534,7 @@ export function createOperations(db: any): any {
          * @param toolData - The data to create the tool with
          * @returns The created tool
          */
-        async createTool(toolData: any): Promise<any> {
+        async createTool(toolData: NewTool): Promise<Tool> {
             const cleanToolData = {
                 key: toolData.key,
                 name: toolData.name,
@@ -549,11 +554,11 @@ export function createOperations(db: any): any {
          * Get all tools
          * @returns All tools
          */
-        async getAllTools(): Promise<any[]> {
+        async getAllTools(): Promise<Tool[]> {
             const cacheKey = makeKey('getAllTools', []);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Tool[]>(cacheKey);
             if (cached) return cached;
-            const rows = await db.select().from(tools);
+            const rows = await db.query.tools.findMany();
             return setCached(cacheKey, rows, TTL_LONG);
         },
 
@@ -562,11 +567,13 @@ export function createOperations(db: any): any {
          * @param key - The key of the tool to get
          * @returns The tool
          */
-        async getToolByKey(key: string): Promise<any | undefined> {
+        async getToolByKey(key: string): Promise<Tool | undefined> {
             const cacheKey = makeKey('getToolByKey', [key]);
-            const cached = getCached(cacheKey);
+            const cached = getCached<Tool | undefined>(cacheKey);
             if (cached !== undefined) return cached;
-            const [tool] = await db.select().from(tools).where(eq(tools.key, key)).limit(1);
+            const tool = await db.query.tools.findFirst({
+                where: (t, { eq }) => eq(t.key, key),
+            });
             return setCached(cacheKey, tool, TTL_LONG);
         },
 
@@ -575,8 +582,10 @@ export function createOperations(db: any): any {
          * @param externalId - The external ID of the tool to get
          * @returns The tool
          */
-        async getToolByExternalId(externalId: string): Promise<any | undefined> {
-            const [tool] = await db.select().from(tools).where(eq(tools.externalId, externalId)).limit(1);
+        async getToolByExternalId(externalId: string): Promise<Tool | undefined> {
+            const tool = await db.query.tools.findFirst({
+                where: (t, { eq }) => eq(t.externalId, externalId),
+            });
             return tool;
         },
 
@@ -585,50 +594,56 @@ export function createOperations(db: any): any {
          * @param toolData - The data to upsert the tool with
          * @returns The upserted tool
          */
-        async upsertTool(toolData: any): Promise<any> {
+        async upsertTool(toolData: Partial<NewTool> & { id?: string; name?: string }): Promise<Tool> {
             // check by id first, then by name
             if (toolData.id) {
-                const [existing] = await db.select().from(tools).where(eq(tools.id, toolData.id)).limit(1);
+                const existing = await db.query.tools.findFirst({
+                    where: (t, { eq }) => eq(t.id, toolData.id),
+                });
                 if (existing) {
-                    const [updated] = await db
-                        .update(tools)
-                        .set({
-                            key: toolData.key ?? existing.key,
-                            name: toolData.name ?? existing.name,
-                            externalId: toolData.externalId ?? existing.externalId,
-                            description: toolData.description ?? existing.description,
-                            inputSchema: toolData.inputSchema ?? existing.inputSchema,
-                            outputSchema: toolData.outputSchema ?? existing.outputSchema,
-                            metadata: toolData.metadata ?? existing.metadata,
-                        })
-                        .where(eq(tools.id, toolData.id))
-                        .returning();
+                    const result = await db.queryRaw(
+                        `UPDATE tools SET key = $1, name = $2, external_id = $3, description = $4, input_schema = $5, output_schema = $6, metadata = $7, updated_at = NOW() WHERE id = $8 RETURNING *`,
+                        [
+                            toolData.key ?? existing.key,
+                            toolData.name ?? existing.name,
+                            toolData.externalId ?? existing.externalId,
+                            toolData.description ?? existing.description,
+                            JSON.stringify(toolData.inputSchema ?? existing.inputSchema),
+                            JSON.stringify(toolData.outputSchema ?? existing.outputSchema),
+                            JSON.stringify(toolData.metadata ?? existing.metadata),
+                            toolData.id
+                        ]
+                    );
+                    const updated = result.rows[0] as Tool;
                     cache.delete(makeKey('getAllTools', []));
                     cache.delete(makeKey('getToolByKey', [updated.key]));
                     return updated;
                 }
             }
             if (toolData.name) {
-                const [existingByName] = await db.select().from(tools).where(eq(tools.name, toolData.name)).limit(1);
+                const existingByName = await db.query.tools.findFirst({
+                    where: (t, { eq }) => eq(t.name, toolData.name),
+                });
                 if (existingByName) {
-                    const [updated] = await db
-                        .update(tools)
-                        .set({
-                            key: toolData.key ?? existingByName.key,
-                            externalId: toolData.externalId ?? existingByName.externalId,
-                            description: toolData.description ?? existingByName.description,
-                            inputSchema: toolData.inputSchema ?? existingByName.inputSchema,
-                            outputSchema: toolData.outputSchema ?? existingByName.outputSchema,
-                            metadata: toolData.metadata ?? existingByName.metadata,
-                        })
-                        .where(eq(tools.name, toolData.name))
-                        .returning();
+                    const result = await db.queryRaw(
+                        `UPDATE tools SET key = $1, external_id = $2, description = $3, input_schema = $4, output_schema = $5, metadata = $6, updated_at = NOW() WHERE name = $7 RETURNING *`,
+                        [
+                            toolData.key ?? existingByName.key,
+                            toolData.externalId ?? existingByName.externalId,
+                            toolData.description ?? existingByName.description,
+                            JSON.stringify(toolData.inputSchema ?? existingByName.inputSchema),
+                            JSON.stringify(toolData.outputSchema ?? existingByName.outputSchema),
+                            JSON.stringify(toolData.metadata ?? existingByName.metadata),
+                            toolData.name
+                        ]
+                    );
+                    const updated = result.rows[0] as Tool;
                     cache.delete(makeKey('getAllTools', []));
                     cache.delete(makeKey('getToolByKey', [updated.key]));
                     return updated;
                 }
             }
-            return this.createTool(toolData);
+            return this.createTool(toolData as NewTool);
         },
 
         /**
@@ -637,7 +652,7 @@ export function createOperations(db: any): any {
          * @returns The created MCP server
          */
         // MCP Server operations
-        async createMCPServer(mcpData: any): Promise<any> {
+        async createMCPServer(mcpData: NewMCPServer): Promise<MCPServer> {
             const [newMCPServer] = await db.insert(mcpServers).values(mcpData).returning();
             return newMCPServer;
         },
@@ -646,8 +661,8 @@ export function createOperations(db: any): any {
          * Get all MCP servers
          * @returns All MCP servers
          */
-        async getAllMCPServers(): Promise<any[]> {
-            return await db.select().from(mcpServers);
+        async getAllMCPServers(): Promise<MCPServer[]> {
+            return await db.query.mcpServers.findMany();
         },
 
         /**
@@ -655,8 +670,10 @@ export function createOperations(db: any): any {
          * @param name - The name of the MCP server to get
          * @returns The MCP server
          */
-        async getMCPServerByName(name: string): Promise<any | undefined> {
-            const [mcpServer] = await db.select().from(mcpServers).where(eq(mcpServers.name, name)).limit(1);
+        async getMCPServerByName(name: string): Promise<MCPServer | undefined> {
+            const mcpServer = await db.query.mcpServers.findFirst({
+                where: (m, { eq }) => eq(m.name, name),
+            });
             return mcpServer;
         },
 
@@ -667,29 +684,36 @@ export function createOperations(db: any): any {
          * @param userData - The data to upsert the user with
          * @returns The upserted user
          */
-        async upsertUser(userData: any): Promise<any> {
+        async upsertUser(userData: Partial<NewUser> & { id?: string; externalId?: string; email?: string }): Promise<User> {
             // match by id, externalId, or email
-            let existing: any | undefined;
+            let existing: User | undefined;
             if (userData.id) {
-                [existing] = await db.select().from(users).where(eq(users.id, userData.id)).limit(1);
+                existing = await db.query.users.findFirst({
+                    where: (u, { eq }) => eq(u.id, userData.id),
+                });
             }
             if (!existing && userData.externalId) {
-                [existing] = await db.select().from(users).where(eq(users.externalId, userData.externalId)).limit(1);
+                existing = await db.query.users.findFirst({
+                    where: (u, { eq }) => eq(u.externalId, userData.externalId),
+                });
             }
             if (!existing && userData.email) {
-                [existing] = await db.select().from(users).where(eq(users.email, userData.email)).limit(1);
+                existing = await db.query.users.findFirst({
+                    where: (u, { eq }) => eq(u.email, userData.email),
+                });
             }
             if (existing) {
-                const [updated] = await db
-                    .update(users)
-                    .set({
-                        name: userData.name ?? existing.name,
-                        email: userData.email ?? existing.email,
-                        externalId: userData.externalId ?? existing.externalId,
-                        metadata: userData.metadata ?? existing.metadata,
-                    })
-                    .where(eq(users.id, existing.id))
-                    .returning();
+                const result = await db.queryRaw(
+                    `UPDATE users SET name = $1, email = $2, external_id = $3, metadata = $4, updated_at = NOW() WHERE id = $5 RETURNING *`,
+                    [
+                        userData.name ?? existing.name,
+                        userData.email ?? existing.email,
+                        userData.externalId ?? existing.externalId,
+                        JSON.stringify(userData.metadata ?? existing.metadata),
+                        existing.id
+                    ]
+                );
+                const updated = result.rows[0] as User;
                 if (updated.externalId) cache.delete(makeKey('getUserByExternalId', [updated.externalId]));
                 return updated;
             }
@@ -710,11 +734,12 @@ export function createOperations(db: any): any {
          * @param externalId - The external ID of the user to get
          * @returns The user
          */
-        async getUserByExternalId(externalId: string): Promise<any | undefined> {
-            const [user] = await db.select().from(users).where(eq(users.externalId, externalId)).limit(1);
+        async getUserByExternalId(externalId: string): Promise<User | undefined> {
+            const user = await db.query.users.findFirst({
+                where: (u, { eq }) => eq(u.externalId, externalId),
+            });
             return user;
         },
     };
 }
-
 export type Operations = ReturnType<typeof createOperations>;

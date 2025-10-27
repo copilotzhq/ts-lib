@@ -1,4 +1,3 @@
-import { createOperations } from "@/database/operations/index.ts";
 import type { ToolExecutionContext } from "../index.ts";
 
 interface CreateTaskParams {
@@ -20,9 +19,9 @@ export default {
     },
     execute: async ({ name, goal }: CreateTaskParams, context?: ToolExecutionContext) => {
         // Get database instance from context or fallback to global
-        const db = context?.db;
-        const ops = createOperations(db);
-        const task = await ops.createTask({ name, goal });
+
+        const ops = context?.db?.operations;
+        const task = await ops?.createTask({ name, goal });
         return { task };
     },
 }

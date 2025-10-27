@@ -34,7 +34,7 @@ export interface DatabaseConfig {
   url?: string;
   syncUrl?: string;
   pgliteExtensions?: string[];
-  schemaSQL?: string | string[];
+  schemaSQL?: string[];
   useWorker?: boolean;
   logMetrics?: boolean;
 }
@@ -52,21 +52,37 @@ const schema = {
   users,
 }
 
-// Global connection memoization shared across modules to avoid duplicate initializations
-const GLOBAL_CACHE_KEY = "__copilotz_db_cache__";
-const globalCache: Map<string, Promise<unknown>> = (globalThis as any)[GLOBAL_CACHE_KEY] ?? new Map();
-(globalThis as any)[GLOBAL_CACHE_KEY] = globalCache as unknown;
+const connect = async (finalConfig: DatabaseConfig, debug: boolean, cacheKey: string) => {
+  if (debug) console.log(`[db] connecting Ominipg: ${cacheKey}`);
+  // Connect to the database
+  const ominipg = await Ominipg.connect(finalConfig);
+  // Attach schema to the database instance
+  const dbInstance = withDrizzle(ominipg, drizzle, { ...schema });
+  // Attach default operations used by agents/event-queue
+  const operations = createOperations(dbInstance as DbInstance);
 
+  const dbInstanceWithOperations = Object.assign(dbInstance, { operations });
+
+  return dbInstanceWithOperations;
+}
+
+export type DbInstance = Awaited<ReturnType<typeof connect>>;
+export type CopilotzDb = DbInstance & { operations: ReturnType<typeof createOperations> };
+
+const GLOBAL_CACHE_KEY = "__copilotz_db_cache__";
+const existingCache = (globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] as Map<string, Promise<DbInstance>> | undefined;
+const globalCache: Map<string, Promise<DbInstance>> = existingCache ?? new Map();
+(globalThis as Record<string, unknown>)[GLOBAL_CACHE_KEY] = globalCache;
 
 
 // Create singleton database instance with 
-export async function createDatabase(config?: DatabaseConfig): Promise<unknown> {
+export async function createDatabase(config?: DatabaseConfig) {
 
   const isPgLite = !config?.url || config?.url.startsWith(":") || config?.url.startsWith("file:") || config?.url.startsWith("pglite:");
 
   const url = config?.url || Deno.env.get("DATABASE_URL") || ":memory:";
 
-  const finalConfig = {
+  const finalConfig: DatabaseConfig = {
     url,
     syncUrl: config?.syncUrl || Deno.env.get("SYNC_DATABASE_URL"),
     pgliteExtensions: isPgLite ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm"] : [],
@@ -83,23 +99,11 @@ export async function createDatabase(config?: DatabaseConfig): Promise<unknown> 
     return await globalCache.get(cacheKey)!;
   }
 
-  const connectPromise = (async () => {
-    if (debug) console.log(`[db] connecting Ominipg: ${cacheKey}`);
-    // Connect to the database
-    const ominipg = await Ominipg.connect(finalConfig);
-    // Attach schema to the database instance
-    const dbInstance = await withDrizzle(ominipg, drizzle, { ...schema });
-    // Attach default operations used by agents/event-queue
-    (dbInstance as any).operations = createOperations(dbInstance);
-
-    return dbInstance;
-  })();
+  const connectPromise: Promise<CopilotzDb> = connect(finalConfig, debug, cacheKey);
 
   globalCache.set(cacheKey, connectPromise);
   return await connectPromise;
 }
 
-export type DbInstance = Awaited<ReturnType<typeof createDatabase>>;
 export { schema };
 
-export type { Operations } from "./operations/index.ts";

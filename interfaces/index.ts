@@ -26,14 +26,14 @@ export type {
  
 import type {
     DatabaseConfig,
-    Operations,
     DbInstance,
+    CopilotzDb,
 } from "@/database/index.ts";
 
 export type {
     DatabaseConfig,
-    Operations,
-    DbInstance
+    DbInstance,
+    CopilotzDb
 }
 
 export type {
@@ -56,7 +56,7 @@ export interface ChatContext {
     stream?: boolean;
     activeTaskId?: string;
     callbacks?: ChatCallbacks;
-    dbInstance?: DbInstance;
+    dbInstance?: CopilotzDb;
     dbConfig?: DatabaseConfig;
 }
 

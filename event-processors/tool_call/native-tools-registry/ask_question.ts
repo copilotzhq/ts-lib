@@ -24,8 +24,7 @@ export default {
     },
     execute: async ({ question, targetAgent, timeout = 30 }: AskQuestionParams, context?: ToolExecutionContext) => {
         // Get database instance from context or fallback to global
-        const db = context?.db;
-        const ops = createOperations(db);
+        const ops = context?.db?.operations;
 
         if (!context?.senderId) {
             throw new Error("Sender ID is required to ask questions");
@@ -55,7 +54,7 @@ export default {
                 },
                 agents: [targetAgentConfig],
                 tools: context.tools || [],
-                dbInstance: db,
+                dbInstance: context?.db,
                 stream: true,
                 callbacks: context.callbacks,
             });
@@ -67,10 +66,10 @@ export default {
 
             while (Date.now() - startTime < timeoutMs) {
                 // Get message history for the question thread
-                const messages = await ops.getMessageHistory(questionThreadId, targetAgent, 10);
+                const messages = await ops?.getMessageHistory(questionThreadId, targetAgent, 10);
 
                 // Look for a response from the target agent (excluding the initial question)
-                const targetAgentResponse = messages.find((msg: Message) =>
+                const targetAgentResponse = messages?.find((msg: Message) =>
                     msg.senderId === targetAgent &&
                     msg.senderType === "agent" &&
                     msg.content &&
@@ -91,7 +90,7 @@ export default {
                 ? `Question: "${question}" - Answer: "${answer?.substring(0, 100)}${answer?.length > 100 ? '...' : ''}"`
                 : `Question: "${question}" - No answer received (timeout)`;
 
-            await ops.archiveThread(questionThreadId, summary);
+            await ops?.archiveThread(questionThreadId, summary);
 
             if (!answer) {
                 throw new Error(`No answer received from ${targetAgent} within ${timeout} seconds`);

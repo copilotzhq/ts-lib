@@ -19,14 +19,13 @@ export default {
     outputSchema: null,
     execute: async ({ summary }: EndThreadParams, context?: ToolExecutionContext) => {
         // Get database instance from context or fallback to global
-        const db = context?.db;
-        const ops = createOperations(db);
+        const ops = context?.db?.operations;
         
         if (!context?.threadId) {
             throw new Error("Thread ID is required to end a thread");
         }
 
-        await ops.archiveThread(context.threadId, summary);
+        await ops?.archiveThread(context.threadId, summary);
         
         return { 
             threadId: context.threadId,

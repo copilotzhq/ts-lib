@@ -15,6 +15,7 @@ import type {
   ProcessorDeps,
   ChatContext,
   Agent,
+  CopilotzDb,
 } from "@/interfaces/index.ts";
 import type { ToolCall } from "@/connectors/llm/types.ts";
 
@@ -45,7 +46,7 @@ export interface ToolExecutionContext extends ChatContext {
   senderType?: "user" | "agent" | "tool" | "system";
   threadId?: string;
   agents?: Agent[];
-  db?: unknown;
+  db?: CopilotzDb;
 }
 
 

@@ -8,8 +8,8 @@
  * Type 'quit' to exit.
  */
 
-import { runCLI } from "./index.ts";
-import type { Agent, Event, ContentStreamData } from "./interfaces/index.ts";
+import { runCLI } from "../index.ts";
+import type { Agent, Event, ContentStreamData } from "../interfaces/index.ts";
 
 const testAgent: Agent = {
     id: "test-agent-1",
@@ -18,7 +18,7 @@ const testAgent: Agent = {
     instructions: "You are a helpful test assistant. Keep responses brief and friendly.",
     llmOptions: {
         provider: "openai",
-        model: "gpt-5",
+        model: "gpt-4o",
         temperature: 0.7,
         apiKey: Deno.env.get("DEFAULT_OPENAI_KEY") || "",
     },

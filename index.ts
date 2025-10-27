@@ -12,7 +12,8 @@ import type {
     MCPServer,
     DatabaseConfig,
     ChatCallbacks,
-    NewThread
+    NewThread,
+    CopilotzDb
 } from "./interfaces/index.ts";
 
 // Export all tools from the registry
@@ -68,7 +69,7 @@ async function ensureThread(
     return { threadId, senderId };
 }
 
-function buildWorkerContext(context: ChatContext, db: unknown, stream: boolean): ChatContext {
+function buildWorkerContext(context: ChatContext, db: CopilotzDb | undefined, stream: boolean): ChatContext {
     return {
         ...context,
         dbInstance: db,
@@ -182,7 +183,7 @@ export async function run({
     mcpServers?: MCPServer[];
     callbacks?: ChatCallbacks;
     dbConfig?: DatabaseConfig;
-    dbInstance?: unknown;
+    dbInstance?: CopilotzDb;
     stream?: boolean;
 }): Promise<{ queueId: string, status: 'queued', threadId: string }> {
     if (!initialMessage?.content) throw new Error("initialMessage with content is required for run()");
