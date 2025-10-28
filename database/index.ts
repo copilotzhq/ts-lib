@@ -28,7 +28,9 @@ import { createOperations } from "./operations/index.ts";
 
 // Import Migrations File
 // import migrations from "./migrations/migration_0001.sql" with { type: "text" };
-import migrations from "./migrations/migration_0001.ts";;
+import { generateMigrations } from "./migrations/migration_0001.ts";
+
+const migrations: string = generateMigrations();
 
 // Define the database config interface
 export interface DatabaseConfig {
@@ -38,7 +40,7 @@ export interface DatabaseConfig {
   schemaSQL?: string[];
   useWorker?: boolean;
   logMetrics?: boolean;
-  extended?:{
+  extended?: {
     schema: Record<string, any>;
     operations: Record<string, any>;
     migrations: string[];
@@ -100,6 +102,7 @@ export async function createDatabase(config?: DatabaseConfig): Promise<CopilotzD
   const isPgLite = !config?.url || config?.url.startsWith(":") || config?.url.startsWith("file:") || config?.url.startsWith("pglite:");
 
   const url = config?.url || Deno.env.get("DATABASE_URL") || ":memory:";
+
 
   const finalConfig: DatabaseConfig = {
     url,

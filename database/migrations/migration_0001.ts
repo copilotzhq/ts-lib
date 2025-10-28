@@ -1,4 +1,4 @@
-export default `-- Migration 0001 - Initial Schema
+export const generateMigrations = (): string => (`-- Migration 0001 - Initial Schema
 
 -- This migration creates the initial schema for the database.
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -157,4 +157,4 @@ DO $$ BEGIN
     WHEN duplicate_object THEN null;
   END $$;
 
-`;
+`);
