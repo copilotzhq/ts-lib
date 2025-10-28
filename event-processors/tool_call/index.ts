@@ -95,9 +95,9 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
     if (error) {
       content = `tool error: ${String(error)}\n\nPlease review the error above and try again with the correct format.`;
     } else if (output) {
-      content = typeof output === 'string' ? `tool output: ${output}` : `tool output: ${JSON.stringify(output)}`;
+      content = typeof output === 'string' ? `${output}` : `${JSON.stringify(output)}`;
     } else {
-      content = `tool output: No output returned`;
+      content = `No output returned`;
     }
     // Enqueue a MESSAGE event
     const producedEvents: NewEvent[] = [

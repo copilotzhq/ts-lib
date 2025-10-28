@@ -157,4 +157,31 @@ DO $$ BEGIN
     WHEN duplicate_object THEN null;
   END $$;
 
+-- Indexes to optimize common queries
+-- Threads
+CREATE INDEX IF NOT EXISTS "idx_threads_external_id_active" ON "threads" ("external_id") WHERE "status" = 'active';
+CREATE INDEX IF NOT EXISTS "idx_threads_participants_gin" ON "threads" USING GIN ("participants");
+
+-- Messages
+CREATE INDEX IF NOT EXISTS "idx_messages_thread_id_created_at" ON "messages" ("thread_id", "created_at");
+
+-- Queue
+CREATE INDEX IF NOT EXISTS "idx_queue_thread_status" ON "queue" ("thread_id", "status");
+CREATE INDEX IF NOT EXISTS "idx_queue_pending_order" ON "queue" ("thread_id", (COALESCE("priority", 0)) DESC, "created_at" ASC, "id" ASC) WHERE "status" = 'pending';
+
+-- Agents
+CREATE INDEX IF NOT EXISTS "idx_agents_name" ON "agents" ("name");
+CREATE INDEX IF NOT EXISTS "idx_agents_external_id" ON "agents" ("external_id");
+
+-- APIs
+CREATE INDEX IF NOT EXISTS "idx_apis_name" ON "apis" ("name");
+CREATE INDEX IF NOT EXISTS "idx_apis_external_id" ON "apis" ("external_id");
+
+-- Tools
+CREATE INDEX IF NOT EXISTS "idx_tools_external_id" ON "tools" ("external_id");
+
+-- Users
+CREATE INDEX IF NOT EXISTS "idx_users_external_id" ON "users" ("external_id");
+CREATE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email");
+
 `);

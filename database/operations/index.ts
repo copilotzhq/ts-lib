@@ -10,7 +10,7 @@ export function createOperations(db: DbInstance):any {
     type CacheEntry = { value: unknown; expiresAt: number };
     const cache = new Map<string, CacheEntry>();
     const msgHistoryKeysByThread = new Map<string, Set<string>>();
-    const TTL_SHORT = 0;   // threads, tasks, histories
+    const TTL_SHORT = 1;   // threads, tasks, histories
     const TTL_LONG = 30_000;   // catalogs (agents, tools, apis)
 
     const makeKey = (name: string, parts: unknown[]) => `${name}:${parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join('|')}`;
