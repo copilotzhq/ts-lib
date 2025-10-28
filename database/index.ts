@@ -1,5 +1,5 @@
 // Import Ominipg
-import { Ominipg, withDrizzle, OminipgDrizzleMixin } from "omnipg";
+import { Ominipg, withDrizzle, type OminipgDrizzleMixin } from "omnipg";
 
 // Import Drizzle
 import { drizzle } from "./drizzle.ts";
@@ -38,6 +38,11 @@ export interface DatabaseConfig {
   schemaSQL?: string[];
   useWorker?: boolean;
   logMetrics?: boolean;
+  extended?:{
+    schema: Record<string, any>;
+    operations: Record<string, any>;
+    migrations: string[];
+  }
 }
 
 // Define the schema
@@ -53,14 +58,13 @@ const schema = {
   users,
 }
 
-
 export type DbInstance = PgRemoteDatabase<typeof schema> & OminipgDrizzleMixin;
 const createDbInstance = async (finalConfig: DatabaseConfig, debug: boolean, cacheKey: string): Promise<DbInstance> => {
   if (debug) console.log(`[db] creating Ominipg: ${cacheKey}`);
   // Connect to the database
   const ominipg = await Ominipg.connect(finalConfig);
   // Attach schema to the database instance
-  const dbInstance = withDrizzle(ominipg, drizzle, { ...schema });
+  const dbInstance = withDrizzle(ominipg, drizzle, { ...schema, ...finalConfig?.extended?.schema });
   return dbInstance;
 }
 
@@ -101,7 +105,7 @@ export async function createDatabase(config?: DatabaseConfig): Promise<CopilotzD
     url,
     syncUrl: config?.syncUrl || Deno.env.get("SYNC_DATABASE_URL"),
     pgliteExtensions: isPgLite ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm"] : [],
-    schemaSQL: splitSQLStatements(migrations),
+    schemaSQL: [...config?.extended?.migrations || [], ...splitSQLStatements(migrations)],
     useWorker: isPgLite ? config?.useWorker || false : false,
   };
 
@@ -120,5 +124,5 @@ export async function createDatabase(config?: DatabaseConfig): Promise<CopilotzD
   return await connectPromise;
 }
 
-export { schema };
+export { schema, migrations };
 

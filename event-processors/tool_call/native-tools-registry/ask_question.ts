@@ -1,5 +1,4 @@
 import { run } from "@/index.ts";
-import { createOperations } from "@/database/operations/index.ts";
 import type { Agent, Message } from "@/interfaces/index.ts";
 import type { ToolExecutionContext } from "../index.ts";
 

@@ -32,6 +32,16 @@ export const nativeTools: { [key: string]: Tool } = {
     wait
 };
 
+
+/**
+ * Get a dictionary of native tools
+ * @example
+ * ```typescript
+ * const nativeTools = getNativeTools();
+ * console.log(nativeTools);
+ * ```
+ * @returns A dictionary of native tools. The key is the tool name and the value is the tool object.
+ */
 export function getNativeTools(): { [key: string]: Tool } {
     return nativeTools;
 }

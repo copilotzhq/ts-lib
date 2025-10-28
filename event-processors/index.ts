@@ -77,7 +77,6 @@ export async function startThreadEventWorker(
 }
 
 export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
-    preProcess?: (event: Event, deps: TDeps) => Promise<{ producedEvents?: NewEvent[] } | void> | { producedEvents?: NewEvent[] } | void;
     shouldProcess: (event: Event, deps: TDeps) => boolean | Promise<boolean>;
     process: (event: Event, deps: TDeps) => Promise<{ producedEvents?: NewEvent[] } | void> | { producedEvents?: NewEvent[] } | void;
 }
@@ -148,13 +147,7 @@ export async function startEventWorker<TDeps>(
             const preEvents: NewEvent[] = [];
             let finalEvents: NewEvent[] = [];
 
-            // 1) Pre-process (always runs when available)
-            if (processor?.preProcess) {
-                const pre = await processor.preProcess(event, deps);
-                if (pre?.producedEvents) preEvents.push(...pre.producedEvents);
-            }
-
-            // 2) onEvent callback with override semantics
+            // 1) onEvent callback with override semantics
             const handler = context?.callbacks?.onEvent;
             let overriddenByOnEvent = false;
             if (handler) {
@@ -167,7 +160,7 @@ export async function startEventWorker<TDeps>(
                 } catch (_err) { /* ignore user callback errors */ }
             }
 
-            // 3) Default processor path (only if not overridden)
+            // 2) Default processor path (only if not overridden)
             if (!overriddenByOnEvent && processor) {
                 const ok = await processor.shouldProcess(event, deps);
                 if (ok) {

@@ -1,4 +1,3 @@
-import { createOperations } from "@/database/operations/index.ts";
 import type { ToolExecutionContext } from "../index.ts";
 
 interface EndThreadParams {

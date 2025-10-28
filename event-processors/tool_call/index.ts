@@ -99,7 +99,6 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
     } else {
       content = `tool output: No output returned`;
     }
-
     // Enqueue a MESSAGE event
     const producedEvents: NewEvent[] = [
       {
@@ -110,13 +109,17 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
           senderType: "tool",
           content: content,
           toolCallId: callId,
+          name: call.function.name,
+          toolName: call.function.name,
+          arguments: call.function.arguments,
+          output: output,
+          error: error,
         },
         parentEventId: event.id,
         traceId: event.traceId,
         priority: event.priority,
       }
     ];
-
 
     return { producedEvents };
   }

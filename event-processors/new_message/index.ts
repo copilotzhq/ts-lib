@@ -48,11 +48,13 @@ export interface MessagePayload {
 }
 
 export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
-    // Persist incoming message once before processing
-    preProcess: async (event: Event, deps: ProcessorDeps) => {
-        const { db } = deps;
+    shouldProcess: () => true,
+    process: async (event: Event, deps: ProcessorDeps) => {
+        const { db, thread, context } = deps;
         const ops = db.operations;
+
         const payload = event.payload as MessagePayload;
+
         const incomingMsg: NewMessage = {
             threadId: event.threadId,
             senderId: payload.senderId,
@@ -61,13 +63,9 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
             toolCallId: payload.toolCallId,
             toolCalls: payload.toolCalls,
         };
-        await ops.createMessage(incomingMsg);
-    },
-    shouldProcess: () => true,
-    process: async (event: Event, deps: ProcessorDeps) => {
-        const { db, thread, context } = deps;
-        const ops = db.operations;
-        const payload = event.payload as MessagePayload;
+
+        // Persist incoming message before processing
+        ops.createMessage(incomingMsg);
 
         // Resolve targets
         const availableAgents = context.agents || [];
