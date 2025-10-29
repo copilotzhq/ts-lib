@@ -6,29 +6,7 @@ import type { DbInstance } from "../index.ts";
  * Database operations factory - creates operation functions bound to a specific database instance
  */
 export function createOperations(db: DbInstance):any {
-    // Ephemeral in-process cache (per operations instance)
-    type CacheEntry = { value: unknown; expiresAt: number };
-    const cache = new Map<string, CacheEntry>();
-    const msgHistoryKeysByThread = new Map<string, Set<string>>();
-    const TTL_SHORT = 1;   // threads, tasks, histories
-    const TTL_LONG = 30_000;   // catalogs (agents, tools, apis)
-
-    const makeKey = (name: string, parts: unknown[]) => `${name}:${parts.map(p => typeof p === 'string' ? p : JSON.stringify(p)).join('|')}`;
-    const getCached = <T,>(key: string): T | undefined => {
-        const entry = cache.get(key);
-        if (!entry) return undefined;
-        if (Date.now() > entry.expiresAt) { cache.delete(key); return undefined; }
-        return entry.value as T;
-    };
-    const setCached = <T,>(key: string, value: T, ttl: number): T => { cache.set(key, { value, expiresAt: Date.now() + ttl }); return value; };
-    const indexMsgHistoryKey = (threadId: string, key: string) => {
-        if (!msgHistoryKeysByThread.has(threadId)) msgHistoryKeysByThread.set(threadId, new Set());
-        msgHistoryKeysByThread.get(threadId)!.add(key);
-    };
-    const invalidateMsgHistory = (threadId: string) => {
-        const keys = msgHistoryKeysByThread.get(threadId);
-        if (keys) { keys.forEach(k => cache.delete(k)); keys.clear(); }
-    };
+    
 
     return {
         /** Queue operations 
@@ -94,9 +72,6 @@ export function createOperations(db: DbInstance):any {
          * @returns The message history
          */
         async getMessageHistory(threadId: string, userId: string, limit: number = 50): Promise<NewMessage[]> {
-            const cacheKey = makeKey('getMessageHistory', [threadId, userId, limit]);
-            const cached = getCached<NewMessage[]>(cacheKey);
-            if (cached) return cached;
             const allMessages: (Message & { threadLevel: number })[] = [];
             let currentThreadId: string | null = threadId;
             let threadLevel = 0;
@@ -144,8 +119,7 @@ export function createOperations(db: DbInstance):any {
 
             // Remove the threadLevel property before returning
             const result = allMessages.slice(-limit).map(({ threadLevel: _threadLevel, ...msg }) => msg);
-            indexMsgHistoryKey(threadId, cacheKey);
-            return setCached(cacheKey, result, TTL_SHORT);
+            return result;
         },
 
         /**
@@ -154,16 +128,13 @@ export function createOperations(db: DbInstance):any {
          * @returns The thread
          */
         async getThreadById(threadId: string): Promise<Thread | undefined> {
-            const cacheKey = makeKey('getThreadById', [threadId]);
-            const cached = getCached<Thread | undefined>(cacheKey);
-            if (cached !== undefined) return cached;
             const thread = await db.query.threads.findFirst({
                 where: (t, { eq, and }) => and(
                     eq(t.id, threadId),
                     eq(t.status, "active")
                 ),
             });
-            return setCached(cacheKey, thread, TTL_SHORT);
+            return thread;
         },
 
         /**
@@ -172,16 +143,13 @@ export function createOperations(db: DbInstance):any {
          * @returns The thread
          */
         async getThreadByExternalId(externalId: string): Promise<Thread | undefined> {
-            const cacheKey = makeKey('getThreadByExternalId', [externalId]);
-            const cached = getCached<Thread | undefined>(cacheKey);
-            if (cached !== undefined) return cached;
             const thread = await db.query.threads.findFirst({
                 where: (t, { eq, and }) => and(
                     eq(t.externalId, externalId),
                     eq(t.status, "active")
                 ),
             });
-            return setCached(cacheKey, thread, TTL_SHORT);
+            return thread;
         },
 
         /**
@@ -202,13 +170,10 @@ export function createOperations(db: DbInstance):any {
          * @returns The task
          */
         async getTaskById(taskId: string): Promise<Task | undefined> {
-            const cacheKey = makeKey('getTaskById', [taskId]);
-            const cached = getCached<Task | undefined>(cacheKey);
-            if (cached !== undefined) return cached;
             const task = await db.query.tasks.findFirst({
                 where: (t, { eq }) => eq(t.id, taskId),
             });
-            return setCached(cacheKey, task, TTL_SHORT);
+            return task;
         },
 
         /**
@@ -218,7 +183,6 @@ export function createOperations(db: DbInstance):any {
          */
         async createMessage(message: NewMessage): Promise<Message> {
             const [newMessage] = await db.insert(messages).values(message).returning();
-            if (message.threadId) invalidateMsgHistory(message.threadId);
             return newMessage;
         },
 
@@ -235,8 +199,6 @@ export function createOperations(db: DbInstance):any {
             if (!thread) {
                 [thread] = await db.insert(threads).values({ id: threadId, ...threadData }).returning();
             }
-            cache.delete(makeKey('getThreadById', [threadId]));
-            if (threadData.externalId) cache.delete(makeKey('getThreadByExternalId', [threadData.externalId]));
             return thread;
         },
 
@@ -251,7 +213,6 @@ export function createOperations(db: DbInstance):any {
                 `UPDATE threads SET status = 'archived', summary = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
                 [summary, threadId]
             );
-            cache.delete(makeKey('getThreadById', [threadId]));
             return result.rows as Thread[];
         },
 
@@ -288,8 +249,6 @@ export function createOperations(db: DbInstance):any {
             };
 
             const [newAgent] = await db.insert(agents).values(cleanAgentData).returning();
-            cache.delete(makeKey('getAllAgents', []));
-            cache.delete(makeKey('getAgentByName', [cleanAgentData.name]));
             return newAgent;
         },
 
@@ -298,11 +257,8 @@ export function createOperations(db: DbInstance):any {
          * @returns All agents
          */
         async getAllAgents(): Promise<Agent[]> {
-            const cacheKey = makeKey('getAllAgents', []);
-            const cached = getCached<Agent[]>(cacheKey);
-            if (cached) return cached;
             const rows = await db.query.agents.findMany();
-            return setCached(cacheKey, rows, TTL_LONG);
+            return rows;
         },
 
         /**
@@ -311,13 +267,10 @@ export function createOperations(db: DbInstance):any {
          * @returns The agent
          */
         async getAgentByName(name: string): Promise<Agent | undefined> {
-            const cacheKey = makeKey('getAgentByName', [name]);
-            const cached = getCached<Agent | undefined>(cacheKey);
-            if (cached !== undefined) return cached;
             const agent = await db.query.agents.findFirst({
                 where: (a, { eq }) => eq(a.name, name),
             });
-            return setCached(cacheKey, agent, TTL_LONG);
+            return agent;
         },
 
         /**
@@ -362,8 +315,6 @@ export function createOperations(db: DbInstance):any {
                         ]
                     );
                     const updated = result.rows[0] as Agent;
-                    cache.delete(makeKey('getAllAgents', []));
-                    cache.delete(makeKey('getAgentByName', [updated.name]));
                     return updated;
                 }
             }
@@ -389,8 +340,6 @@ export function createOperations(db: DbInstance):any {
                         ]
                     );
                     const updated = result.rows[0] as Agent;
-                    cache.delete(makeKey('getAllAgents', []));
-                    cache.delete(makeKey('getAgentByName', [updated.name]));
                     return updated;
                 }
             }
@@ -419,8 +368,6 @@ export function createOperations(db: DbInstance):any {
             };
 
             const [newAPI] = await db.insert(apis).values(cleanApiData).returning();
-            cache.delete(makeKey('getAllAPIs', []));
-            cache.delete(makeKey('getAPIByName', [cleanApiData.name]));
             return newAPI;
         },
 
@@ -429,11 +376,8 @@ export function createOperations(db: DbInstance):any {
          * @returns All APIs
          */
         async getAllAPIs(): Promise<API[]> {
-            const cacheKey = makeKey('getAllAPIs', []);
-            const cached = getCached<API[]>(cacheKey);
-            if (cached) return cached;
             const rows = await db.query.apis.findMany();
-            return setCached(cacheKey, rows, TTL_LONG);
+            return rows;
         },
 
         /**
@@ -443,13 +387,10 @@ export function createOperations(db: DbInstance):any {
          */
 
         async getAPIByName(name: string): Promise<API | undefined> {
-            const cacheKey = makeKey('getAPIByName', [name]);
-            const cached = getCached<API | undefined>(cacheKey);
-            if (cached !== undefined) return cached;
             const api = await db.query.apis.findFirst({
                 where: (a, { eq }) => eq(a.name, name),
             });
-            return setCached(cacheKey, api, TTL_LONG);
+            return api;
         },
 
         /**
@@ -491,8 +432,6 @@ export function createOperations(db: DbInstance):any {
                         ]
                     );
                     const updated = result.rows[0] as API;
-                    cache.delete(makeKey('getAllAPIs', []));
-                    cache.delete(makeKey('getAPIByName', [updated.name]));
                     return updated;
                 }
             }
@@ -516,8 +455,6 @@ export function createOperations(db: DbInstance):any {
                         ]
                     );
                     const updated = result.rows[0] as API;
-                    cache.delete(makeKey('getAllAPIs', []));
-                    cache.delete(makeKey('getAPIByName', [updated.name]));
                     return updated;
                 }
             }
@@ -542,8 +479,6 @@ export function createOperations(db: DbInstance):any {
                 metadata: toolData.metadata || null,
             };
             const [newTool] = await db.insert(tools).values(cleanToolData).returning();
-            cache.delete(makeKey('getAllTools', []));
-            cache.delete(makeKey('getToolByKey', [cleanToolData.key]));
             return newTool;
         },
 
@@ -552,11 +487,8 @@ export function createOperations(db: DbInstance):any {
          * @returns All tools
          */
         async getAllTools(): Promise<Tool[]> {
-            const cacheKey = makeKey('getAllTools', []);
-            const cached = getCached<Tool[]>(cacheKey);
-            if (cached) return cached;
             const rows = await db.query.tools.findMany();
-            return setCached(cacheKey, rows, TTL_LONG);
+            return rows;
         },
 
         /**
@@ -565,13 +497,10 @@ export function createOperations(db: DbInstance):any {
          * @returns The tool
          */
         async getToolByKey(key: string): Promise<Tool | undefined> {
-            const cacheKey = makeKey('getToolByKey', [key]);
-            const cached = getCached<Tool | undefined>(cacheKey);
-            if (cached !== undefined) return cached;
             const tool = await db.query.tools.findFirst({
                 where: (t, { eq }) => eq(t.key, key),
             });
-            return setCached(cacheKey, tool, TTL_LONG);
+            return tool;
         },
 
         /**
@@ -612,8 +541,6 @@ export function createOperations(db: DbInstance):any {
                         ]
                     );
                     const updated = result.rows[0] as Tool;
-                    cache.delete(makeKey('getAllTools', []));
-                    cache.delete(makeKey('getToolByKey', [updated.key]));
                     return updated;
                 }
             }
@@ -635,8 +562,6 @@ export function createOperations(db: DbInstance):any {
                         ]
                     );
                     const updated = result.rows[0] as Tool;
-                    cache.delete(makeKey('getAllTools', []));
-                    cache.delete(makeKey('getToolByKey', [updated.key]));
                     return updated;
                 }
             }
@@ -711,7 +636,6 @@ export function createOperations(db: DbInstance):any {
                     ]
                 );
                 const updated = result.rows[0] as User;
-                if (updated.externalId) cache.delete(makeKey('getUserByExternalId', [updated.externalId]));
                 return updated;
             }
             const [created] = await db
@@ -723,7 +647,6 @@ export function createOperations(db: DbInstance):any {
                     metadata: userData.metadata || null,
                 })
                 .returning();
-            if (created.externalId) cache.delete(makeKey('getUserByExternalId', [created.externalId]));
             return created;
         },
         /**
