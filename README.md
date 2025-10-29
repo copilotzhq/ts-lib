@@ -1,505 +1,349 @@
-# 🤖 Copilotz
+# Copilotz 🤖
 
-> Build sophisticated AI systems with agents, unified AI providers, and knowledge processing
+An event-driven AI agent framework built with TypeScript/Deno. Create multi-agent systems with tool calling, streaming, and persistent conversation threads.
 
-**Copilotz** is a comprehensive TypeScript/Deno framework for building AI-powered applications. It combines **multi-agent systems**, **unified AI provider access**, and **intelligent knowledge processing** into a single, powerful toolkit.
+## Features
 
-## ⚡ 30-Second Start
+- 🔄 **Event-Driven Architecture** - Async event queue with NEW_MESSAGE, LLM_CALL, and TOOL_CALL processors
+- 🤖 **Multi-Agent Support** - Coordinate multiple AI agents with agent-to-agent communication
+- 🔌 **Multiple LLM Providers** - OpenAI, Anthropic, Gemini, Groq, Deepseek, Ollama
+- 🛠️ **Built-in Tools** - File operations, command execution, thread/task management, agent questions
+- 🌐 **API & MCP Integration** - Auto-generate tools from OpenAPI specs and MCP servers
+- 💾 **Persistent Threads** - PostgreSQL/PGLite storage with message history
+- 📡 **Streaming Support** - Real-time token streaming with callbacks
+- 🎯 **Type-Safe** - Full TypeScript types with Drizzle ORM
+
+## Installation
+
+```bash
+# Using Deno
+deno add @copilotz/copilotz
+```
+
+## Quick Start
+
+### Single Interaction
 
 ```typescript
-import { run, getNativeTools } from "copilotz/agents";
+import { run } from "@copilotz/copilotz";
 
-const agent = {
-  name: "assistant",
-  role: "Helpful Assistant",
-  instructions: "Help users with their questions and tasks",
-  allowedTools: Object.keys(getNativeTools()),
-  llmOptions: {
-    provider: "openai",
-    model: "gpt-4o-mini"
-  }
-};
-
-// Single message
-await run({
-  initialMessage: { content: "Hello! Write a small file for me." },
-  agents: [agent]
-});
-
-// Interactive CLI
-await runCli({ agents: [agent] });
-```
-
-## 🌟 What You Can Build
-
-- **🏦 Financial Research Systems** - Multi-agent teams that research, analyze, and report on stocks
-- **📝 Content Creation Pipelines** - Research → Write → Review → Publish workflows
-- **🤝 Customer Support** - Intelligent routing and escalation between specialized agents
-- **🔧 Development Workflows** - Code generation, review, testing, and deployment automation
-- **📚 Knowledge Management** - Document ingestion, semantic search, and intelligent retrieval
-
-## 🏗️ Architecture Overview
-
-```
-copilotz/
-├── 🤖 agents/     # Multi-agent conversation framework
-├── 🧠 ai/         # Unified AI providers (LLM, embedding, speech, images)
-└── 📚 knowledge/  # Document processing and semantic search
-```
-
-Each module works independently or together:
-- Use **agents** for complex multi-step AI workflows
-- Use **ai** for direct access to 15+ AI providers
-- Use **knowledge** for document processing and RAG
-
-## 📦 Modules
-
-### 🤖 Agents
-Multi-agent conversation framework with persistent threads, tool execution, and event-driven processing.
-
-```typescript
-import { createThread, runCli } from "copilotz/agents";
-
-// Two agents collaborating
-await createThread(
-  { 
-    content: "@Researcher find info about TypeScript, then @Writer create a blog post",
-    participants: ["Researcher", "Writer"]
+const result = await run({
+  initialMessage: {
+    content: "Hello! What can you help me with?",
   },
-  { agents: [researcherAgent, writerAgent] }
-);
-```
-
-**Key Features:**
-- **Multi-agent conversations** with @mentions
-- **15+ built-in tools** (files, HTTP, system commands)
-- **API integration** via OpenAPI schemas
-- **MCP protocol** support
-- **Event-driven processing** with callbacks
-- **Persistent threads** and database storage
-
-### 🧠 AI
-Unified interface for 15+ AI providers across LLM, embedding, speech, and image generation.
-
-```typescript
-import { executeChat } from "copilotz/ai";
-
-// LLM with any provider
-const response = await executeChat({
-  messages: [{ role: "user", content: "Explain AI" }]
-}, {
-  provider: "anthropic",  // or openai, gemini, groq, etc.
-  model: "claude-3-5-sonnet-20241022"
-});
-```
-
-**Supported Providers:**
-- **LLM (6):** OpenAI, Anthropic, Google, Groq, DeepSeek, Ollama
-- **Embeddings (3):** OpenAI, Cohere, HuggingFace  
-- **Speech-to-Text (3):** OpenAI, AssemblyAI, Deepgram
-- **Text-to-Speech (3):** OpenAI, ElevenLabs, Azure
-- **Image Generation (3):** OpenAI, Stability AI, Replicate
-
-### 📚 Knowledge
-Document processing pipeline with extraction, chunking, embedding, and semantic search.
-
-```typescript
-import { knowledge } from "copilotz/knowledge";
-
-const kb = await knowledge();
-
-// Ingest documents
-await kb.ingest({
-  source: { type: "url", url: "https://example.com/doc.pdf" },
-  collectionId: "research-docs"
-});
-
-// Semantic search
-const results = await kb.search({
-  query: "machine learning techniques",
-  collectionId: "research-docs"
-});
-```
-
-## 🚀 Quick Examples
-
-### 1. Simple AI Call
-```typescript
-import { executeChat } from "copilotz/ai";
-
-const response = await executeChat({
-  messages: [{ role: "user", content: "Hello!" }]
-}, { provider: "openai", model: "gpt-4o-mini" });
-
-console.log(response.answer);
-```
-
-### 2. Agent Conversation
-```typescript
-import { createThread } from "copilotz/agents";
-
-await createThread(
-  { content: "Please read the README file and summarize it" },
-  { 
-    agents: [{
-      name: "assistant",
-      role: "Helper",
-      instructions: "Help with file operations",
-      allowedTools: ["read_file"],
-      llmOptions: { provider: "openai", model: "gpt-4o-mini" }
-    }]
-  }
-);
-```
-
-### 3. Multi-Agent Collaboration
-```typescript
-import { createThread } from "copilotz/agents";
-
-const researcher = {
-  name: "Researcher",
-  role: "Research Specialist",
-  instructions: "Research topics and gather information",
-  allowedTools: ["http_request", "fetch_text"],
-  allowedAgents: ["Writer"],
-  llmOptions: { provider: "openai", model: "gpt-4o" }
-};
-
-const writer = {
-  name: "Writer",
-  role: "Content Creator", 
-  instructions: "Write content based on research",
-  allowedTools: ["write_file"],
-  allowedAgents: ["Researcher"],
-  llmOptions: { provider: "anthropic", model: "claude-3-5-sonnet-20241022" }
-};
-
-await createThread(
-  {
-    content: "Research AI trends and write an article about them",
-    participants: ["Researcher"] // Researcher starts, can @mention Writer
-  },
-  { agents: [researcher, writer] }
-);
-```
-
-### 4. Production System (Stock Research)
-```typescript
-// See agents/examples/advanced/stock-researcher.ts for full implementation
-import { runCli, createDatabase } from "copilotz/agents";
-
-// Multi-agent financial research system
-const coordinatorAgent = { /* coordinates research */ };
-const researchAgent = { /* gathers financial data */ };
-const analysisAgent = { /* analyzes data */ };
-const reportAgent = { /* writes reports */ };
-
-await runCli({
-  participants: ["ResearchCoordinator"],
-  agents: [coordinatorAgent, researchAgent, analysisAgent, reportAgent],
-  apis: [alphaVantageAPI], // Auto-generated from OpenAPI schema
-  dbInstance: await createDatabase({ url: "postgresql://..." })
-});
-```
-
-## 🔧 Built-in Tools
-
-The agents module includes 15+ ready-to-use tools:
-
-**File System:**
-- `read_file`, `write_file`, `list_directory`, `search_files`
-
-**Network & APIs:**
-- `http_request`, `fetch_text`
-
-**System:**
-- `run_command`, `get_current_time`
-
-**Agent Communication:**
-- `ask_question`, `create_thread`, `end_thread`
-
-**Knowledge:**
-- `knowledge_search`
-
-**Utilities:**
-- `verbal_pause`, `wait`, `create_task`
-
-## 🌐 API Integration
-
-Auto-generate tools from OpenAPI schemas:
-
-```typescript
-import { createThread } from "copilotz/agents";
-
-const weatherAPI = {
-  name: "weather-api",
-  description: "Weather data service",
-  openApiSchema: await loadOpenAPISchema("./weather-api.json"),
-  auth: {
-    type: 'apiKey',
-    key: Deno.env.get("WEATHER_API_KEY"),
-    name: 'X-API-Key',
-    in: 'header'
-  }
-};
-
-const weatherAgent = {
-  name: "WeatherBot",
-  role: "Weather Specialist",
-  instructions: "Provide weather forecasts",
-  allowedTools: [
-    "getWeatherData",     // Auto-generated from OpenAPI
-    "getForecast",        // Auto-generated from OpenAPI
-    "getActiveAlerts"     // Auto-generated from OpenAPI
+  agents: [
+    {
+      id: "assistant-1",
+      name: "Assistant",
+      type: "agent",
+      instructions: "You are a helpful assistant.",
+      llmOptions: {
+        provider: "openai",
+        model: "gpt-4o-mini",
+        temperature: 0.7,
+      },
+    },
   ],
-  llmOptions: { provider: "openai", model: "gpt-4o" }
-};
+  dbConfig: { url: ":memory:" }, // or PostgreSQL URL
+  stream: true,
+  callbacks: {
+    onContentStream: (data) => {
+      if (!data.isComplete) {
+        Deno.stdout.writeSync(new TextEncoder().encode(data.token));
+      }
+    },
+  },
+});
 
-await createThread(
-  { content: "What's the weather in Seattle?", participants: ["WeatherBot"] },
-  { agents: [weatherAgent], apis: [weatherAPI] }
-);
+console.log(`Thread ID: ${result.threadId}`);
 ```
 
-## 🔌 MCP Integration
+### Interactive CLI
+
+```typescript
+import { runCLI } from "@copilotz/copilotz";
+
+await runCLI({
+  agents: [
+    {
+      id: "bot-1",
+      name: "Bot",
+      type: "agent",
+      instructions: "You are a helpful assistant.",
+      llmOptions: {
+        provider: "openai",
+        model: "gpt-4o-mini",
+      },
+      allowedTools: ["read_file", "write_file", "run_command"],
+    },
+  ],
+  dbConfig: { url: ":memory:" },
+});
+```
+
+## Configuration
+
+### Agent Configuration
+
+```typescript
+interface Agent {
+  id: string;
+  name: string;
+  type: "agent" | "user" | "tool" | "system";
+  instructions?: string;
+  description?: string;
+  personality?: string;
+  allowedAgents?: string[]; // Which agents this agent can communicate with
+  allowedTools?: string[]; // Which tools this agent can use
+  llmOptions: {
+    provider: "openai" | "anthropic" | "gemini" | "groq" | "deepseek" | "ollama";
+    model: string;
+    temperature?: number;
+    maxTokens?: number;
+    apiKey?: string; // Falls back to env vars
+  };
+}
+```
+
+### Database Configuration
+
+```typescript
+interface DatabaseConfig {
+  url?: string; // ":memory:" | "file:./db.db" | "postgresql://..."
+  syncUrl?: string; // Optional sync URL for PGLite
+  pgliteExtensions?: string[];
+}
+```
+
+## Native Tools
+
+Copilotz includes powerful built-in tools:
+
+- **File Operations**: `read_file`, `write_file`, `list_directory`, `search_files`
+- **System**: `run_command`, `wait`, `get_current_time`
+- **Agent Communication**: `ask_question`, `create_thread`, `end_thread`
+- **Task Management**: `create_task`
+- **Web**: `fetch_text`, `http_request`
+- **Knowledge**: `knowledge_search` (vector search)
+
+Enable tools per agent:
+
+```typescript
+const agent = {
+  // ...
+  allowedTools: ["read_file", "write_file", "run_command", "ask_question"],
+};
+```
+
+## Custom Tools
+
+Define custom tools:
+
+```typescript
+const customTool = {
+  key: "my_tool",
+  name: "My Tool",
+  description: "Does something useful",
+  inputSchema: {
+    type: "object",
+    properties: {
+      input: { type: "string", description: "Input parameter" },
+    },
+    required: ["input"],
+  },
+  execute: async (params, context) => {
+    return { result: `Processed: ${params.input}` };
+  },
+};
+
+await run({
+  // ...
+  tools: [customTool],
+});
+```
+
+## API Integration
+
+Auto-generate tools from OpenAPI specs:
+
+```typescript
+await run({
+  // ...
+  apis: [
+    {
+      name: "My API",
+      baseUrl: "https://api.example.com",
+      openApiSchema: { /* OpenAPI 3.0 spec */ },
+      headers: { "Authorization": "Bearer token" },
+    },
+  ],
+});
+```
+
+## MCP Servers
 
 Connect to Model Context Protocol servers:
 
 ```typescript
-import { createThread } from "copilotz/agents";
-
-const mcpServer = {
-  name: "database-server",
-  description: "Database query server",
-  transport: {
-    type: "stdio",
-    command: "npx",
-    args: ["@modelcontextprotocol/server-postgres"]
-  }
-};
-
-const dbAgent = {
-  name: "DatabaseExpert",
-  role: "Database Analyst", 
-  instructions: "Query databases and analyze data",
-  allowedTools: [
-    "database-server_query_database",  // MCP tool
-    "database-server_get_schema"       // MCP tool
+await run({
+  // ...
+  mcpServers: [
+    {
+      name: "filesystem",
+      transport: {
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      },
+    },
   ],
-  llmOptions: { provider: "openai", model: "gpt-4o" }
-};
-
-await createThread(
-  { content: "Show me the user table schema", participants: ["DatabaseExpert"] },
-  { agents: [dbAgent], mcpServers: [mcpServer] }
-);
+});
 ```
 
-## 🎛️ Advanced Features
+## Multi-Agent Communication
 
-### Real-time Streaming
-```typescript
-const callbacks = {
-  onTokenStream: (data) => {
-    process.stdout.write(data.token);
-  },
-  onToolCalling: (data) => {
-    console.log(`🔧 Calling: ${data.toolName}`);
-  }
-};
-
-await createThread(message, { agents, callbacks, stream: true });
-```
-
-### Callback Interceptors
-```typescript
-const callbacks = {
-  // Modify tool calls before execution
-  onToolCalling: async (data) => {
-    if (data.toolName === "http_request") {
-      return {
-        ...data,
-        toolInput: {
-          ...data.toolInput,
-          headers: { ...data.toolInput.headers, "Custom": "header" }
-        }
-      };
-    }
-  },
-
-  // Modify LLM responses
-  onLLMCompleted: async (data) => {
-    return {
-      ...data,
-      llmResponse: {
-        ...data.llmResponse,
-        answer: `😊 ${data.llmResponse.answer}`
-      }
-    };
-  }
-};
-```
-
-### Programmatic Agents
-Mix AI and deterministic logic:
+Agents can communicate with each other:
 
 ```typescript
-const calculatorAgent = {
-  name: "Calculator",
-  role: "Math Processor",
-  agentType: "programmatic", // Not AI-powered
-  processingFunction: async ({ message }) => {
-    const expr = message.content.match(/(\d+)\s*([+\-*/])\s*(\d+)/);
-    if (expr) {
-      const [, a, op, b] = expr;
-      const result = eval(`${a} ${op} ${b}`);
-      return {
-        content: `The answer is: ${result}`,
-        shouldContinue: true
-      };
-    }
-    return {
-      content: "I can help with basic math like '5 + 3'",
-      shouldContinue: true  
-    };
-  }
-};
-```
-
-### Persistent Conversations
-```typescript
-// Start a conversation
-await createThread(
-  { 
-    threadId: "project-planning-session",
-    content: "Let's plan our new feature",
-    participants: ["ProductManager", "Engineer"]
-  },
-  { agents: [pmAgent, engineerAgent] }
-);
-
-// Continue later with same threadId
-await createThread(
+const agents = [
   {
-    threadId: "project-planning-session", // Same ID
-    content: "Let's review yesterday's decisions"
+    id: "researcher",
+    name: "Researcher",
+    instructions: "Research topics thoroughly",
+    allowedTools: ["fetch_text", "ask_question"],
+    allowedAgents: ["Writer"], // Can communicate with Writer
+    // ...
   },
-  { agents: [pmAgent, engineerAgent] }
-);
+  {
+    id: "writer",
+    name: "Writer",
+    instructions: "Write clear articles",
+    allowedTools: ["write_file"],
+    // ...
+  },
+];
+
+// Researcher can ask Writer questions using ask_question tool
+// Or use @mentions in messages: "Hey @Writer, can you help?"
 ```
 
-## 🧪 Examples
+## Event System
 
-**Beginner:**
-- [`simple-assistant.ts`](./agents/examples/simple-assistant.ts) - Basic single agent
-- [`two-assistants.ts`](./agents/examples/two-assistants.ts) - Agent-to-agent communication
+Copilotz uses an event queue with three core processors:
 
-**Intermediate:**
-- [`programmatic-agent-example.ts`](./agents/examples/programmatic-agent-example.ts) - Mixed AI/programmatic agents
-- [`weather-agent.ts`](./agents/examples/api/weather-agent.ts) - API integration
+1. **NEW_MESSAGE** - Handles incoming messages, routes to agents
+2. **LLM_CALL** - Executes LLM requests with streaming
+3. **TOOL_CALL** - Validates and executes tool calls
 
-**Advanced:**
-- [`stock-researcher.ts`](./agents/examples/advanced/stock-researcher.ts) - Financial research system
-- [`authentication-examples.ts`](./agents/examples/api/authentication-examples.ts) - Secure API access
-- [`mcp-client.ts`](./agents/examples/mcp/mcp-client.ts) - MCP protocol integration
+Customize behavior with callbacks:
 
-## 🚀 Getting Started
+```typescript
+await run({
+  // ...
+  callbacks: {
+    onContentStream: (data) => {
+      console.log(`[${data.agentName}] ${data.token}`);
+    },
+    onEvent: async (event) => {
+      console.log(`Event: ${event.type}`, event.payload);
+      // Optionally return custom events
+      return { producedEvents: [/* custom events */] };
+    },
+  },
+});
+```
 
-### Prerequisites
-- **Deno 2.0+**
-- **PostgreSQL** (optional, uses in-memory SQLite by default)
-- **API Keys** for providers you want to use
+## Thread Management
 
-### Installation
+Threads maintain conversation context:
+
+```typescript
+// Create a new thread
+const { threadId } = await run({
+  initialMessage: {
+    content: "Start conversation",
+    threadName: "My Thread",
+    participants: ["Agent1", "Agent2"],
+  },
+  // ...
+});
+
+// Continue existing thread
+await run({
+  initialMessage: {
+    content: "Follow-up message",
+    threadId: threadId, // Reuse thread
+  },
+  // ...
+});
+
+// Use external IDs for stable references
+await run({
+  initialMessage: {
+    threadExternalId: "user-session-123",
+    content: "Message",
+  },
+  // ...
+});
+```
+
+## Environment Variables
+
 ```bash
-# Import in your Deno project
-import { createThread, runCli } from "copilotz/agents";
-import { executeChat } from "copilotz/ai";
-import { knowledge } from "copilotz/knowledge";
+# LLM Provider API Keys
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+GROQ_API_KEY=...
+DEEPSEEK_API_KEY=...
+
+# Database
+DATABASE_URL=postgresql://...
+SYNC_DATABASE_URL=postgresql://... # Optional PGLite sync
+
+# Debug
+COPILOTZ_DB_DEBUG=1
 ```
 
-### Environment Variables
-```bash
-# LLM Providers
-DEFAULT_OPENAI_KEY=sk-...
-DEFAULT_ANTHROPIC_KEY=sk-ant-...
-DEFAULT_GEMINI_KEY=...
-DEFAULT_GROQ_KEY=...
+## Architecture
 
-# Other AI Services  
-DEFAULT_ELEVENLABS_KEY=...
-DEFAULT_STABILITY_KEY=sk-...
-
-# Database (optional)
-DATABASE_URL=postgresql://user:pass@host/db
+```
+┌─────────────┐
+│   run()     │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│ Event Queue │
+└──────┬──────┘
+       │
+       ├──► NEW_MESSAGE Processor ──► Route to agents
+       │
+       ├──► LLM_CALL Processor ──► Call LLM with streaming
+       │
+       └──► TOOL_CALL Processor ──► Execute tools
+                                    └──► Native / API / MCP
 ```
 
-### Quick Test
-```bash
-# Run a simple assistant
-deno run --allow-all https://deno.land/x/copilotz/agents/examples/simple-assistant.ts
-
-# Test AI providers
-deno run --allow-all -e "
-import { executeChat } from 'copilotz/ai';
-const response = await executeChat({
-  messages: [{ role: 'user', content: 'Hello!' }]
-}, { provider: 'openai', model: 'gpt-4o-mini' });
-console.log(response.answer);
-"
-```
-
-## 📚 Documentation
-
-- **[API Reference](./agents/docs/API_REFERENCE.md)** - Complete technical reference
-- **[Tools Guide](./agents/docs/TOOLS.md)** - Built-in tools documentation
-- **[Advanced Patterns](./agents/docs/PROGRAMMATIC_AGENTS_AND_OVERRIDES.md)** - Programmatic agents and interceptors
-- **[Quick Start](./agents/docs/QUICK_START.md)** - Get running in 2 minutes
-
-## 🧪 Testing
+## Testing
 
 ```bash
-# Run all tests
-deno test --allow-all
+# Run unit tests
+deno test --allow-env --allow-net --allow-read
 
-# Run specific module tests
-deno test --allow-all agents/tests/
-deno test --allow-all ai/tests/
+# Manual CLI test
+deno run --allow-env --allow-net --allow-read manual-cli-test.ts
 ```
 
-## 🎯 Use Cases
+## License
 
-### Enterprise Applications
-- **Financial Research:** Multi-agent systems for investment analysis
-- **Customer Support:** Intelligent routing and escalation
-- **Content Operations:** Research → Write → Review → Publish pipelines
-- **DevOps Automation:** Code generation, review, testing, deployment
+MIT
 
-### Developer Productivity
-- **Code Assistants:** Context-aware programming help
-- **Documentation:** Auto-generate docs from code
-- **Testing:** Automated test generation and execution
-- **Debugging:** AI-powered issue diagnosis
+## Contributing
 
-### Knowledge Management
-- **Document Processing:** Extract, chunk, embed, and search
-- **RAG Systems:** Retrieval-augmented generation
-- **Research Workflows:** Automated information gathering
-- **Q&A Systems:** Intelligent document querying
-
-## 🤝 Contributing
-
-We welcome contributions! Areas for enhancement:
-
-- **Custom Tools** - Add domain-specific capabilities
-- **New Providers** - Support additional AI services
-- **Agent Types** - Create new agent behavior patterns
-- **Integrations** - Connect with external systems
-
-## 📄 License
-
-[MIT License](./LICENSE)
+Contributions welcome! Please open an issue or PR.
 
 ---
 
-**Ready to build the future?** Start with a [simple example](./agents/examples/simple-assistant.ts) or dive into the [advanced stock research system](./agents/examples/advanced/stock-researcher.ts)! 🚀
+Built with ❤️ using [Deno](https://deno.com) and [Drizzle ORM](https://orm.drizzle.team)
+
