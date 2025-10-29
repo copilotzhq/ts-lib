@@ -30,21 +30,69 @@ async function prepareDb(context: ChatContext): Promise<CopilotzDb> {
     return db;
 }
 
-function resolveParticipants(initialMessage: ChatInitMessage, context: ChatContext): { senderId: string; participants: string[] } {
-    const senderId = initialMessage.senderId || 'user';
-    const participants = (initialMessage.participants && initialMessage.participants.length > 0)
+function resolveParticipants(
+    initialMessage: ChatInitMessage,
+    context: ChatContext
+): { senderId: string; senderType: MessagePayload["senderType"]; participants: string[] } {
+    const agents = context.agents || [];
+
+    const findAgentByIdentifier = (identifier?: string) => {
+        if (!identifier) return undefined;
+        return agents.find(agent =>
+            agent.name === identifier ||
+            agent.id === identifier ||
+            agent.externalId === identifier
+        );
+    };
+
+    const requestedParticipants = (initialMessage.participants && initialMessage.participants.length > 0)
         ? initialMessage.participants
-        : (context.agents ? context.agents.map(a => a.name) : []);
-    const uniqueParticipants = Array.from(new Set([senderId, ...participants]));
-    return { senderId, participants: uniqueParticipants };
+        : agents.map(a => a.name);
+
+    const normalizedParticipants = requestedParticipants
+        .map(participant => {
+            const found = findAgentByIdentifier(participant);
+            return found ? found.name : participant;
+        })
+        .filter((participant): participant is string => Boolean(participant));
+
+    let senderType = initialMessage.senderType;
+    let senderId = initialMessage.senderId;
+
+    if (senderType === 'agent') {
+        const matchedAgent = findAgentByIdentifier(senderId);
+        if (matchedAgent) {
+            senderId = matchedAgent.name;
+        } else if (!senderId && agents.length > 0) {
+            senderId = agents[0].name;
+        }
+    } else if (!senderType && senderId) {
+        const matchedAgent = findAgentByIdentifier(senderId);
+        if (matchedAgent) {
+            senderType = 'agent';
+            senderId = matchedAgent.name;
+        }
+    }
+
+    if (!senderId) {
+        senderId = 'user';
+    }
+
+    if (!senderType) {
+        senderType = senderId !== 'user' && Boolean(findAgentByIdentifier(senderId)) ? 'agent' : 'user';
+    }
+
+    const uniqueParticipants = Array.from(new Set([senderId, ...normalizedParticipants]));
+
+    return { senderId, senderType, participants: uniqueParticipants };
 }
 
 async function ensureThread(
     ops: CopilotzDb['operations'],
     initialMessage: ChatInitMessage,
     context: ChatContext
-): Promise<{ threadId: string; senderId: string }> {
-    const { senderId, participants } = resolveParticipants(initialMessage, context);
+): Promise<{ threadId: string; senderId: string; senderType: MessagePayload["senderType"] }> {
+    const { senderId, senderType, participants } = resolveParticipants(initialMessage, context);
 
     let threadId: string | undefined = initialMessage.threadId;
     if (!threadId && initialMessage.threadExternalId) {
@@ -60,7 +108,7 @@ async function ensureThread(
         parentThreadId: initialMessage.parentThreadId,
     } as NewThread);
 
-    return { threadId, senderId };
+    return { threadId, senderId, senderType };
 }
 
 function buildWorkerContext(context: ChatContext, db: CopilotzDb | undefined, stream: boolean): ChatContext {
@@ -209,12 +257,12 @@ export async function run({
     const context: ChatContext = { agents, tools, apis, mcpServers, callbacks, dbConfig, dbInstance, stream: stream ?? false };
     const db = await prepareDb(context);
     const ops = db.operations;
-    const { threadId, senderId } = await ensureThread(ops, { ...initialMessage, participants: initialMessage.participants || participants }, context);
+    const { threadId, senderId, senderType } = await ensureThread(ops, { ...initialMessage, participants: initialMessage.participants || participants }, context);
     const workerContext = buildWorkerContext(context, db, context.stream ?? false);
 
     const { queueId } = await enqueueInitialMessage(ops, threadId, {
         senderId,
-        senderType: initialMessage.senderType || 'user',
+        senderType: initialMessage.senderType || senderType,
         content: initialMessage.content,
     } as MessagePayload);
 

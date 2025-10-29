@@ -85,7 +85,7 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
 
             const toolCalls = payload.toolCalls;
 
-            // Emit tool calls as events without executing here
+            // Emit tool calls as events
             if (toolCalls && toolCalls.length > 0) {
                 toolCalls.forEach((call, i: number) => {
                     const callId = call.id || `${call.function?.name || 'call'}_${i}`;
