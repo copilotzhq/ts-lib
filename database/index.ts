@@ -23,7 +23,7 @@ import {
 
 
 // Import Operations
-import { createOperations } from "./operations/index.ts";
+import { createOperations, type Operations } from "./operations/index.ts";
 
 
 // Import Migrations File
@@ -70,7 +70,7 @@ const createDbInstance = async (finalConfig: DatabaseConfig, debug: boolean, cac
   return dbInstance;
 }
 
-export type CopilotzDb = DbInstance & { operations: ReturnType<typeof createOperations> };
+export type CopilotzDb = DbInstance & { operations: Operations };
 
 interface Connect {
   (finalConfig: DatabaseConfig, debug: boolean, cacheKey: string): Promise<CopilotzDb>;

@@ -7,7 +7,7 @@ type EventType =
   | "LLM_CALL"
   | string;
 
-export const queue = pgTable("queue", {
+export const queue: any = pgTable("queue", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id").notNull(),
   eventType: varchar("event_type", { length: 64 }).notNull().$type<EventType>(),
@@ -22,6 +22,7 @@ export const queue = pgTable("queue", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
 
 export type Queue = typeof queue.$inferSelect;
 export type NewQueue = typeof queue.$inferInsert;

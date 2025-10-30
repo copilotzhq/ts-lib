@@ -5,7 +5,7 @@ import type { DbInstance } from "../index.ts";
 /**
  * Database operations factory - creates operation functions bound to a specific database instance
  */
-export function createOperations(db: DbInstance) {
+export function createOperations(db: DbInstance):any {
 
     const MAX_EXPIRED_CLEANUP_BATCH = 100;
     const EXPIRED_RETENTION_INTERVAL = "1 day";
