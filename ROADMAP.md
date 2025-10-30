@@ -19,14 +19,6 @@
 - Tool surface: new native tools `ingest_from_connector`, `ingest_document`, `search_documents`, `delete_document` with validation + auth scopes.
 - Documentation + samples: walkthrough of enabling vector storage, configuring connectors, demo agent using ingestion + retrieval in end-to-end flow.
 
-## Auto-expiring Queue Events
-
-- Schema changes: add `expires_at TIMESTAMP`, optional `ttl_ms`, `status='expired'`, indexes on `(status, expires_at)`.
-- API: allow `enqueueEvent` callers to set TTL; provide defaults + config knobs; expose TTL in queue inspection endpoints.
-- Worker logic: in `getNextPendingQueueItem`, skip expired rows, mark them `expired`, optionally hard-delete old expired rows with bounded DELETE tied to queue access.
-- When `onEvent` overrides the default processor, persist queue item status as `overwritten` (new enum) before finishing to aid diagnostics and replay decisions.
-- Surface metrics/logs for expirations and overrides, and expose admin utilities to inspect, replay, or purge expired/overwritten items.
-
 ## MCP Streaming Transport
 
 - Define transport interface for MCP connectors (`send`, `onMessage`, `close`) and keep existing stdio implementation as a concrete adapter.
