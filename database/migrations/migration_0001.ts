@@ -146,13 +146,14 @@ CREATE TABLE IF NOT EXISTS "queue" (
     "updated_at" timestamp DEFAULT now() NOT NULL
 );
 
--- Alter Table Statements
+-- Add columns to queue table (idempotent for older databases)
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "ttl_ms" integer;
 
--- Add columns to queue table
-ALTER TABLE "queue"
-  ADD COLUMN IF NOT EXISTS "ttl_ms" integer,
-  ADD COLUMN IF NOT EXISTS "expires_at" timestamp,
-  ADD COLUMN IF NOT EXISTS "status" varchar DEFAULT 'pending' NOT NULL,
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "expires_at" timestamp;
+
+ALTER TABLE IF EXISTS "queue"
   ADD COLUMN IF NOT EXISTS "metadata" jsonb;
 
 -- Add Foreign Key Constraints

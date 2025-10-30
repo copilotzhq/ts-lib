@@ -138,6 +138,8 @@ CREATE TABLE IF NOT EXISTS "queue" (
     "parent_event_id" uuid,
     "trace_id" varchar(255),
     "priority" integer,
+    "ttl_ms" integer,
+    "expires_at" timestamp,
     "status" varchar DEFAULT 'pending' NOT NULL,
     "metadata" jsonb,
     "created_at" timestamp DEFAULT now() NOT NULL,
@@ -160,11 +162,14 @@ DO $$ BEGIN
 
 -- Alter Table Statements
 
--- Add columns to queue table
-ALTER TABLE "queue"
-  ADD COLUMN IF NOT EXISTS "ttl_ms" integer,
-  ADD COLUMN IF NOT EXISTS "expires_at" timestamp,
-  ADD COLUMN IF NOT EXISTS "status" varchar DEFAULT 'pending' NOT NULL,
+-- Add columns to queue table (idempotent for older databases)
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "ttl_ms" integer;
+
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "expires_at" timestamp;
+
+ALTER TABLE IF EXISTS "queue"
   ADD COLUMN IF NOT EXISTS "metadata" jsonb;
 
 
