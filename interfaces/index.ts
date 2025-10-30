@@ -58,6 +58,8 @@ export interface ChatContext {
     callbacks?: ChatCallbacks;
     dbInstance?: CopilotzDb;
     dbConfig?: DatabaseConfig;
+    threadMetadata?: Record<string, unknown>;
+    queueTTL?: number;
 }
 
 // Callback types that can return values for interception
@@ -83,11 +85,13 @@ export interface ChatInitMessage {
     threadName?: string;
     parentThreadId?: string;
     participants?: string[]; // Filter agents available for this conversation
+    threadMetadata?: Record<string, unknown>;
+    queueTTL?: number;
     user?: {
         id?: string;
         externalId?: string;
         name?: string;
         email?: string;
-        metadata?: any;
+        metadata?: Record<string, unknown>;
     };
 }

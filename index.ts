@@ -91,8 +91,10 @@ async function ensureThread(
     ops: CopilotzDb['operations'],
     initialMessage: ChatInitMessage,
     context: ChatContext
-): Promise<{ threadId: string; senderId: string; senderType: MessagePayload["senderType"] }> {
+): Promise<{ threadId: string; senderId: string; senderType: MessagePayload["senderType"]; queueTTL?: number }> {
     const { senderId, senderType, participants } = resolveParticipants(initialMessage, context);
+    const threadMetadata = initialMessage.threadMetadata ?? context.threadMetadata;
+    const queueTTL = initialMessage.queueTTL ?? context.queueTTL;
 
     let threadId: string | undefined = initialMessage.threadId;
     if (!threadId && initialMessage.threadExternalId) {
@@ -106,9 +108,10 @@ async function ensureThread(
         participants,
         externalId: initialMessage.threadExternalId || undefined,
         parentThreadId: initialMessage.parentThreadId,
-    } as NewThread);
+        metadata: threadMetadata,
+    });
 
-    return { threadId, senderId, senderType };
+    return { threadId, senderId, senderType, queueTTL };
 }
 
 function buildWorkerContext(context: ChatContext, db: CopilotzDb | undefined, stream: boolean): ChatContext {
@@ -122,9 +125,14 @@ function buildWorkerContext(context: ChatContext, db: CopilotzDb | undefined, st
 async function enqueueInitialMessage(
     ops: CopilotzDb['operations'],
     threadId: string,
-    payload: MessagePayload
+    payload: MessagePayload,
+    ttlMs?: number
 ): Promise<{ queueId: string }> {
-    const queued = await ops.addToQueue(threadId, { eventType: 'NEW_MESSAGE', payload });
+    const queued = await ops.addToQueue(threadId, {
+        eventType: 'NEW_MESSAGE',
+        payload,
+        ttlMs,
+    });
     return { queueId: queued.id };
 }
 
@@ -257,14 +265,14 @@ export async function run({
     const context: ChatContext = { agents, tools, apis, mcpServers, callbacks, dbConfig, dbInstance, stream: stream ?? false };
     const db = await prepareDb(context);
     const ops = db.operations;
-    const { threadId, senderId, senderType } = await ensureThread(ops, { ...initialMessage, participants: initialMessage.participants || participants }, context);
+    const { threadId, senderId, senderType, queueTTL } = await ensureThread(ops, { ...initialMessage, participants: initialMessage.participants || participants }, context);
     const workerContext = buildWorkerContext(context, db, context.stream ?? false);
 
     const { queueId } = await enqueueInitialMessage(ops, threadId, {
         senderId,
         senderType: initialMessage.senderType || senderType,
         content: initialMessage.content,
-    } as MessagePayload);
+    } as MessagePayload, queueTTL);
 
     await startThreadEventWorker(db, threadId, workerContext);
 

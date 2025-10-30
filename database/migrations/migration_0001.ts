@@ -138,6 +138,8 @@ CREATE TABLE IF NOT EXISTS "queue" (
     "parent_event_id" uuid,
     "trace_id" varchar(255),
     "priority" integer,
+    "ttl_ms" integer,
+    "expires_at" timestamp,
     "status" varchar DEFAULT 'pending' NOT NULL,
     "metadata" jsonb,
     "created_at" timestamp DEFAULT now() NOT NULL,
@@ -168,6 +170,7 @@ CREATE INDEX IF NOT EXISTS "idx_messages_thread_id_created_at" ON "messages" ("t
 -- Queue
 CREATE INDEX IF NOT EXISTS "idx_queue_thread_status" ON "queue" ("thread_id", "status");
 CREATE INDEX IF NOT EXISTS "idx_queue_pending_order" ON "queue" ("thread_id", (COALESCE("priority", 0)) DESC, "created_at" ASC, "id" ASC) WHERE "status" = 'pending';
+CREATE INDEX IF NOT EXISTS "idx_queue_status_expires_at" ON "queue" ("status", "expires_at");
 
 -- Agents
 CREATE INDEX IF NOT EXISTS "idx_agents_name" ON "agents" ("name");

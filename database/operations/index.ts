@@ -5,8 +5,35 @@ import type { DbInstance } from "../index.ts";
 /**
  * Database operations factory - creates operation functions bound to a specific database instance
  */
-export function createOperations(db: DbInstance):any {
-    
+export function createOperations(db: DbInstance) {
+
+    const MAX_EXPIRED_CLEANUP_BATCH = 100;
+    const EXPIRED_RETENTION_INTERVAL = "1 day";
+
+    const cleanupExpiredQueueItems = async (): Promise<void> => {
+        await db.queryRaw(
+            `DELETE FROM queue
+             WHERE id IN (
+                SELECT id FROM queue
+                WHERE status = 'expired'
+                  AND expires_at IS NOT NULL
+                  AND expires_at < NOW() - INTERVAL '${EXPIRED_RETENTION_INTERVAL}'
+                LIMIT ${MAX_EXPIRED_CLEANUP_BATCH}
+             )`
+        );
+    };
+
+    const markQueueItemExpired = async (queueId: string): Promise<void> => {
+        await db.queryRaw(
+            `UPDATE queue
+             SET status = 'expired',
+                 expires_at = COALESCE(expires_at, NOW()),
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [queueId]
+        );
+        await cleanupExpiredQueueItems();
+    };
 
     return {
         /** Queue operations 
@@ -15,7 +42,27 @@ export function createOperations(db: DbInstance):any {
          * @param event - The event to add to the queue
          * @returns The new queue item
          */
-        async addToQueue(threadId: string, event: { eventType: string; payload: object; parentEventId?: string; traceId?: string; priority?: number; metadata?: Record<string, unknown> }): Promise<Queue> {
+        async addToQueue(threadId: string, event: {
+            eventType: string;
+            payload: Queue["payload"];
+            parentEventId?: string;
+            traceId?: string;
+            priority?: number;
+            metadata?: Queue["metadata"] | undefined;
+            ttlMs?: number;
+            expiresAt?: Date | string | null;
+            status?: Queue["status"];
+        }): Promise<Queue> {
+            const now = Date.now();
+            const ttlMs = typeof event.ttlMs === "number" && event.ttlMs > 0 ? Math.floor(event.ttlMs) : null;
+
+            let expiresAt: Date | null = null;
+            if (event.expiresAt) {
+                expiresAt = new Date(event.expiresAt);
+            } else if (ttlMs) {
+                expiresAt = new Date(now + ttlMs);
+            }
+
             const [newQueueItem] = await db.insert(queue).values({
                 threadId,
                 eventType: event.eventType,
@@ -23,8 +70,13 @@ export function createOperations(db: DbInstance):any {
                 parentEventId: event.parentEventId || null,
                 traceId: event.traceId || null,
                 priority: event.priority || null,
-                metadata: event.metadata || null,
+                ttlMs,
+                expiresAt,
+                status: event.status || 'pending',
+                metadata: event.metadata ?? null,
             }).returning();
+
+            await cleanupExpiredQueueItems();
             return newQueueItem;
         },
         /**
@@ -45,15 +97,34 @@ export function createOperations(db: DbInstance):any {
          * @returns The next pending queue item
          */
         async getNextPendingQueueItem(threadId: string): Promise<Queue | undefined> {
-            const item = await db.query.queue.findFirst({
-                where: (q, { eq, and }) => and(eq(q.threadId, threadId), eq(q.status, "pending")),
-                orderBy: (q, { desc, asc, sql }) => [
-                    desc(sql`COALESCE(${q.priority}, 0)`),
-                    asc(q.createdAt),
-                    asc(q.id)
-                ],
-            });
-            return item;
+            while (true) {
+                const item = await db.query.queue.findFirst({
+                    where: (q, { eq, and }) => and(eq(q.threadId, threadId), eq(q.status, "pending")),
+                    orderBy: (q, { desc, asc, sql }) => [
+                        desc(sql`COALESCE(${q.priority}, 0)`),
+                        asc(q.createdAt),
+                        asc(q.id)
+                    ],
+                });
+
+                if (!item) {
+                    await cleanupExpiredQueueItems();
+                    return undefined;
+                }
+
+                if (item.expiresAt) {
+                    const expiresAtValue = item.expiresAt instanceof Date
+                        ? item.expiresAt.getTime()
+                        : new Date(item.expiresAt).getTime();
+
+                    if (!Number.isNaN(expiresAtValue) && expiresAtValue <= Date.now()) {
+                        await markQueueItemExpired(item.id);
+                        continue;
+                    }
+                }
+
+                return item;
+            }
         },
 
         /**
@@ -61,7 +132,7 @@ export function createOperations(db: DbInstance):any {
          * @param queueId - The ID of the queue item to update
          * @param status - The new status of the queue item
          */
-        async updateQueueItemStatus(queueId: string, status: "processing" | "completed" | "failed"): Promise<void> {
+        async updateQueueItemStatus(queueId: string, status: "processing" | "completed" | "failed" | "expired" | "overwritten"): Promise<void> {
             await db.queryRaw(`UPDATE queue SET status = $1, updated_at = NOW() WHERE id = $2`, [status, queueId]);
         },
         /**
@@ -196,9 +267,58 @@ export function createOperations(db: DbInstance):any {
             let thread = await db.query.threads.findFirst({
                 where: (t, { eq }) => eq(t.id, threadId),
             });
+
             if (!thread) {
-                [thread] = await db.insert(threads).values({ id: threadId, ...threadData }).returning();
+                const participants = Array.isArray(threadData.participants)
+                    ? Array.from(new Set(threadData.participants))
+                    : threadData.participants;
+
+                const metadata = threadData.metadata !== undefined ? threadData.metadata : null;
+
+                [thread] = await db.insert(threads).values({
+                    id: threadId,
+                    ...threadData,
+                    participants,
+                    metadata,
+                }).returning();
+                return thread;
             }
+
+            const updates: string[] = [];
+            const params: unknown[] = [];
+
+            if (Array.isArray(threadData.participants) && threadData.participants.length > 0) {
+                const existing = Array.isArray(thread.participants) ? thread.participants : [];
+                const incoming = Array.from(new Set(threadData.participants));
+
+                const participantsChanged = JSON.stringify(existing) !== JSON.stringify(incoming);
+
+                if (participantsChanged) {
+                    updates.push(`participants = $${updates.length + 1}`);
+                    params.push(JSON.stringify(incoming));
+                }
+            }
+
+            if (threadData.metadata !== undefined) {
+                const incomingMetadata = threadData.metadata;
+                const existingMetadata = thread.metadata ?? null;
+                const metadataChanged = JSON.stringify(existingMetadata) !== JSON.stringify(incomingMetadata);
+
+                if (metadataChanged) {
+                    updates.push(`metadata = $${updates.length + 1}`);
+                    params.push(incomingMetadata === null ? null : JSON.stringify(incomingMetadata));
+                }
+            }
+
+            if (updates.length > 0) {
+                const setClause = `${updates.join(', ')}, updated_at = NOW()`;
+                const result = await db.queryRaw(
+                    `UPDATE threads SET ${setClause} WHERE id = $${updates.length + 1} RETURNING *`,
+                    [...params, threadId]
+                );
+                thread = result.rows[0] as Thread;
+            }
+
             return thread;
         },
 

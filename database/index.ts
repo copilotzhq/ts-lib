@@ -103,7 +103,6 @@ export async function createDatabase(config?: DatabaseConfig): Promise<CopilotzD
 
   const url = config?.url || Deno.env.get("DATABASE_URL") || ":memory:";
 
-
   const finalConfig: DatabaseConfig = {
     url,
     syncUrl: config?.syncUrl || Deno.env.get("SYNC_DATABASE_URL"),

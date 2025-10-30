@@ -55,14 +55,15 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
 
         const payload = event.payload as MessagePayload;
 
-        const incomingMsg: NewMessage = {
-            threadId: event.threadId,
-            senderId: payload.senderId,
-            senderType: payload.senderType,
-            content: payload.content || "",
-            toolCallId: payload.toolCallId,
-            toolCalls: payload.toolCalls,
-        };
+    const incomingMsg: NewMessage = {
+        threadId: event.threadId,
+        senderId: payload.senderId,
+        senderType: payload.senderType,
+        content: payload.content || "",
+        toolCallId: payload.toolCallId,
+        toolCalls: payload.toolCalls,
+        metadata: payload.metadata,
+    };
 
         // Persist incoming message before processing
         ops.createMessage(incomingMsg);

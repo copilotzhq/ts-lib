@@ -7,7 +7,7 @@ type EventType =
   | "LLM_CALL"
   | string;
 
-export const queue: any = pgTable("queue", {
+export const queue = pgTable("queue", {
   id: uuid("id").primaryKey().defaultRandom(),
   threadId: uuid("thread_id").notNull(),
   eventType: varchar("event_type", { length: 64 }).notNull().$type<EventType>(),
@@ -15,8 +15,10 @@ export const queue: any = pgTable("queue", {
   parentEventId: uuid("parent_event_id"),
   traceId: varchar("trace_id", { length: 255 }),
   priority: integer("priority"),
-  status: varchar("status", { enum: ["pending", "processing", "completed", "failed"] }).default("pending").notNull(),
-  metadata: jsonb("metadata").$type<Record<string, any>>(),
+  ttlMs: integer("ttl_ms"),
+  expiresAt: timestamp("expires_at"),
+  status: varchar("status", { enum: ["pending", "processing", "completed", "failed", "expired", "overwritten"] }).default("pending").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

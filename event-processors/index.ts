@@ -30,12 +30,9 @@ export type ProcessorDeps = {
     context: ChatContext;
 }
 
-type EventProcessors = {
-    [key in EventType]: EventProcessor<
-        LLMCallPayload | LLMResultPayload | MessagePayload | ToolCallPayload | ToolResultPayload,
-        ProcessorDeps
-    >;
-}
+type Operations = CopilotzDb["operations"];
+
+type EventProcessors = Record<EventType, EventProcessor<unknown, ProcessorDeps>>;
 
 // Processor registry
 const processors: EventProcessors = {
@@ -49,11 +46,13 @@ export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<voi
     const ops = db.operations;
     await ops.addToQueue(event.threadId, {
         eventType: event.type,
-        payload: event.payload as object,
-        parentEventId: event.parentEventId,
-        traceId: event.traceId,
-        priority: event.priority,
-        metadata: undefined,
+        payload: event.payload,
+        parentEventId: event.parentEventId ?? undefined,
+        traceId: event.traceId ?? undefined,
+        priority: event.priority ?? undefined,
+        metadata: (event.metadata ?? undefined) as Record<string, unknown> | undefined,
+        ttlMs: event.ttlMs ?? undefined,
+        status: event.status ?? undefined,
     });
 }
 
@@ -62,13 +61,16 @@ export async function startThreadEventWorker(
     threadId: string,
     context: ChatContext
 ): Promise<void> {
+    const workerContext: WorkerContext = context.callbacks?.onEvent
+        ? { callbacks: { onEvent: context.callbacks.onEvent } }
+        : {};
+
     await startEventWorker<ProcessorDeps>(
         db,
         threadId,
-        { callbacks: { onEvent: (context.callbacks as any)?.onEvent as any } },
-        processors as any,
-        async (_queueOps: any, event: Event) => {
-            const ops = db.operations
+        workerContext,
+        processors,
+        async (ops: Operations, event: Event) => {
             const thread = await ops.getThreadById(event.threadId);
             if (!thread) throw new Error(`Thread not found: ${event.threadId}`);
             return { ops, db, thread, context } as ProcessorDeps;
@@ -98,14 +100,14 @@ export async function startEventWorker<TDeps>(
     db: CopilotzDb,
     threadId: string,
     context: WorkerContext,
-    processors: Record<string, EventProcessor<any, TDeps>>,
-    buildDeps: (ops: any, event: Event, context: WorkerContext) => Promise<TDeps> | TDeps,
+    processors: Record<string, EventProcessor<unknown, TDeps>>,
+    buildDeps: (ops: Operations, event: Event, context: WorkerContext) => Promise<TDeps> | TDeps,
     shouldAcceptEvent?: (event: Event) => boolean
 ): Promise<void> {
 
     const dbInstance = db || await createDatabase({});
 
-    const ops = dbInstance.operations;
+    const ops = dbInstance.operations as Operations;
 
     const processing = await ops.getProcessingQueueItem(threadId);
 
@@ -126,6 +128,8 @@ export async function startEventWorker<TDeps>(
             traceId: next.traceId,
             priority: next.priority,
             metadata: next.metadata,
+            ttlMs: next.ttlMs,
+            expiresAt: next.expiresAt,
             createdAt: next.createdAt,
             updatedAt: next.updatedAt,
             status: next.status,
@@ -177,7 +181,8 @@ export async function startEventWorker<TDeps>(
                 }
             }
 
-            await ops.updateQueueItemStatus(next.id, "completed");
+            const finalStatus = overriddenByOnEvent ? "overwritten" : "completed";
+            await ops.updateQueueItemStatus(next.id, finalStatus);
         } catch (err) {
             console.error("Event worker failed:", err);
             await ops.updateQueueItemStatus(next.id, "failed");
