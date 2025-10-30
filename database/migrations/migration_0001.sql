@@ -158,6 +158,17 @@ DO $$ BEGIN
   END $$;
 
 
+-- Alter Table Statements
+
+-- Add columns to queue table
+ALTER TABLE "queue"
+  ADD COLUMN IF NOT EXISTS "ttl_ms" integer,
+  ADD COLUMN IF NOT EXISTS "expires_at" timestamp,
+  ADD COLUMN IF NOT EXISTS "status" varchar DEFAULT 'pending' NOT NULL,
+  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+
+
+
 -- Indexes to optimize common queries
 -- Threads
 CREATE INDEX IF NOT EXISTS "idx_threads_external_id_active" ON "threads" ("external_id") WHERE "status" = 'active';
@@ -186,12 +197,6 @@ CREATE INDEX IF NOT EXISTS "idx_tools_external_id" ON "tools" ("external_id");
 CREATE INDEX IF NOT EXISTS "idx_users_external_id" ON "users" ("external_id");
 CREATE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email");
 
-
-ALTER TABLE "queue"
-  ADD COLUMN IF NOT EXISTS "ttl_ms" integer,
-  ADD COLUMN IF NOT EXISTS "expires_at" timestamp,
-  ADD COLUMN IF NOT EXISTS "status" varchar DEFAULT 'pending' NOT NULL,
-  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
 
 -- Update status enum if needed (e.g., add expired/overwritten) – PostgreSQL uses domain, so a simple check:
 -- ALTER TABLE "queue" ALTER COLUMN "status" DROP DEFAULT;

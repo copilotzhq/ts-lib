@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS "queue" (
     "updated_at" timestamp DEFAULT now() NOT NULL
 );
 
+-- Alter Table Statements
+
+-- Add columns to queue table
+ALTER TABLE "queue"
+  ADD COLUMN IF NOT EXISTS "ttl_ms" integer,
+  ADD COLUMN IF NOT EXISTS "expires_at" timestamp,
+  ADD COLUMN IF NOT EXISTS "status" varchar DEFAULT 'pending' NOT NULL,
+  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+
 -- Add Foreign Key Constraints
 DO $$ BEGIN
   ALTER TABLE "messages" ADD CONSTRAINT "messages_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
@@ -187,16 +196,9 @@ CREATE INDEX IF NOT EXISTS "idx_tools_external_id" ON "tools" ("external_id");
 CREATE INDEX IF NOT EXISTS "idx_users_external_id" ON "users" ("external_id");
 CREATE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email");
 
-ALTER TABLE "queue"
-  ADD COLUMN IF NOT EXISTS "ttl_ms" integer,
-  ADD COLUMN IF NOT EXISTS "expires_at" timestamp,
-  ADD COLUMN IF NOT EXISTS "status" varchar DEFAULT 'pending' NOT NULL,
-  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
-
 -- Update status enum if needed (e.g., add expired/overwritten) – PostgreSQL uses domain, so a simple check:
 -- ALTER TABLE "queue" ALTER COLUMN "status" DROP DEFAULT;
--- ALTER TABLE "queue" ALTER COLUMN "status"
---   TYPE varchar USING "status"::varchar;
+-- ALTER TABLE "queue" ALTER COLUMN "status" TYPE varchar USING "status"::varchar;
 -- ALTER TABLE "queue" ALTER COLUMN "status" SET DEFAULT 'pending';
 
 CREATE INDEX IF NOT EXISTS "idx_queue_thread_status"
