@@ -50,7 +50,7 @@ export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<voi
         parentEventId: event.parentEventId ?? undefined,
         traceId: event.traceId ?? undefined,
         priority: event.priority ?? undefined,
-        metadata: (event.metadata ?? undefined) as Record<string, unknown> | undefined,
+        metadata: (event.metadata ?? undefined),
         ttlMs: event.ttlMs ?? undefined,
         status: event.status ?? undefined,
     });

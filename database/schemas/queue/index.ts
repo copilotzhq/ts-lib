@@ -18,7 +18,7 @@ export const queue = pgTable("queue", {
   ttlMs: integer("ttl_ms"),
   expiresAt: timestamp("expires_at"),
   status: varchar("status", { enum: ["pending", "processing", "completed", "failed", "expired", "overwritten"] }).default("pending").notNull(),
-  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  metadata: jsonb("metadata").$type<Record<string, object>>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
