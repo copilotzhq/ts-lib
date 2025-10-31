@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS "queue" (
 );
 
 -- Add columns to queue table (idempotent for older databases)
+
 ALTER TABLE IF EXISTS "queue"
   ADD COLUMN IF NOT EXISTS "ttl_ms" integer;
 

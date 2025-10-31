@@ -262,6 +262,7 @@ export async function run({
 }): Promise<{ queueId: string, status: 'queued', threadId: string }> {
     if (!initialMessage?.content) throw new Error("initialMessage with content is required for run()");
 
+    console.log("🔬 Starting conversation thread.");
     const context: ChatContext = { agents, tools, apis, mcpServers, callbacks, dbConfig, dbInstance, stream: stream ?? false };
     const db = await prepareDb(context);
     const ops = db.operations;

@@ -146,6 +146,17 @@ CREATE TABLE IF NOT EXISTS "queue" (
     "updated_at" timestamp DEFAULT now() NOT NULL
 );
 
+-- Add columns to queue table (idempotent for older databases)
+
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "ttl_ms" integer;
+
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "expires_at" timestamp;
+
+ALTER TABLE IF EXISTS "queue"
+  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
+
 -- Add Foreign Key Constraints
 DO $$ BEGIN
   ALTER TABLE "messages" ADD CONSTRAINT "messages_thread_id_threads_id_fk" FOREIGN KEY ("thread_id") REFERENCES "threads"("id") ON DELETE no action ON UPDATE no action;
@@ -158,21 +169,6 @@ DO $$ BEGIN
   EXCEPTION
     WHEN duplicate_object THEN null;
   END $$;
-
-
--- Alter Table Statements
-
--- Add columns to queue table (idempotent for older databases)
-ALTER TABLE IF EXISTS "queue"
-  ADD COLUMN IF NOT EXISTS "ttl_ms" integer;
-
-ALTER TABLE IF EXISTS "queue"
-  ADD COLUMN IF NOT EXISTS "expires_at" timestamp;
-
-ALTER TABLE IF EXISTS "queue"
-  ADD COLUMN IF NOT EXISTS "metadata" jsonb;
-
-
 
 -- Indexes to optimize common queries
 -- Threads
@@ -202,11 +198,9 @@ CREATE INDEX IF NOT EXISTS "idx_tools_external_id" ON "tools" ("external_id");
 CREATE INDEX IF NOT EXISTS "idx_users_external_id" ON "users" ("external_id");
 CREATE INDEX IF NOT EXISTS "idx_users_email" ON "users" ("email");
 
-
 -- Update status enum if needed (e.g., add expired/overwritten) – PostgreSQL uses domain, so a simple check:
 -- ALTER TABLE "queue" ALTER COLUMN "status" DROP DEFAULT;
--- ALTER TABLE "queue" ALTER COLUMN "status"
---   TYPE varchar USING "status"::varchar;
+-- ALTER TABLE "queue" ALTER COLUMN "status" TYPE varchar USING "status"::varchar;
 -- ALTER TABLE "queue" ALTER COLUMN "status" SET DEFAULT 'pending';
 
 CREATE INDEX IF NOT EXISTS "idx_queue_thread_status"
@@ -223,4 +217,3 @@ CREATE INDEX IF NOT EXISTS "idx_queue_pending_order"
 
 CREATE INDEX IF NOT EXISTS "idx_queue_status_expires_at"
   ON "queue" ("status", "expires_at");
-

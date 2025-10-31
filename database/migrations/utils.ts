@@ -41,5 +41,14 @@ export function splitSQLStatements(sql: string): string[] {
       statements.push(current.trim());
     }
     
-    return statements.filter(s => s.length > 0 && !s.startsWith("--") || s.includes("CREATE"));
+    // Strip leading comment lines from each statement and keep non-empty
+    const cleaned = statements.map((s) => {
+      const ls = s.split("\n");
+      while (ls.length > 0 && ls[0].trim().startsWith("--")) {
+        ls.shift();
+      }
+      return ls.join("\n").trim();
+    }).filter((s) => s.length > 0);
+
+    return cleaned;
   }
