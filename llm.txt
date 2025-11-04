@@ -1,0 +1,355 @@
+-- version: 0.5.0
+
+---
+
+# Copilotz: Event-Driven AI Agent Framework
+
+> @copilotz/copilotz - TypeScript/Deno framework for building multi-agent AI systems with tool calling, streaming, and persistent conversations.
+
+## Core Concepts
+
+**Event-Driven Architecture**: Messages flow through an async event queue with three processors:
+- NEW_MESSAGE: Routes incoming messages to agents
+- LLM_CALL: Executes LLM requests with streaming support
+- TOOL_CALL: Validates and executes tool calls (native/API/MCP)
+
+**Threads**: Persistent conversation contexts stored in PostgreSQL/PGLite with message history
+
+**Agents**: Independent AI entities with their own LLM configs, instructions, and allowed tools/agents
+
+## Quick Start
+
+```typescript
+import { createCopilotz } from "@copilotz/copilotz";
+
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "assistant-1",
+    name: "Assistant",
+    type: "agent",
+    instructions: "You are a helpful assistant.",
+    llmOptions: {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      temperature: 0.7,
+    },
+  }],
+  dbConfig: { url: ":memory:" }, // or "postgresql://..."
+  stream: true,
+  callbacks: {
+    onContentStream: (data) => {
+      if (!data.isComplete) {
+        Deno.stdout.writeSync(new TextEncoder().encode(data.token));
+      }
+    },
+  },
+});
+
+// Single interaction
+const result = await copilotz.run({
+  content: "Hello! What can you help me with?",
+});
+
+// Interactive CLI
+const controller = copilotz.start();
+await controller.closed;
+
+await copilotz.shutdown();
+```
+
+## Agent Configuration
+
+```typescript
+interface Agent {
+  id: string;
+  name: string;
+  type: "agent" | "user" | "tool" | "system";
+  instructions?: string;
+  description?: string;
+  personality?: string;
+  allowedAgents?: string[]; // Inter-agent communication
+  allowedTools?: string[];  // Tool access control
+  llmOptions: {
+    provider: "openai" | "anthropic" | "gemini" | "groq" | "deepseek" | "ollama";
+    model: string;
+    temperature?: number;
+    maxTokens?: number;
+    apiKey?: string; // Falls back to env vars
+  };
+}
+```
+
+## Native Tools
+
+Built-in tools available to agents:
+- **Files**: `read_file`, `write_file`, `list_directory`, `search_files`
+- **System**: `run_command`, `wait`, `get_current_time`
+- **Communication**: `ask_question`, `create_thread`, `end_thread`
+- **Tasks**: `create_task`
+- **Web**: `fetch_text`, `http_request`
+
+Enable per agent:
+```typescript
+{ allowedTools: ["read_file", "write_file", "run_command"] }
+```
+
+## Custom Tools
+
+```typescript
+const customTool = {
+  key: "my_tool",
+  name: "My Tool",
+  description: "Does something useful",
+  inputSchema: {
+    type: "object",
+    properties: {
+      input: { type: "string", description: "Input parameter" },
+    },
+    required: ["input"],
+  },
+  execute: async (params, context) => {
+    return { result: `Processed: ${params.input}` };
+  },
+};
+
+await copilotz.run(
+  { content: "Use my custom tool" },
+  { tools: [customTool] }
+);
+```
+
+## API Integration
+
+Auto-generate tools from OpenAPI specs:
+```typescript
+await copilotz.run(
+  { content: "Call the CRM API" },
+  {
+    apis: [{
+      name: "My API",
+      baseUrl: "https://api.example.com",
+      openApiSchema: { /* OpenAPI 3.0 spec */ },
+      headers: { "Authorization": "Bearer token" },
+    }],
+  }
+);
+```
+
+## MCP Servers
+
+Connect to Model Context Protocol servers:
+```typescript
+await copilotz.run(
+  { content: "List the working directory" },
+  {
+    mcpServers: [{
+      name: "filesystem",
+      transport: {
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      },
+    }],
+  }
+);
+```
+
+## Multi-Agent Communication
+
+Agents communicate via:
+1. **allowedAgents**: Restrict which agents can be contacted
+2. **ask_question tool**: Direct agent-to-agent queries
+3. **@mentions**: Mention agents in messages
+
+```typescript
+const agents = [
+  {
+    id: "researcher",
+    name: "Researcher",
+    instructions: "Research topics thoroughly",
+    allowedTools: ["fetch_text", "ask_question"],
+    allowedAgents: ["Writer"], // Can only talk to Writer
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  },
+  {
+    id: "writer",
+    name: "Writer",
+    instructions: "Write clear articles",
+    allowedTools: ["write_file"],
+    llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+  },
+];
+```
+
+## Thread Management
+
+```typescript
+// Create new thread
+const { threadId } = await copilotz.run({
+  content: "Start conversation",
+  threadName: "My Thread",
+  participants: ["Agent1", "Agent2"],
+});
+
+// Continue existing thread
+await copilotz.run({
+  content: "Follow-up message",
+  threadId,
+});
+
+// Use external IDs for stable references
+await copilotz.run({
+  threadExternalId: "user-session-123",
+  content: "Message",
+});
+```
+
+## Database Operations
+
+```typescript
+// Access bound database operations
+const user = await copilotz.ops.getUserByExternalId("customer-42");
+
+// List threads for a user
+const threads = await copilotz.ops.getThreadsForParticipant(user.id, {
+  order: "desc",
+  limit: 10,
+});
+
+// Get message history
+const messages = await copilotz.ops.getMessagesForThread(thread.id, {
+  order: "asc",
+});
+```
+
+## Callbacks & Streaming
+
+```typescript
+await copilotz.run(
+  { content: "Stream output" },
+  {
+    callbacks: {
+      onContentStream: (data) => {
+        console.log(`[${data.agentName}] ${data.token}`);
+      },
+      onEvent: async (event) => {
+        console.log(`Event: ${event.type}`, event.payload);
+        // Optionally return custom events
+        return { producedEvents: [/* custom events */] };
+      },
+    },
+  }
+);
+```
+
+## Database Configuration
+
+```typescript
+interface DatabaseConfig {
+  url?: string; // ":memory:" | "file:./db.db" | "postgresql://..."
+  syncUrl?: string; // Optional sync URL for PGLite
+  pgliteExtensions?: string[];
+}
+```
+
+## Environment Variables
+
+```bash
+# LLM Provider API Keys
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_API_KEY=...
+GROQ_API_KEY=...
+DEEPSEEK_API_KEY=...
+
+# Database
+DATABASE_URL=postgresql://...
+SYNC_DATABASE_URL=postgresql://... # Optional PGLite sync
+
+# Debug
+COPILOTZ_DB_DEBUG=1
+```
+
+## Common Patterns
+
+### Pattern: Single Agent with Tools
+```typescript
+const copilotz = await createCopilotz({
+  agents: [{
+    id: "dev-agent",
+    name: "DevAgent",
+    instructions: "You are a software development assistant.",
+    allowedTools: ["read_file", "write_file", "run_command", "search_files"],
+    llmOptions: { provider: "openai", model: "gpt-4o" },
+  }],
+  dbConfig: { url: ":memory:" },
+});
+```
+
+### Pattern: Multi-Agent System
+```typescript
+const copilotz = await createCopilotz({
+  agents: [
+    {
+      id: "coordinator",
+      name: "Coordinator",
+      instructions: "Coordinate tasks between agents",
+      allowedAgents: ["Researcher", "Writer"],
+      allowedTools: ["ask_question", "create_task"],
+      llmOptions: { provider: "openai", model: "gpt-4o" },
+    },
+    {
+      id: "researcher",
+      name: "Researcher",
+      instructions: "Research topics",
+      allowedTools: ["fetch_text", "search_files"],
+      llmOptions: { provider: "openai", model: "gpt-4o-mini" },
+    },
+    {
+      id: "writer",
+      name: "Writer",
+      instructions: "Write content",
+      allowedTools: ["write_file"],
+      llmOptions: { provider: "anthropic", model: "claude-3-5-sonnet-20241022" },
+    },
+  ],
+  dbConfig: { url: "postgresql://..." },
+});
+```
+
+### Pattern: Session-Based Interaction
+```typescript
+const session = copilotz.createSession({
+  externalId: "user-123",
+  overrides: { stream: true },
+});
+
+await session.ask("What can you help me with?");
+await session.ask("Create a new Python project");
+await session.ask("Add tests to the project");
+
+console.log(`Thread: ${session.threadId}`);
+console.log(`History: ${session.history.length} interactions`);
+
+await session.close();
+```
+
+## Key Design Principles
+
+1. **Event-Driven**: All interactions flow through the event queue
+2. **Async First**: Everything is async/await based
+3. **Type-Safe**: Full TypeScript types throughout
+4. **Persistent**: Threads and messages stored in database
+5. **Composable**: Agents, tools, APIs, and MCP servers work together
+6. **Streaming**: Real-time token streaming for better UX
+
+## Tips for LLMs
+
+- Always specify `allowedTools` to limit agent capabilities
+- Use `threadExternalId` for stable user sessions
+- Enable streaming for better user experience
+- Use multi-agent systems for complex workflows
+- Leverage MCP for standardized tool integrations
+- Access `copilotz.ops` for database queries
+- Call `shutdown()` to cleanup resources
+

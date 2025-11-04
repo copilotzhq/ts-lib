@@ -1,4 +1,4 @@
-import { run } from "@/index.ts";
+import { createCopilotz } from "@/index.ts";
 import type { Agent, Message } from "@/interfaces/index.ts";
 import type { ToolExecutionContext } from "../index.ts";
 
@@ -40,22 +40,24 @@ export default {
         // Create a temporary thread for the question
         const questionThreadId = crypto.randomUUID();
 
+        const copilotz = await createCopilotz({
+            agents: [targetAgentConfig],
+            tools: context.tools || [],
+            apis: context.apis,
+            mcpServers: context.mcpServers,
+            callbacks: context.callbacks,
+            dbInstance: context?.db,
+            stream: true,
+        });
+
         try {
-            // Send the question to the target agent in a new thread
-            await run({
-                initialMessage: {
-                    content: question,
-                    threadId: questionThreadId,
-                    senderId: context.senderId,
-                    senderType: context.senderType,
-                    threadName: `Question from ${context.senderId}`,
-                    participants: [targetAgent],
-                },
-                agents: [targetAgentConfig],
-                tools: context.tools || [],
-                dbInstance: context?.db,
-                stream: true,
-                callbacks: context.callbacks,
+            await copilotz.run({
+                content: question,
+                threadId: questionThreadId,
+                senderId: context.senderId,
+                senderType: context.senderType,
+                threadName: `Question from ${context.senderId}`,
+                participants: [targetAgent],
             });
 
             // Poll for the answer with timeout
@@ -110,6 +112,8 @@ export default {
                 question,
                 targetAgent,
             };
+        } finally {
+            await copilotz.shutdown().catch(() => undefined);
         }
     },
 };

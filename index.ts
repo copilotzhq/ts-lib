@@ -1,44 +1,141 @@
 // Event-queue engine (now default)
-import { enqueueEvent, startThreadEventWorker } from "@/event-processors/index.ts";
-
+import { startThreadEventWorker } from "@/event-processors/index.ts";
 import { createDatabase, schema, migrations } from "@/database/index.ts";
 
 import type {
+    Agent,
+    API,
+    ChatCallbacks,
     ChatContext,
     ChatInitMessage,
-    MessagePayload,
-    Agent,
-    Tool,
-    API,
-    MCPServer,
+    CopilotzDb,
     DatabaseConfig,
-    ChatCallbacks,
-    NewThread,
-    CopilotzDb
+    MCPServer,
+    MessagePayload,
+    Tool,
 } from "./interfaces/index.ts";
 
-// Export all tools from the registry
-export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
-// Export interfaces
-export * from "@/interfaces/index.ts";
+declare function prompt(message?: string): string | null;
 
-// Export database (root)
+export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
+export * from "@/interfaces/index.ts";
 export { createDatabase, schema, migrations };
 
-async function prepareDb(context: ChatContext): Promise<CopilotzDb> {
-    const db = context.dbInstance || await createDatabase(context.dbConfig || { url: ':memory:' });
-    return db;
+export interface CopilotzConfig {
+    agents: Agent[];
+    tools?: Tool[];
+    apis?: API[];
+    mcpServers?: MCPServer[];
+    callbacks?: ChatCallbacks;
+    dbConfig?: DatabaseConfig;
+    dbInstance?: CopilotzDb;
+    threadMetadata?: Record<string, unknown>;
+    queueTTL?: number;
+    stream?: boolean;
+    activeTaskId?: string;
+}
+
+export interface CopilotzRunResult {
+    queueId: string;
+    status: "queued";
+    threadId: string;
+}
+
+export type CopilotzRunOverrides = Partial<Omit<CopilotzConfig, "agents">> & {
+    agents?: Agent[];
+    stream?: boolean;
+};
+
+export interface CopilotzSessionHistoryEntry {
+    message: ChatInitMessage;
+    result: CopilotzRunResult;
+}
+
+export interface CopilotzCliIO {
+    prompt(message: string): Promise<string>;
+    print(line: string): void;
+}
+
+export interface CopilotzSession {
+    readonly externalId: string;
+    readonly history: ReadonlyArray<CopilotzSessionHistoryEntry>;
+    readonly threadId?: string;
+    ask(input: string | ChatInitMessage, options?: { overrides?: CopilotzRunOverrides }): Promise<CopilotzRunResult>;
+    close(): Promise<void>;
+}
+
+export interface CopilotzCliController {
+    stop(): void;
+    readonly closed: Promise<void>;
+}
+
+export interface CopilotzSessionOptions {
+    externalId?: string;
+    overrides?: CopilotzRunOverrides;
+}
+
+export interface CopilotzStartOptions extends CopilotzSessionOptions {
+    initialMessage?: ChatInitMessage;
+    quitCommand?: string;
+    banner?: string | null;
+    loop?: boolean;
+    io?: CopilotzCliIO;
+}
+
+export interface Copilotz {
+    readonly config: Readonly<CopilotzConfig>;
+    readonly ops: CopilotzDb["operations"];
+    run(initialMessage: ChatInitMessage, overrides?: CopilotzRunOverrides): Promise<CopilotzRunResult>;
+    start(options?: CopilotzStartOptions): CopilotzCliController;
+    createSession(options?: CopilotzSessionOptions): CopilotzSession;
+    shutdown(): Promise<void>;
+}
+
+const DEFAULT_CLI_BANNER = "🎯 Starting Interactive Session.\nType your questions, or 'quit' to exit\n";
+
+const DEFAULT_QUIT_COMMAND = "quit";
+
+const DEFAULT_DIVIDER = "-".repeat(60);
+
+function mergeCallbacks(base?: ChatCallbacks, override?: ChatCallbacks): ChatCallbacks | undefined {
+    if (!base) return override;
+    if (!override) return base;
+    return {
+        ...base,
+        ...override,
+    };
+}
+
+function buildRuntimeContext(
+    base: CopilotzConfig,
+    overrides?: CopilotzRunOverrides,
+    explicitStream?: boolean,
+): ChatContext {
+    const streamValue = explicitStream ?? overrides?.stream ?? base.stream ?? false;
+    return {
+        agents: overrides?.agents ?? base.agents,
+        tools: overrides?.tools ?? base.tools,
+        apis: overrides?.apis ?? base.apis,
+        mcpServers: overrides?.mcpServers ?? base.mcpServers,
+        callbacks: mergeCallbacks(base.callbacks, overrides?.callbacks),
+        dbConfig: overrides?.dbConfig ?? base.dbConfig,
+        dbInstance: overrides?.dbInstance ?? base.dbInstance,
+        threadMetadata: overrides?.threadMetadata ?? base.threadMetadata,
+        queueTTL: overrides?.queueTTL ?? base.queueTTL,
+        stream: streamValue,
+        activeTaskId: overrides?.activeTaskId ?? base.activeTaskId,
+    } satisfies ChatContext;
 }
 
 function resolveParticipants(
     initialMessage: ChatInitMessage,
-    context: ChatContext
+    context: ChatContext,
 ): { senderId: string; senderType: MessagePayload["senderType"]; participants: string[] } {
     const agents = context.agents || [];
 
     const findAgentByIdentifier = (identifier?: string) => {
         if (!identifier) return undefined;
-        return agents.find(agent =>
+        return agents.find((agent) =>
             agent.name === identifier ||
             agent.id === identifier ||
             agent.externalId === identifier
@@ -47,10 +144,10 @@ function resolveParticipants(
 
     const requestedParticipants = (initialMessage.participants && initialMessage.participants.length > 0)
         ? initialMessage.participants
-        : agents.map(a => a.name);
+        : agents.map((a) => a.name);
 
     const normalizedParticipants = requestedParticipants
-        .map(participant => {
+        .map((participant) => {
             const found = findAgentByIdentifier(participant);
             return found ? found.name : participant;
         })
@@ -59,7 +156,7 @@ function resolveParticipants(
     let senderType = initialMessage.senderType;
     let senderId = initialMessage.senderId;
 
-    if (senderType === 'agent') {
+    if (senderType === "agent") {
         const matchedAgent = findAgentByIdentifier(senderId);
         if (matchedAgent) {
             senderId = matchedAgent.name;
@@ -69,17 +166,17 @@ function resolveParticipants(
     } else if (!senderType && senderId) {
         const matchedAgent = findAgentByIdentifier(senderId);
         if (matchedAgent) {
-            senderType = 'agent';
+            senderType = "agent";
             senderId = matchedAgent.name;
         }
     }
 
     if (!senderId) {
-        senderId = 'user';
+        senderId = "user";
     }
 
     if (!senderType) {
-        senderType = senderId !== 'user' && Boolean(findAgentByIdentifier(senderId)) ? 'agent' : 'user';
+        senderType = senderId !== "user" && Boolean(findAgentByIdentifier(senderId)) ? "agent" : "user";
     }
 
     const uniqueParticipants = Array.from(new Set([senderId, ...normalizedParticipants]));
@@ -88,9 +185,9 @@ function resolveParticipants(
 }
 
 async function ensureThread(
-    ops: CopilotzDb['operations'],
+    ops: CopilotzDb["operations"],
     initialMessage: ChatInitMessage,
-    context: ChatContext
+    context: ChatContext,
 ): Promise<{ threadId: string; senderId: string; senderType: MessagePayload["senderType"]; queueTTL?: number }> {
     const { senderId, senderType, participants } = resolveParticipants(initialMessage, context);
     const threadMetadata = initialMessage.threadMetadata ?? context.threadMetadata;
@@ -104,7 +201,7 @@ async function ensureThread(
     threadId = threadId || crypto.randomUUID();
 
     await ops.findOrCreateThread(threadId, {
-        name: initialMessage.threadName || 'Main Thread',
+        name: initialMessage.threadName || "Main Thread",
         participants,
         externalId: initialMessage.threadExternalId || undefined,
         parentThreadId: initialMessage.parentThreadId,
@@ -123,159 +220,224 @@ function buildWorkerContext(context: ChatContext, db: CopilotzDb | undefined, st
 }
 
 async function enqueueInitialMessage(
-    ops: CopilotzDb['operations'],
+    ops: CopilotzDb["operations"],
     threadId: string,
     payload: MessagePayload,
-    ttlMs?: number
+    ttlMs?: number,
 ): Promise<{ queueId: string }> {
     const queued = await ops.addToQueue(threadId, {
-        eventType: 'NEW_MESSAGE',
+        eventType: "NEW_MESSAGE",
         payload,
         ttlMs,
     });
     return { queueId: queued.id };
 }
 
-/**
- * Run a CLI session. This function is used to start a new CLI session.
- * 
- * @param initialMessage - The initial message to start the conversation.
- * @param participants - The participants in the conversation.
- * @param agents - The agents in the conversation.
- * @param tools - The tools in the conversation.
- * @param apis - The APIs in the conversation.
- * @param mcpServers - The MCP servers in the conversation.
- * @param callbacks - The callbacks in the conversation.
- * @param dbConfig - The database configuration.
- * @param dbInstance - The database instance.
- */
-export async function runCLI({
-    initialMessage,
-    participants,
-    agents,
-    tools,
-    apis,
-    mcpServers,
-    callbacks,
-    dbConfig,
-    dbInstance
-}: {
-    initialMessage?: ChatInitMessage;
-    agents: Agent[];
-    participants?: string[];
-    tools?: Tool[];
-    apis?: API[];
-    mcpServers?: MCPServer[];
-    callbacks?: ChatCallbacks;
-    dbConfig?: DatabaseConfig;
-    dbInstance?: unknown;
-}): Promise<void> {
-    console.log("🎯 Starting Interactive Session.");
-    console.log("Type your questions, or 'quit' to exit\n");
-
-    // generate a stable external id for the session
-    const externalId = crypto.randomUUID().slice(0, 24);
-
-    // Prepare DB once per CLI session
-    const db = await prepareDb({ dbInstance, dbConfig } as ChatContext);
-    const ops = db.operations;
-    let c = 0;
-
-    while (true) {
-        let question: string;
-        if (c === 0 && initialMessage?.content) {
-            question = initialMessage.content;
-            c++;
-        } else {
-            question = prompt("Message: ") || '';
-        }
-
-        if (!question || question.toLowerCase() === 'quit') {
-            console.log("👋 Ending session. Goodbye!");
-            break;
-        }
-
-        console.log("\n🔬 Thinking...\n");
-
-        try {
-            // Resolve/create thread by external id once per session
-            let threadId: string;
-            const existingByExt = await ops.getThreadByExternalId(externalId);
-            if (existingByExt?.id) {
-                threadId = existingByExt.id as string;
-            } else {
-                threadId = crypto.randomUUID();
-                const uniqueParticipants = Array.from(new Set(["user", ...((participants && participants.length > 0) ? participants : agents.map(a => a.name))]));
-                await ops.findOrCreateThread(threadId, { name: "Main Thread", participants: uniqueParticipants, externalId } as NewThread);
-            }
-
-            // Build context
-            const context: ChatContext = buildWorkerContext({ agents, tools, apis, mcpServers, callbacks, dbConfig } as ChatContext, db, true);
-
-            // Enqueue the user message event and process the queue
-            await enqueueEvent(db, { threadId, type: "NEW_MESSAGE", payload: { senderId: "user", senderType: "user", content: question } });
-            await startThreadEventWorker(db, threadId, context);
-
-        } catch (error) {
-            console.error("❌ Session failed:", error);
-        }
-
-        console.log("\n" + "-".repeat(60) + "\n");
-    }
+function mergeOverrides(
+    base?: CopilotzRunOverrides,
+    override?: CopilotzRunOverrides,
+): CopilotzRunOverrides | undefined {
+    if (!base) return override;
+    if (!override) return base;
+    return {
+        ...base,
+        ...override,
+        callbacks: mergeCallbacks(base.callbacks, override.callbacks),
+    };
 }
 
-/**
- * Run a conversation thread. This function is used to start a new conversation thread.
- * @param initialMessage - The initial message to start the conversation.
- * @param participants - The participants in the conversation.
- * @param agents - The agents in the conversation.
- * @param tools - The tools in the conversation.
- * @param apis - The APIs in the conversation.
- * @param mcpServers - The MCP servers in the conversation.
- * @param callbacks - The callbacks in the conversation.
- * @param dbConfig - The database configuration.
- * @param dbInstance - The database instance.
- * @returns 
- */
-export async function run({
-    initialMessage,
-    participants,
-    agents,
-    tools,
-    apis,
-    mcpServers,
-    callbacks,
-    dbConfig,
-    dbInstance,
-    stream,
-}: {
-    initialMessage?: ChatInitMessage;
-    agents: Agent[];
-    participants?: string[];
-    tools?: Tool[];
-    apis?: API[];
-    mcpServers?: MCPServer[];
-    callbacks?: ChatCallbacks;
-    dbConfig?: DatabaseConfig;
-    dbInstance?: CopilotzDb;
-    stream?: boolean;
-}): Promise<{ queueId: string, status: 'queued', threadId: string }> {
-    if (!initialMessage?.content) throw new Error("initialMessage with content is required for run()");
+function defaultCliIO(): CopilotzCliIO {
+    return {
+        prompt: async (message: string) => {
+            if (typeof prompt === "function") {
+                const response = prompt(message);
+                return response ?? "";
+            }
+            throw new Error("No CLI prompt implementation available. Provide a custom io.prompt handler.");
+        },
+        print: (line: string) => console.log(line),
+    };
+}
 
-    console.log("🔬 Starting conversation thread.");
-    const context: ChatContext = { agents, tools, apis, mcpServers, callbacks, dbConfig, dbInstance, stream: stream ?? false };
-    const db = await prepareDb(context);
-    const ops = db.operations;
-    const { threadId, senderId, senderType, queueTTL } = await ensureThread(ops, { ...initialMessage, participants: initialMessage.participants || participants }, context);
-    const workerContext = buildWorkerContext(context, db, context.stream ?? false);
+export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> {
+    const baseConfig: CopilotzConfig = {
+        ...config,
+        agents: [...config.agents],
+    };
 
-    const { queueId } = await enqueueInitialMessage(ops, threadId, {
-        senderId,
-        senderType: initialMessage.senderType || senderType,
-        content: initialMessage.content,
-    } as MessagePayload, queueTTL);
+    const managedDb = config.dbInstance ? undefined : await createDatabase(config.dbConfig);
+    const baseDb = config.dbInstance ?? managedDb;
+    if (!baseDb) {
+        throw new Error("Failed to initialize Copilotz database instance.");
+    }
+    const baseOps = baseDb.operations;
 
-    await startThreadEventWorker(db, threadId, workerContext);
+    const activeSessions = new Set<CopilotzSession>();
 
-    return { queueId, status: 'queued', threadId };
+    const performRun = async (
+        initialMessage: ChatInitMessage,
+        overrides?: CopilotzRunOverrides,
+    ): Promise<CopilotzRunResult> => {
+        if (!initialMessage?.content) {
+            throw new Error("initialMessage with content is required.");
+        }
+
+        const runtimeContext = buildRuntimeContext(baseConfig, overrides);
+        const db = runtimeContext.dbInstance
+            ? runtimeContext.dbInstance
+            : await createDatabase(runtimeContext.dbConfig ?? baseConfig.dbConfig);
+
+        const ops = db.operations;
+        const { threadId, senderId, senderType, queueTTL } = await ensureThread(ops, initialMessage, runtimeContext);
+        const workerContext = buildWorkerContext(runtimeContext, db, runtimeContext.stream ?? false);
+
+        const { queueId } = await enqueueInitialMessage(ops, threadId, {
+            senderId,
+            senderType,
+            content: initialMessage.content,
+        });
+
+        await startThreadEventWorker(db, threadId, workerContext);
+
+        return { queueId, status: "queued", threadId };
+    };
+
+    const createSessionInternal = (options?: CopilotzSessionOptions): CopilotzSession => {
+        const sessionOverrides = options?.overrides;
+        const externalId = options?.externalId ?? crypto.randomUUID().slice(0, 24);
+        const history: CopilotzSessionHistoryEntry[] = [];
+        let closed = false;
+        let threadIdRef: string | undefined;
+
+        const session: CopilotzSession = {
+            externalId,
+            get history() {
+                return history.slice();
+            },
+            get threadId() {
+                return threadIdRef;
+            },
+            ask: async (input, askOptions) => {
+                if (closed) {
+                    throw new Error("This CLI session has already been closed.");
+                }
+
+                const message = typeof input === "string" ? { content: input } : { ...input };
+
+                if (!message.content) {
+                    throw new Error("CLI session messages must include content.");
+                }
+
+                if (!message.threadExternalId) {
+                    message.threadExternalId = externalId;
+                }
+
+                if (!message.threadId && threadIdRef) {
+                    message.threadId = threadIdRef;
+                }
+
+                const mergedOverrides = mergeOverrides(sessionOverrides, askOptions?.overrides);
+
+                const result = await performRun(message, mergedOverrides);
+
+                threadIdRef = message.threadId ?? result.threadId;
+                history.push({ message, result });
+
+                return result;
+            },
+            close: async () => {
+                closed = true;
+                activeSessions.delete(session);
+            },
+        };
+
+        activeSessions.add(session);
+        return session;
+    };
+
+    const start = (options?: CopilotzStartOptions): CopilotzCliController => {
+        const quitCommand = options?.quitCommand ?? DEFAULT_QUIT_COMMAND;
+        const loop = options?.loop ?? true;
+        const banner = options?.banner ?? DEFAULT_CLI_BANNER;
+        const io = options?.io ?? defaultCliIO();
+
+        const session = createSessionInternal({
+            externalId: options?.externalId,
+            overrides: mergeOverrides({ stream: true }, options?.overrides),
+        });
+
+        let stopped = false;
+
+        const closed = (async () => {
+            if (banner) io.print(banner);
+
+            if (options?.initialMessage?.content) {
+                try {
+                    await session.ask(options.initialMessage);
+                } catch (error) {
+                    io.print(`❌ Session failed: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+
+            if (!loop) {
+                await session.close();
+                return;
+            }
+
+            while (!stopped) {
+                let question: string;
+                try {
+                    question = (await io.prompt("Message: ")) ?? "";
+                } catch (error) {
+                    io.print(`❌ Unable to read input: ${error instanceof Error ? error.message : String(error)}`);
+                    break;
+                }
+
+                if (!question || question.toLowerCase() === quitCommand) {
+                    io.print("👋 Ending session. Goodbye!");
+                    break;
+                }
+
+                io.print("\n🔬 Thinking...\n");
+
+                try {
+                    await session.ask({ content: question, senderId: "user", senderType: "user" });
+                } catch (error) {
+                    io.print(`❌ Session failed: ${error instanceof Error ? error.message : String(error)}`);
+                }
+
+                io.print(`\n${DEFAULT_DIVIDER}\n`);
+            }
+
+            await session.close();
+        })();
+
+        return {
+            stop: () => {
+                stopped = true;
+            },
+            closed,
+        } satisfies CopilotzCliController;
+    };
+
+    return {
+        config: Object.freeze({ ...baseConfig }),
+        get ops() {
+            return baseOps;
+        },
+        run: performRun,
+        start,
+        createSession: createSessionInternal,
+        shutdown: async () => {
+            for (const session of Array.from(activeSessions)) {
+                await session.close().catch(() => undefined);
+            }
+
+            if (managedDb && typeof (managedDb as unknown as { close?: () => Promise<void> | void }).close === "function") {
+                await (managedDb as unknown as { close: () => Promise<void> | void }).close();
+            } else if (managedDb && typeof (managedDb as unknown as { end?: () => Promise<void> | void }).end === "function") {
+                await (managedDb as unknown as { end: () => Promise<void> | void }).end();
+            }
+        },
+    } satisfies Copilotz;
 }

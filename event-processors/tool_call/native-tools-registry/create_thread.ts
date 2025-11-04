@@ -1,4 +1,4 @@
-import { run } from "@/index.ts";
+import { createCopilotz } from "@/index.ts";
 import type { ToolExecutionContext } from "../index.ts";
 
 interface CreateThreadParams {
@@ -50,27 +50,34 @@ export default {
         };
 
         // Create ChatContext with inherited settings from parent
-        const chatContext = {
+        const baseConfig = {
             agents: context?.agents || [],
             tools: context?.tools || [],
+            apis: context?.apis,
+            mcpServers: context?.mcpServers,
             callbacks: context?.callbacks,
             stream: context?.stream,
             activeTaskId: context?.activeTaskId,
             dbInstance: context?.db,
         };
 
-        // Start the thread
-        const result = await run({ initialMessage: initMessage, ...chatContext });
+        const copilotz = await createCopilotz(baseConfig);
 
-        return {
-            threadId,
-            name,
-            participants,
-            mode,
-            description,
-            summary,
-            queueId: result.queueId,
-            status: result.status,
-        };
+        try {
+            const result = await copilotz.run(initMessage);
+
+            return {
+                threadId,
+                name,
+                participants,
+                mode,
+                description,
+                summary,
+                queueId: result.queueId,
+                status: result.status,
+            };
+        } finally {
+            await copilotz.shutdown().catch(() => undefined);
+        }
     },
 }

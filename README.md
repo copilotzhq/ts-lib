@@ -25,12 +25,9 @@ deno add @copilotz/copilotz
 ### Single Interaction
 
 ```typescript
-import { run } from "@copilotz/copilotz";
+import { createCopilotz } from "@copilotz/copilotz";
 
-const result = await run({
-  initialMessage: {
-    content: "Hello! What can you help me with?",
-  },
+const copilotz = await createCopilotz({
   agents: [
     {
       id: "assistant-1",
@@ -55,15 +52,21 @@ const result = await run({
   },
 });
 
+const result = await copilotz.run({
+  content: "Hello! What can you help me with?",
+});
+
 console.log(`Thread ID: ${result.threadId}`);
+
+await copilotz.shutdown();
 ```
 
 ### Interactive CLI
 
 ```typescript
-import { runCLI } from "@copilotz/copilotz";
+import { createCopilotz } from "@copilotz/copilotz";
 
-await runCLI({
+const copilotz = await createCopilotz({
   agents: [
     {
       id: "bot-1",
@@ -79,6 +82,11 @@ await runCLI({
   ],
   dbConfig: { url: ":memory:" },
 });
+
+const controller = copilotz.start();
+await controller.closed;
+
+await copilotz.shutdown();
 ```
 
 ## Configuration
@@ -156,10 +164,11 @@ const customTool = {
   },
 };
 
-await run({
-  // ...
-  tools: [customTool],
-});
+// Assuming copilotz was created as shown above
+await copilotz.run(
+  { content: "Use my custom tool" },
+  { tools: [customTool] },
+);
 ```
 
 ## API Integration
@@ -167,17 +176,19 @@ await run({
 Auto-generate tools from OpenAPI specs:
 
 ```typescript
-await run({
-  // ...
-  apis: [
-    {
-      name: "My API",
-      baseUrl: "https://api.example.com",
-      openApiSchema: { /* OpenAPI 3.0 spec */ },
-      headers: { "Authorization": "Bearer token" },
-    },
-  ],
-});
+await copilotz.run(
+  { content: "Call the CRM API" },
+  {
+    apis: [
+      {
+        name: "My API",
+        baseUrl: "https://api.example.com",
+        openApiSchema: { /* OpenAPI 3.0 spec */ },
+        headers: { "Authorization": "Bearer token" },
+      },
+    ],
+  },
+);
 ```
 
 ## MCP Servers
@@ -185,19 +196,21 @@ await run({
 Connect to Model Context Protocol servers:
 
 ```typescript
-await run({
-  // ...
-  mcpServers: [
-    {
-      name: "filesystem",
-      transport: {
-        type: "stdio",
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+await copilotz.run(
+  { content: "List the working directory" },
+  {
+    mcpServers: [
+      {
+        name: "filesystem",
+        transport: {
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+        },
       },
-    },
-  ],
-});
+    ],
+  },
+);
 ```
 
 ## Multi-Agent Communication
@@ -238,19 +251,21 @@ Copilotz uses an event queue with three core processors:
 Customize behavior with callbacks:
 
 ```typescript
-await run({
-  // ...
-  callbacks: {
-    onContentStream: (data) => {
-      console.log(`[${data.agentName}] ${data.token}`);
-    },
-    onEvent: async (event) => {
-      console.log(`Event: ${event.type}`, event.payload);
-      // Optionally return custom events
-      return { producedEvents: [/* custom events */] };
+await copilotz.run(
+  { content: "Stream output" },
+  {
+    callbacks: {
+      onContentStream: (data) => {
+        console.log(`[${data.agentName}] ${data.token}`);
+      },
+      onEvent: async (event) => {
+        console.log(`Event: ${event.type}`, event.payload);
+        // Optionally return custom events
+        return { producedEvents: [/* custom events */] };
+      },
     },
   },
-});
+);
 ```
 
 ## Thread Management
@@ -259,32 +274,51 @@ Threads maintain conversation context:
 
 ```typescript
 // Create a new thread
-const { threadId } = await run({
-  initialMessage: {
-    content: "Start conversation",
-    threadName: "My Thread",
-    participants: ["Agent1", "Agent2"],
-  },
-  // ...
+const { threadId } = await copilotz.run({
+  content: "Start conversation",
+  threadName: "My Thread",
+  participants: ["Agent1", "Agent2"],
 });
 
 // Continue existing thread
-await run({
-  initialMessage: {
-    content: "Follow-up message",
-    threadId: threadId, // Reuse thread
-  },
-  // ...
+await copilotz.run({
+  content: "Follow-up message",
+  threadId,
 });
 
 // Use external IDs for stable references
-await run({
-  initialMessage: {
-    threadExternalId: "user-session-123",
-    content: "Message",
-  },
-  // ...
+await copilotz.run({
+  threadExternalId: "user-session-123",
+  content: "Message",
 });
+```
+
+## Working with Stored Data
+
+Use the bound operations to power dashboards or audits:
+
+```typescript
+const user = await copilotz.ops.getUserByExternalId("customer-42");
+if (!user) {
+  throw new Error("Unknown user");
+}
+
+// List recent active threads for this user
+const threads = await copilotz.ops.getThreadsForParticipant(user.id, {
+  order: "desc",
+  limit: 10,
+});
+
+for (const thread of threads) {
+  const messages = await copilotz.ops.getMessagesForThread(thread.id, {
+    order: "asc",
+  });
+
+  console.log(`\nThread: ${thread.name}`);
+  for (const message of messages) {
+    console.log(`[${message.createdAt}] ${message.senderId}: ${message.content}`);
+  }
+}
 ```
 
 ## Environment Variables
@@ -308,11 +342,16 @@ COPILOTZ_DB_DEBUG=1
 ## Architecture
 
 ```
-┌─────────────┐
-│   run()     │
-└──────┬──────┘
-       │
-       ▼
+┌──────────────────┐
+│ createCopilotz() │
+└─────────┬────────┘
+          │
+          ▼
+┌──────────────────┐
+│ copilotz.run()   │
+└─────────┬────────┘
+          │
+          ▼
 ┌─────────────┐
 │ Event Queue │
 └──────┬──────┘

@@ -194,6 +194,67 @@ export function createOperations(db: DbInstance):any {
         },
 
         /**
+         * List threads that include a given participant identifier.
+         * @param participantId - Participant name or user identifier persisted in the thread.
+         * @param options - Optional filters and pagination configuration.
+         */
+        async getThreadsForParticipant(
+            participantId: string,
+            options?: {
+                status?: Thread["status"] | "all";
+                limit?: number;
+                offset?: number;
+                order?: "asc" | "desc";
+            },
+        ): Promise<Thread[]> {
+            const statusFilter = options?.status ?? "active";
+            const order = options?.order ?? "desc";
+
+            const rows = await db.query.threads.findMany({
+                where: (t, { eq, and, sql }) => {
+                    if (statusFilter === "all") {
+                        return sql`${t.participants} ? ${participantId}`;
+                    }
+
+                    return and(
+                        sql`${t.participants} ? ${participantId}`,
+                        eq(t.status, statusFilter as Thread["status"]),
+                    );
+                },
+                orderBy: (t, { asc, desc }) => order === "asc" ? asc(t.updatedAt) : desc(t.updatedAt),
+                limit: options?.limit,
+                offset: options?.offset,
+            });
+
+            return rows;
+        },
+
+        /**
+         * Fetch messages for a specific thread ordered by timestamp.
+         * @param threadId - The thread identifier.
+         * @param options - Optional pagination configuration.
+         */
+        async getMessagesForThread(
+            threadId: string,
+            options?: {
+                limit?: number;
+                offset?: number;
+                order?: "asc" | "desc";
+            },
+        ): Promise<Message[]> {
+            const order = options?.order ?? "asc";
+
+            const rows = await db.query.messages.findMany({
+                where: (m, { eq }) => eq(m.threadId, threadId),
+                orderBy: (m, { asc, desc }) => order === "asc" ? asc(m.createdAt) : desc(m.createdAt),
+                limit: options?.limit,
+                offset: options?.offset,
+            });
+
+            return rows;
+        },
+
+        /**
          * Get a thread by ID
          * @param threadId - The ID of the thread to get
          * @returns The thread
