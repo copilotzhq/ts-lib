@@ -7,8 +7,7 @@
     ".": "./index.ts",
     "./database": "./database/index.ts",
     "./types": "./interfaces/index.ts",
-    "./utils": "./utils/index.ts",
-    "./llm.txt": "./llm.txt"
+    "./utils": "./utils/index.ts"
   },  
   "unstable": [
     "bare-node-builtins",
