@@ -89,6 +89,47 @@ await controller.closed;
 await copilotz.shutdown();
 ```
 
+## Multimodal Messages
+
+Use `content` as a string or an array of parts:
+
+```typescript
+import type { ChatMessage } from "@copilotz/copilotz";
+
+const messages: ChatMessage[] = [
+  { role: "system", content: "You are a helpful assistant." },
+  {
+    role: "user",
+    content: [
+      { type: "text", text: "Describe this image" },
+      { type: "image_url", image_url: { url: "https://example.com/cat.jpg" } },
+    ],
+  },
+  {
+    role: "user",
+    content: [
+      { type: "text", text: "And this one (data URL)" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAA..." } },
+    ],
+  },
+  {
+    role: "user",
+    content: [
+      { type: "input_audio", input_audio: { data: "BASE64_AUDIO", format: "wav" } },
+    ],
+  },
+];
+
+await copilotz.run({ content: messages as unknown as any });
+```
+
+Provider support:
+- OpenAI/Groq: text, image_url (http/https or data URLs), input_audio (OpenAI)
+- Anthropic: text, images (URL/data URL) in messages; system is text-only
+- Gemini: text, inline images/audio via data URLs
+- Ollama: text + base64 images (from data URLs)
+- DeepSeek: text only (non-text parts ignored)
+
 ## Configuration
 
 ### Agent Configuration
