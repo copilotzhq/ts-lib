@@ -42,6 +42,7 @@ export type {
     MessagePayload,
     ToolCallPayload,
     ToolResultPayload,
+    ToolExecutionContext,
     LLMCallPayload,
     LLMResultPayload,
 } from "@/event-processors/index.ts";
@@ -60,6 +61,7 @@ export interface ChatContext {
     dbConfig?: DatabaseConfig;
     threadMetadata?: Record<string, unknown>;
     queueTTL?: number;
+    userMetadata?: Record<string, unknown>;
 }
 
 // Callback types that can return values for interception
@@ -94,4 +96,12 @@ export interface ChatInitMessage {
         email?: string;
         metadata?: Record<string, unknown>;
     };
+    metadata?: Record<string, unknown>;
+    toolCalls?: Array<{
+        id?: string;
+        function: {
+            name: string;
+            arguments: string;
+        };
+    }>;
 }

@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -36,5 +36,8 @@
     "js-tiktoken": "npm:js-tiktoken@1.0.21/lite",
     "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client"
   },
-  "lock": false
+  "lock": false,
+  "links":[
+    "../../ominipg"
+  ]
 }

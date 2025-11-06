@@ -14,11 +14,11 @@ type EventType = Event["type"];
 
 // Typed Event Payloads
 import type { LLMCallPayload, LLMResultPayload } from "./llm_call/index.ts";
-import type { ToolCallPayload, ToolResultPayload } from "./tool_call/index.ts";
+import type { ToolCallPayload, ToolResultPayload, ToolExecutionContext } from "./tool_call/index.ts";
 import type { MessagePayload } from "./new_message/index.ts";
 import type { ChatContext } from "@/interfaces/index.ts";
 
-export type { LLMCallPayload, LLMResultPayload, ToolCallPayload, ToolResultPayload, MessagePayload };
+export type { LLMCallPayload, LLMResultPayload, ToolCallPayload, ToolResultPayload, MessagePayload, ToolExecutionContext };
 
 export interface ProcessResult {
     producedEvents: NewEvent[];

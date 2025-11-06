@@ -383,6 +383,14 @@ export function createOperations(db: DbInstance):any {
             return thread;
         },
 
+        async updateThreadMetadata(threadId: string, metadata: Record<string, unknown> | null): Promise<Thread | undefined> {
+            const result = await db.queryRaw(
+                `UPDATE threads SET metadata = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+                [metadata ? JSON.stringify(metadata) : null, threadId]
+            );
+            return result.rows[0] as Thread | undefined;
+        },
+
         /**
          * Archive a thread
          * @param threadId - The ID of the thread to archive

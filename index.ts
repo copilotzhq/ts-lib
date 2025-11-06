@@ -211,11 +211,17 @@ async function ensureThread(
     return { threadId, senderId, senderType, queueTTL };
 }
 
-function buildWorkerContext(context: ChatContext, db: CopilotzDb | undefined, stream: boolean): ChatContext {
+function buildWorkerContext(
+    context: ChatContext,
+    db: CopilotzDb | undefined,
+    stream: boolean,
+    userMetadata?: Record<string, unknown>,
+): ChatContext {
     return {
         ...context,
         dbInstance: db,
         stream,
+        userMetadata: userMetadata ?? context.userMetadata,
     };
 }
 
@@ -260,6 +266,7 @@ function defaultCliIO(): CopilotzCliIO {
 }
 
 export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> {
+
     const baseConfig: CopilotzConfig = {
         ...config,
         agents: [...config.agents],
@@ -278,6 +285,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         initialMessage: ChatInitMessage,
         overrides?: CopilotzRunOverrides,
     ): Promise<CopilotzRunResult> => {
+ 
         if (!initialMessage?.content) {
             throw new Error("initialMessage with content is required.");
         }
@@ -289,12 +297,23 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
 
         const ops = db.operations;
         const { threadId, senderId, senderType, queueTTL } = await ensureThread(ops, initialMessage, runtimeContext);
-        const workerContext = buildWorkerContext(runtimeContext, db, runtimeContext.stream ?? false);
+        const initialUserMetadata = (initialMessage.user?.metadata && typeof initialMessage.user.metadata === "object")
+            ? initialMessage.user.metadata as Record<string, unknown>
+            : undefined;
+
+        const workerContext = buildWorkerContext(
+            runtimeContext,
+            db,
+            runtimeContext.stream ?? false,
+            initialUserMetadata,
+        );
 
         const { queueId } = await enqueueInitialMessage(ops, threadId, {
             senderId,
             senderType,
             content: initialMessage.content,
+            metadata: initialMessage.metadata,
+            toolCalls: initialMessage.toolCalls,
         });
 
         await startThreadEventWorker(db, threadId, workerContext);

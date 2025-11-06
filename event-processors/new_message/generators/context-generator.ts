@@ -12,8 +12,10 @@ export function contextGenerator(
     thread: Thread,
     activeTask: unknown,
     availableAgents: Agent[],
-    allSystemAgents: Agent[]
+    allSystemAgents: Agent[],
+    userMetadata?: Record<string, unknown>
 ): LLMContextData {
+    console.log("userMetadata", userMetadata);
     const participantInfo = thread.participants?.map((p: string) => {
         const agentInfo = availableAgents.find((a: Agent) => a.name === p);
         return `name: ${p} | role: ${agentInfo?.role || "N/A"} | description: ${agentInfo?.description || "N/A"}`;
@@ -73,7 +75,19 @@ export function contextGenerator(
     const currentDate = new Date().toLocaleString();
     const dateContext = `Current date and time: ${currentDate}`;
 
-    const systemPrompt = [threadContext, taskContext, agentContext, dateContext]
+    const threadMetadata = thread.metadata && typeof thread.metadata === "object"
+        ? JSON.stringify(thread.metadata, null, 2)
+        : null;
+
+    const metadataSection = threadMetadata
+        ? ["## THREAD METADATA", threadMetadata].join("\n")
+        : "";
+
+    const userMetadataSection = userMetadata && Object.keys(userMetadata).length > 0
+        ? ["## USER METADATA", JSON.stringify(userMetadata, null, 2)].join("\n")
+        : "";
+
+    const systemPrompt = [threadContext, taskContext, agentContext, metadataSection, userMetadataSection, dateContext]
         .filter(Boolean)
         .join("\n\n");
 

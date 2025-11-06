@@ -1,7 +1,13 @@
 
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'input_audio'; input_audio: { data: string; format?: string } }
+  | { type: 'file'; file: { file_data: string; mime_type?: string } };
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool' | 'tool_result';
-  content: string;
+  content: string | ChatContentPart[];
   tool_call_id?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolCall[];

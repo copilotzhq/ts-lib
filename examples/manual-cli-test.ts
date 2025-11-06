@@ -41,7 +41,7 @@ const copilotz = await createCopilotz({
             // console.log(event.type+":", event);
         },
     },
-    dbConfig: { url: ":memory:" },
+    dbConfig: { url: 'file://' + Deno.cwd() + "/db.db" },
     stream: true,
 });
 

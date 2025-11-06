@@ -120,7 +120,7 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
             const ctx = await buildProcessingContext(ops, event.threadId, context, agent.name);
 
             // Build LLM request
-            const llmContext: LLMContextData = contextGenerator(agent, thread, ctx.activeTask, ctx.availableAgents, availableAgents);
+            const llmContext: LLMContextData = contextGenerator(agent, thread, ctx.activeTask, ctx.availableAgents, availableAgents, ctx.userMetadata);
             const llmHistory: ChatMessage[] = historyGenerator(ctx.chatHistory, agent);
 
             // Select tools available to this agent
@@ -189,12 +189,48 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
     const mcpTools = context.mcpServers ? await generateAllMcpTools(context.mcpServers) : [];
     const allTools: Tool[] = [...nativeToolsArray, ...userTools, ...apiTools, ...mcpTools];
 
-    return { thread, chatHistory, activeTask, availableAgents, allTools } as {
+    let userMetadata = context.userMetadata;
+    const threadMetadata = thread.metadata && typeof thread.metadata === "object"
+        ? (thread.metadata as Record<string, unknown>)
+        : undefined;
+
+    if (!userMetadata && threadMetadata) {
+        const stored = threadMetadata.userContext;
+        if (stored && typeof stored === "object") {
+            userMetadata = stored as Record<string, unknown>;
+        }
+    }
+
+    if (!userMetadata && threadMetadata?.userExternalId) {
+        const externalId = threadMetadata.userExternalId as string;
+        try {
+            const user = await ops.getUserByExternalId(externalId);
+            if (user?.metadata && typeof user.metadata === "object") {
+                userMetadata = user.metadata as Record<string, unknown>;
+            }
+        } catch (error) {
+            console.warn(`buildProcessingContext: failed to load user metadata for ${externalId}`, error);
+        }
+    }
+
+    if (userMetadata && !context.userMetadata) {
+        context.userMetadata = userMetadata;
+    }
+
+    return {
+        thread,
+        chatHistory,
+        activeTask,
+        availableAgents,
+        allTools,
+        userMetadata,
+    } as {
         thread: Thread;
         chatHistory: NewMessage[];
         activeTask: unknown;
         availableAgents: Agent[];
         allTools: Tool[];
+        userMetadata?: Record<string, unknown>;
     };
 }
 
