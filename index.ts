@@ -286,8 +286,8 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         overrides?: CopilotzRunOverrides,
     ): Promise<CopilotzRunResult> => {
  
-        if (!initialMessage?.content) {
-            throw new Error("initialMessage with content is required.");
+        if (!initialMessage?.content && !initialMessage?.toolCalls?.length) {
+            throw new Error("initialMessage with content or toolCalls is required.");
         }
 
         const runtimeContext = buildRuntimeContext(baseConfig, overrides);
