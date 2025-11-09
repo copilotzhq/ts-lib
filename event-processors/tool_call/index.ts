@@ -49,25 +49,71 @@ export interface ToolExecutionContext extends ChatContext {
   db?: CopilotzDb;
 }
 
+function assertToolCallPayload(payload: unknown): asserts payload is ToolCallPayload {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Invalid tool call payload");
+  }
+  const value = payload as Record<string, unknown>;
+  if (typeof value.agentName !== "string") throw new Error("Invalid tool call payload: agentName");
+  if (typeof value.senderId !== "string") throw new Error("Invalid tool call payload: senderId");
+  if (
+    typeof value.senderType !== "string" ||
+    !["user", "agent", "tool", "system"].includes(value.senderType)
+  ) {
+    throw new Error("Invalid tool call payload: senderType");
+  }
+  const call = value.call as Record<string, unknown> | undefined;
+  const fn = call?.function as Record<string, unknown> | undefined;
+  if (!call || typeof call !== "object") throw new Error("Invalid tool call payload: call");
+  if (!fn || typeof fn !== "object") throw new Error("Invalid tool call payload: call.function");
+  if (typeof fn.name !== "string") throw new Error("Invalid tool call payload: function.name");
+  if (typeof fn.arguments !== "string") {
+    throw new Error("Invalid tool call payload: function.arguments");
+  }
+}
+
+
+type ExecutableTool = Tool & {
+  execute: (args: unknown, context: ToolExecutionContext) => Promise<unknown> | unknown;
+};
+
+const hasExecute = (tool: Tool | undefined): tool is ExecutableTool =>
+  Boolean(tool && typeof (tool as { execute?: unknown }).execute === "function");
 
 export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> = {
   shouldProcess: () => true,
   process: async (event: Event, deps: ProcessorDeps) => {
     const { db, thread: _thread, context } = deps;
-    const payload = event.payload as ToolCallPayload;
+    assertToolCallPayload(event.payload);
+    const payload = event.payload;
+
+    const threadId = typeof event.threadId === "string" ? event.threadId : undefined;
+    if (!threadId) {
+      throw new Error("Invalid thread id for tool call event");
+    }
 
     const availableAgents = context.agents || [];
     const agent = availableAgents.find(a => a.name === payload.agentName);
     if (!agent) return { producedEvents: [] };
 
     // Build tools
-    const nativeToolsArray = Object.values(getNativeTools());
-    const userTools = context.tools || [];
-    const apiTools = context.apis ? generateAllApiTools(context.apis) : [];
-    const mcpTools = context.mcpServers ? await generateAllMcpTools(context.mcpServers) : [];
-    const allTools: Tool[] = [...nativeToolsArray, ...userTools, ...apiTools, ...mcpTools];
+    const nativeToolsArray = Object.values(getNativeTools()).filter(hasExecute);
+    const userTools = (context.tools || []).filter(hasExecute);
+    const apiTools = context.apis
+      ? generateAllApiTools(context.apis).filter(hasExecute)
+      : [];
+    const mcpTools = context.mcpServers
+      ? (await generateAllMcpTools(context.mcpServers)).filter(hasExecute)
+      : [];
+    const allTools: ExecutableTool[] = [
+      ...nativeToolsArray,
+      ...userTools,
+      ...apiTools,
+      ...mcpTools,
+    ];
 
-    const agentTools = agent.allowedTools?.map((key: string) => allTools.find((t: Tool) => t.key === key)).filter((t: Tool | undefined): t is Tool => t !== undefined) || [];
+    const agentTools =
+      agent.allowedTools?.map((key: string) => allTools.find((t) => t.key === key)).filter(hasExecute) || [];
 
     const results = await processToolCalls(
       [payload.call],
@@ -76,7 +122,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         ...context,
         senderId: agent.name,
         senderType: "agent",
-        threadId: event.threadId,
+        threadId,
         agents: availableAgents,
         tools: allTools,
         db,
@@ -102,7 +148,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
     // Enqueue a MESSAGE event
     const producedEvents: NewEvent[] = [
       {
-        threadId: event.threadId,
+        threadId,
         type: "NEW_MESSAGE",
         payload: {
           senderId: payload.senderId,
@@ -152,7 +198,7 @@ function levenshteinDistance(str1: string, str2: string): number {
 
 export const processToolCalls = async (
   toolCalls: ToolCallInput[],
-  agentTools: Tool[] = [],
+  agentTools: ExecutableTool[] = [],
   context: ToolExecutionContext = {}
 ) => {
   const availableTools = agentTools.map(t => t.key).join(", ");
@@ -304,10 +350,18 @@ export const validateToolCall = (toolCall: ToolCallValidation, tool: Tool): Vali
   // Handle undefined or null arguments
   const args = toolCall.arguments || {};
 
+  const schemaProperties =
+    tool.inputSchema.properties && typeof tool.inputSchema.properties === "object"
+      ? tool.inputSchema.properties as Record<string, unknown>
+      : undefined;
+  const requiredFields = Array.isArray(tool.inputSchema.required)
+    ? tool.inputSchema.required
+    : undefined;
+
   // If the schema has no properties and no required fields, accept empty arguments
   if (tool.inputSchema.type === 'object' &&
-    (!tool.inputSchema.properties || Object.keys(tool.inputSchema.properties).length === 0) &&
-    (!tool.inputSchema.required || tool.inputSchema.required.length === 0)) {
+    (!schemaProperties || Object.keys(schemaProperties).length === 0) &&
+    (!requiredFields || requiredFields.length === 0)) {
     return { valid: true };
   }
 

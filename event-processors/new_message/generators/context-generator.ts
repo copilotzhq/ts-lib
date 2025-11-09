@@ -15,7 +15,6 @@ export function contextGenerator(
     allSystemAgents: Agent[],
     userMetadata?: Record<string, unknown>
 ): LLMContextData {
-    console.log("userMetadata", userMetadata);
     const participantInfo = thread.participants?.map((p: string) => {
         const agentInfo = availableAgents.find((a: Agent) => a.name === p);
         return `name: ${p} | role: ${agentInfo?.role || "N/A"} | description: ${agentInfo?.description || "N/A"}`;
@@ -67,10 +66,10 @@ export function contextGenerator(
     const agentContext = [
         "## IDENTITY",
         `You are ${agent.name}`,
-        `Your role is: ${agent.role}`,
-        `Personality: ${agent.personality}`,
-        `Your instructions are: ${agent.instructions}`
-    ].join("\n");
+        agent.role && `Your role is: ${agent.role}`,
+        agent.personality && `Personality: ${agent.personality}`,
+        agent.instructions && `Your instructions are: ${agent.instructions}`,
+    ].filter(Boolean).join("\n");
 
     const currentDate = new Date().toLocaleString();
     const dateContext = `Current date and time: ${currentDate}`;

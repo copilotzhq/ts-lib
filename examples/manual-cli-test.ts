@@ -9,12 +9,14 @@
  */
 
 import { createCopilotz } from "../index.ts";
-import type { Agent, Event, ContentStreamData } from "../interfaces/index.ts";
+import type { Event, ContentStreamData } from "../interfaces/index.ts";
+import type { AgentConfig } from "../index.ts";
 
-const testAgent: Agent = {
+const testAgent: AgentConfig = {
     id: "test-agent-1",
     name: "TestBot",
-    type: "agent",
+    role: "assistant",
+    agentType: "agentic",
     instructions: "You are a helpful test assistant. Keep responses brief and friendly.",
     llmOptions: {
         provider: "openai",
@@ -26,6 +28,9 @@ const testAgent: Agent = {
 };
 
 console.log("Starting CLI test...\n");
+
+const dbFilePath = `${Deno.cwd()}/db.db`;
+
 
 const copilotz = await createCopilotz({
     agents: [testAgent],
@@ -41,7 +46,7 @@ const copilotz = await createCopilotz({
             // console.log(event.type+":", event);
         },
     },
-    dbConfig: { url: 'file://' + Deno.cwd() + "/db.db" },
+    dbConfig: { url: `file://${dbFilePath}` },
     stream: true,
 });
 

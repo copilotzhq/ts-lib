@@ -23,7 +23,7 @@ export default {
     },
     execute: async ({ question, targetAgent, timeout = 30 }: AskQuestionParams, context?: ToolExecutionContext) => {
         // Get database instance from context or fallback to global
-        const ops = context?.db?.operations;
+        const ops = context?.db?.ops;
 
         if (!context?.senderId) {
             throw new Error("Sender ID is required to ask questions");

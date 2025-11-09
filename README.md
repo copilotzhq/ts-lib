@@ -11,7 +11,7 @@ An event-driven AI agent framework built with TypeScript/Deno. Create multi-agen
 - 🌐 **API & MCP Integration** - Auto-generate tools from OpenAPI specs and MCP servers
 - 💾 **Persistent Threads** - PostgreSQL/PGLite storage with message history
 - 📡 **Streaming Support** - Real-time token streaming with callbacks
-- 🎯 **Type-Safe** - Full TypeScript types with Drizzle ORM
+- 🎯 **Type-Safe** - Full TypeScript types powered by Ominipg's CRUD helpers
 
 ## Installation
 
@@ -362,6 +362,23 @@ for (const thread of threads) {
 }
 ```
 
+Need to drop lower than the convenience helpers? The underlying CRUD API is always available:
+
+```typescript
+const customThread = await copilotz.ops.crud.threads.create({
+  id: crypto.randomUUID(),
+  name: "Investigations",
+  status: "active",
+});
+
+await copilotz.ops.crud.messages.create({
+  threadId: customThread.id,
+  senderId: "system",
+  senderType: "system",
+  content: "Thread seeded via CRUD API",
+});
+```
+
 ## Environment Variables
 
 ```bash
@@ -425,5 +442,5 @@ Contributions welcome! Please open an issue or PR.
 
 ---
 
-Built with ❤️ using [Deno](https://deno.com) and [Drizzle ORM](https://orm.drizzle.team)
+Built with ❤️ using [Deno](https://deno.com) and [Ominipg](https://jsr.io/@oxian/ominipg)
 

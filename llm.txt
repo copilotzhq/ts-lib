@@ -222,6 +222,12 @@ const messages = await copilotz.ops.getMessagesForThread(thread.id, {
 });
 ```
 
+Need raw access? The native CRUD helpers live under `ops.crud`:
+
+```typescript
+await copilotz.ops.crud.queue.deleteMany({ status: "failed", threadId });
+```
+
 ## Callbacks & Streaming
 
 ```typescript
@@ -350,6 +356,6 @@ await session.close();
 - Enable streaming for better user experience
 - Use multi-agent systems for complex workflows
 - Leverage MCP for standardized tool integrations
-- Access `copilotz.ops` for database queries
+- Access `copilotz.ops` for convenience helpers and `copilotz.ops.crud` for low-level database access
 - Call `shutdown()` to cleanup resources
 

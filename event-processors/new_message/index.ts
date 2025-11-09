@@ -5,10 +5,7 @@ import type { NewEvent, EventProcessor } from "@/interfaces/index.ts";
 // Import Tools
 import { generateAllApiTools } from "@/event-processors/tool_call/generators/api-generator.ts";
 import { generateAllMcpTools } from "@/event-processors/tool_call/generators/mcp-generator.ts";
-import { getNativeTools } from "../tool_call/native-tools-registry/index.ts";
-
-// Import Database Operations
-import type { Operations } from "@/database/operations/index.ts";
+import { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
 
 // Import Agent Interfaces
 import type {
@@ -21,13 +18,15 @@ import type {
     Event,
 } from "@/interfaces/index.ts";
 
+type Operations = ProcessorDeps["db"]["ops"];
+
 import type {
     ToolDefinition,
     ChatMessage,
     ProviderConfig,
 } from "@/connectors/llm/types.ts";
 
-import type { ToolCallInput } from "@/event-processors/tool_call/index.ts";
+import type { NewMessageEventPayload } from "@/database/schemas/index.ts";
 
 // Import Generators
 import {
@@ -37,36 +36,51 @@ import {
 } from "./generators/index.ts";
 
 
-// Message payload used by USER_MESSAGE / AGENT_MESSAGE inputs to the engine
-export interface MessagePayload {
-    senderId: string;
-    senderType: "user" | "agent" | "tool" | "system";
-    content?: string;
-    toolCalls?: ToolCallInput[];
-    toolCallId?: string;
-    metadata?: unknown;
+
+function assertMessagePayload(payload: unknown): asserts payload is NewMessageEventPayload {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        throw new Error("Invalid message payload");
+    }
+    const value = payload as Record<string, unknown>;
+    if (typeof value.senderId !== "string" || typeof value.senderType !== "string") {
+        throw new Error("Invalid message payload");
+    }
+    const metadata = (value as { metadata?: unknown }).metadata;
+    if (metadata != null && typeof metadata !== "object") {
+        throw new Error("Invalid message payload metadata");
+    }
 }
 
-export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
+export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorDeps> = {
     shouldProcess: () => true,
     process: async (event: Event, deps: ProcessorDeps) => {
         const { db, thread, context } = deps;
-        const ops = db.operations;
+        const ops = db.ops;
 
-        const payload = event.payload as MessagePayload;
+        assertMessagePayload(event.payload);
+        const payload = event.payload;
 
-        const incomingMsg: NewMessage = {
-            threadId: event.threadId,
+        const threadId = typeof event.threadId === "string"
+            ? event.threadId
+            : (() => { throw new Error("Invalid thread id for message event"); })();
+
+        const messageMetadata = payload.metadata !== null && typeof payload.metadata === "object"
+            ? payload.metadata as Record<string, unknown>
+            : null;
+
+        const incomingMsg = {
+            id: crypto.randomUUID(),
+            threadId,
             senderId: payload.senderId,
             senderType: payload.senderType,
-            content: payload.content || "",
-            toolCallId: payload.toolCallId,
-            toolCalls: payload.toolCalls,
-            metadata: payload.metadata,
+            content: (payload.content ?? ""),
+            toolCallId: (payload.toolCallId ?? null),
+            toolCalls: (payload.toolCalls ?? null),
+            metadata: messageMetadata,
         };
 
         // Persist incoming message before processing
-        ops.createMessage(incomingMsg);
+        await ops.createMessage(incomingMsg);
 
         // Resolve targets
         const availableAgents = context.agents || [];
@@ -89,9 +103,10 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
             // Emit tool calls as events
             if (toolCalls && toolCalls.length > 0) {
                 toolCalls.forEach((call, i: number) => {
+                    if (!call?.function) return;
                     const callId = call.id || `${call.function?.name || 'call'}_${i}`;
                     producedEvents.push({
-                        threadId: event.threadId,
+                        threadId,
                         type: "TOOL_CALL",
                         payload: {
                             agentName: agent.name,
@@ -117,29 +132,34 @@ export const messageProcessor: EventProcessor<MessagePayload, ProcessorDeps> = {
 
 
             // Build processing context
-            const ctx = await buildProcessingContext(ops, event.threadId, context, agent.name);
+            const ctx = await buildProcessingContext(ops, threadId, context, agent.name);
 
             // Build LLM request
             const llmContext: LLMContextData = contextGenerator(agent, thread, ctx.activeTask, ctx.availableAgents, availableAgents, ctx.userMetadata);
             const llmHistory: ChatMessage[] = historyGenerator(ctx.chatHistory, agent);
 
             // Select tools available to this agent
-            const agentTools = agent.allowedTools?.map((key: string) => ctx.allTools.find((t: Tool) => t.key === key)).filter((t: Tool | undefined) => t !== undefined) || [];
+            const agentTools = agent.allowedTools
+                ?.map((key: string) => ctx.allTools.find((t: Tool) => t.key === key))
+                .filter((t: Tool | undefined): t is Tool => Boolean(t)) || [];
             const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
 
 
+            const systemPrompt = typeof llmContext.systemPrompt === "string"
+                ? llmContext.systemPrompt
+                : JSON.stringify(llmContext.systemPrompt ?? {});
+
             const llmMessages: ChatMessage[] = [
-                { role: "system", content: llmContext.systemPrompt },
+                { role: "system", content: systemPrompt },
                 ...llmHistory
             ];
 
             producedEvents.push({
-                threadId: event.threadId,
+                threadId,
                 type: "LLM_CALL",
                 payload: {
                     agentName: agent.name,
                     agentId: agent.id,
-                    agentType: agent.type,
                     messages: llmMessages,
                     tools: llmTools,
                     config: agent.llmOptions as ProviderConfig,
@@ -161,10 +181,18 @@ const formatToolsForAI = (tools: Tool[]): ToolDefinition[] => {
         function: {
             name: tool.key,
             description: tool.description,
-            parameters: tool.inputSchema || {
-                type: "object" as const,
-                properties: {},
-            },
+            parameters: tool.inputSchema && typeof tool.inputSchema === "object"
+                ? {
+                    type: "object" as const,
+                    properties: (tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {},
+                    required: Array.isArray((tool.inputSchema as { required?: string[] }).required)
+                        ? (tool.inputSchema as { required?: string[] }).required
+                        : undefined,
+                }
+                : {
+                    type: "object" as const,
+                    properties: {},
+                },
         },
     }));
 };
@@ -234,14 +262,14 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
     };
 }
 
-function filterAllowedAgents(senderType: MessagePayload["senderType"], senderId: string, targetAgents: Agent[], availableAgents: Agent[]): Agent[] {
+function filterAllowedAgents(senderType: NewMessageEventPayload["senderType"], senderId: string, targetAgents: Agent[], availableAgents: Agent[]): Agent[] {
     if (senderType !== "agent") return targetAgents;
     const senderAgent = availableAgents.find(a => a.name === senderId);
     if (!senderAgent || !senderAgent.allowedAgents) return targetAgents;
     return targetAgents.filter(agent => senderAgent.allowedAgents!.includes(agent.name));
 }
 
-function discoverTargetAgentsForMessage(payload: MessagePayload, thread: Thread, availableAgents: Agent[]): Agent[] {
+function discoverTargetAgentsForMessage(payload: NewMessageEventPayload, thread: Thread, availableAgents: Agent[]): Agent[] {
     // Tool messages route back to the requesting agent by senderId
     if (
         (payload.senderType === "tool" || (payload.toolCalls && payload.toolCalls?.length > 0)) &&

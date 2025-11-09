@@ -43,6 +43,10 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
         const payload = event.payload as LLMCallPayload
 
+        const threadId = typeof event.threadId === "string"
+            ? event.threadId
+            : (() => { throw new Error("Invalid thread id for LLM call event"); })();
+
         let _error: string | undefined;
         let response: unknown;
 
@@ -58,7 +62,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                 if (context.callbacks?.onContentStream) {
                     
                     const callbackData: ContentStreamData = {
-                        threadId: event.threadId,
+                        threadId,
                         agentName: payload.agentName,
                         token,
                         isComplete: false,
@@ -85,7 +89,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         if (streamCallback) {
             if (context.callbacks?.onContentStream) {
                 context.callbacks.onContentStream({
-                    threadId: event.threadId,
+                    threadId,
                     agentName: payload.agentName,
                     token: "",
                     isComplete: true,
@@ -108,7 +112,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
         // Enqueue a NEW_MESSAGE event
         producedEvents.push({
-            threadId: event.threadId,
+            threadId,
             type: "NEW_MESSAGE",
             payload: {
                 senderId: payload.agentId,

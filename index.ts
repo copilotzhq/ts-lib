@@ -1,6 +1,7 @@
 // Event-queue engine (now default)
 import { startThreadEventWorker } from "@/event-processors/index.ts";
 import { createDatabase, schema, migrations } from "@/database/index.ts";
+import type { OminipgWithCrud } from "omnipg";
 
 import type {
     Agent,
@@ -12,7 +13,10 @@ import type {
     DatabaseConfig,
     MCPServer,
     MessagePayload,
+    Queue,
     Tool,
+    ToolCallPayload,
+    LLMCallPayload,
 } from "./interfaces/index.ts";
 
 declare function prompt(message?: string): string | null;
@@ -20,12 +24,73 @@ declare function prompt(message?: string): string | null;
 export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
 export * from "@/interfaces/index.ts";
 export { createDatabase, schema, migrations };
+export type { MessagePayload, ToolCallPayload, LLMCallPayload } from "@/interfaces/index.ts";
 
-export interface CopilotzConfig {
+// JSON-schema-derived database typing helpers (single source of truth)
+export type DbSchemas = typeof schema;
+export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
+
+export type CopilotzEvent =
+    | { type: "NEW_MESSAGE"; payload: MessagePayload }
+    | { type: "TOOL_CALL"; payload: ToolCallPayload }
+    | { type: "LLM_CALL"; payload: LLMCallPayload };
+
+
+export type AgentConfig = Agent; 
+export type ToolConfig = Tool;
+export type APIConfig = API;
+export type MCPServerConfig = MCPServer;
+
+
+
+type NormalizedCopilotzConfig = Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers"> & {
     agents: Agent[];
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
+};
+
+function normalizeAgent(agent: AgentConfig): Agent {
+    const now = new Date().toISOString();
+    return {
+        ...agent,
+        createdAt: ("createdAt" in agent && agent.createdAt ? agent.createdAt : now) as Agent["createdAt"],
+        updatedAt: ("updatedAt" in agent && agent.updatedAt ? agent.updatedAt : now) as Agent["updatedAt"],
+    };
+}
+
+function normalizeTool(tool: ToolConfig): Tool {
+    const now = new Date().toISOString();
+    return {
+        ...tool,
+        createdAt: ("createdAt" in tool && tool.createdAt ? tool.createdAt : now) as Tool["createdAt"],
+        updatedAt: ("updatedAt" in tool && tool.updatedAt ? tool.updatedAt : now) as Tool["updatedAt"],
+    };
+}
+
+function normalizeApi(api: APIConfig): API {
+    const now = new Date().toISOString();
+    return {
+        ...api,
+        createdAt: ("createdAt" in api && api.createdAt ? api.createdAt : now) as API["createdAt"],
+        updatedAt: ("updatedAt" in api && api.updatedAt ? api.updatedAt : now) as API["updatedAt"],
+    };
+}
+
+function normalizeMcpServer(server: MCPServerConfig): MCPServer {
+    const now = new Date().toISOString();
+    return {
+        ...server,
+        createdAt: ("createdAt" in server && server.createdAt ? server.createdAt : now) as MCPServer["createdAt"],
+        updatedAt: ("updatedAt" in server && server.updatedAt ? server.updatedAt : now) as MCPServer["updatedAt"],
+    };
+}
+
+export interface CopilotzConfig {
+    agents: AgentConfig[];
+    tools?: ToolConfig[];
+    apis?: APIConfig[];
+    mcpServers?: MCPServerConfig[];
     callbacks?: ChatCallbacks;
     dbConfig?: DatabaseConfig;
     dbInstance?: CopilotzDb;
@@ -41,8 +106,11 @@ export interface CopilotzRunResult {
     threadId: string;
 }
 
-export type CopilotzRunOverrides = Partial<Omit<CopilotzConfig, "agents">> & {
-    agents?: Agent[];
+export type CopilotzRunOverrides = Partial<Omit<NormalizedCopilotzConfig, "agents" | "tools" | "apis" | "mcpServers">> & {
+    agents?: AgentConfig[];
+    tools?: ToolConfig[];
+    apis?: APIConfig[];
+    mcpServers?: MCPServerConfig[];
     stream?: boolean;
 };
 
@@ -84,7 +152,7 @@ export interface CopilotzStartOptions extends CopilotzSessionOptions {
 
 export interface Copilotz {
     readonly config: Readonly<CopilotzConfig>;
-    readonly ops: CopilotzDb["operations"];
+    readonly ops: CopilotzDb["ops"];
     run(initialMessage: ChatInitMessage, overrides?: CopilotzRunOverrides): Promise<CopilotzRunResult>;
     start(options?: CopilotzStartOptions): CopilotzCliController;
     createSession(options?: CopilotzSessionOptions): CopilotzSession;
@@ -107,16 +175,28 @@ function mergeCallbacks(base?: ChatCallbacks, override?: ChatCallbacks): ChatCal
 }
 
 function buildRuntimeContext(
-    base: CopilotzConfig,
+    base: NormalizedCopilotzConfig,
     overrides?: CopilotzRunOverrides,
     explicitStream?: boolean,
 ): ChatContext {
     const streamValue = explicitStream ?? overrides?.stream ?? base.stream ?? false;
+    const mergedAgents = overrides?.agents
+        ? overrides.agents.map(normalizeAgent)
+        : base.agents;
+    const mergedTools = overrides?.tools
+        ? overrides.tools.map(normalizeTool)
+        : base.tools;
+    const mergedApis = overrides?.apis
+        ? overrides.apis.map(normalizeApi)
+        : base.apis;
+    const mergedMcpServers = overrides?.mcpServers
+        ? overrides.mcpServers.map(normalizeMcpServer)
+        : base.mcpServers;
     return {
-        agents: overrides?.agents ?? base.agents,
-        tools: overrides?.tools ?? base.tools,
-        apis: overrides?.apis ?? base.apis,
-        mcpServers: overrides?.mcpServers ?? base.mcpServers,
+        agents: mergedAgents,
+        tools: mergedTools,
+        apis: mergedApis,
+        mcpServers: mergedMcpServers,
         callbacks: mergeCallbacks(base.callbacks, overrides?.callbacks),
         dbConfig: overrides?.dbConfig ?? base.dbConfig,
         dbInstance: overrides?.dbInstance ?? base.dbInstance,
@@ -185,13 +265,12 @@ function resolveParticipants(
 }
 
 async function ensureThread(
-    ops: CopilotzDb["operations"],
+    ops: CopilotzDb["ops"],
     initialMessage: ChatInitMessage,
     context: ChatContext,
-): Promise<{ threadId: string; senderId: string; senderType: MessagePayload["senderType"]; queueTTL?: number }> {
+): Promise<{ threadId: string; senderId: string; senderType: MessagePayload["senderType"] }> {
     const { senderId, senderType, participants } = resolveParticipants(initialMessage, context);
     const threadMetadata = initialMessage.threadMetadata ?? context.threadMetadata;
-    const queueTTL = initialMessage.queueTTL ?? context.queueTTL;
 
     let threadId: string | undefined = initialMessage.threadId;
     if (!threadId && initialMessage.threadExternalId) {
@@ -206,9 +285,11 @@ async function ensureThread(
         externalId: initialMessage.threadExternalId || undefined,
         parentThreadId: initialMessage.parentThreadId,
         metadata: threadMetadata,
+        status: "active",
+        mode: "immediate",
     });
 
-    return { threadId, senderId, senderType, queueTTL };
+    return { threadId, senderId, senderType };
 }
 
 function buildWorkerContext(
@@ -226,16 +307,22 @@ function buildWorkerContext(
 }
 
 async function enqueueInitialMessage(
-    ops: CopilotzDb["operations"],
+    ops: CopilotzDb["ops"],
     threadId: string,
     payload: MessagePayload,
     ttlMs?: number,
 ): Promise<{ queueId: string }> {
+    const queuePayload: Queue["payload"] = { ...payload };
+
     const queued = await ops.addToQueue(threadId, {
         eventType: "NEW_MESSAGE",
-        payload,
+        payload: queuePayload,
         ttlMs,
     });
+    if (typeof queued.id !== "string") {
+        throw new Error("Queue id must be a string");
+    }
+
     return { queueId: queued.id };
 }
 
@@ -254,12 +341,12 @@ function mergeOverrides(
 
 function defaultCliIO(): CopilotzCliIO {
     return {
-        prompt: async (message: string) => {
+        prompt: (message: string) => {
             if (typeof prompt === "function") {
                 const response = prompt(message);
-                return response ?? "";
+                return Promise.resolve(response ?? "");
             }
-            throw new Error("No CLI prompt implementation available. Provide a custom io.prompt handler.");
+            return Promise.reject(new Error("No CLI prompt implementation available. Provide a custom io.prompt handler."));
         },
         print: (line: string) => console.log(line),
     };
@@ -267,9 +354,17 @@ function defaultCliIO(): CopilotzCliIO {
 
 export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> {
 
-    const baseConfig: CopilotzConfig = {
+    const normalizedAgents = config.agents.map(normalizeAgent);
+    const normalizedTools = config.tools?.map(normalizeTool);
+    const normalizedApis = config.apis?.map(normalizeApi);
+    const normalizedMcpServers = config.mcpServers?.map(normalizeMcpServer);
+
+    const baseConfig: NormalizedCopilotzConfig = {
         ...config,
-        agents: [...config.agents],
+        agents: normalizedAgents,
+        tools: normalizedTools,
+        apis: normalizedApis,
+        mcpServers: normalizedMcpServers,
     };
 
     const managedDb = config.dbInstance ? undefined : await createDatabase(config.dbConfig);
@@ -277,7 +372,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     if (!baseDb) {
         throw new Error("Failed to initialize Copilotz database instance.");
     }
-    const baseOps = baseDb.operations;
+    const baseOps = baseDb.ops;
 
     const activeSessions = new Set<CopilotzSession>();
 
@@ -285,7 +380,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         initialMessage: ChatInitMessage,
         overrides?: CopilotzRunOverrides,
     ): Promise<CopilotzRunResult> => {
- 
+
         if (!initialMessage?.content && !initialMessage?.toolCalls?.length) {
             throw new Error("initialMessage with content or toolCalls is required.");
         }
@@ -295,8 +390,8 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             ? runtimeContext.dbInstance
             : await createDatabase(runtimeContext.dbConfig ?? baseConfig.dbConfig);
 
-        const ops = db.operations;
-        const { threadId, senderId, senderType, queueTTL } = await ensureThread(ops, initialMessage, runtimeContext);
+        const ops = db.ops;
+        const { threadId, senderId, senderType } = await ensureThread(ops, initialMessage, runtimeContext);
         const initialUserMetadata = (initialMessage.user?.metadata && typeof initialMessage.user.metadata === "object")
             ? initialMessage.user.metadata as Record<string, unknown>
             : undefined;
@@ -364,9 +459,10 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
 
                 return result;
             },
-            close: async () => {
+            close: () => {
                 closed = true;
                 activeSessions.delete(session);
+                return Promise.resolve();
             },
         };
 

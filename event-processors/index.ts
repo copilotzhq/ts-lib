@@ -30,7 +30,7 @@ export type ProcessorDeps = {
     context: ChatContext;
 }
 
-type Operations = CopilotzDb["operations"];
+type Operations = CopilotzDb["ops"];
 
 type EventProcessors = Record<EventType, EventProcessor<unknown, ProcessorDeps>>;
 
@@ -43,12 +43,23 @@ const processors: EventProcessors = {
 
 // Public API
 export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<void> {
-    const ops = db.operations;
-    await ops.addToQueue(event.threadId, {
+    const ops = db.ops;
+    const { threadId } = event;
+
+    if (typeof threadId !== "string") {
+        throw new Error("Invalid thread id for event");
+    }
+
+    const parentEventId = typeof event.parentEventId === "string"
+        ? event.parentEventId
+        : undefined;
+    const traceId = typeof event.traceId === "string" ? event.traceId : undefined;
+
+    await ops.addToQueue(threadId, {
         eventType: event.type,
         payload: event.payload,
-        parentEventId: event.parentEventId ?? undefined,
-        traceId: event.traceId ?? undefined,
+        parentEventId,
+        traceId,
         priority: event.priority ?? undefined,
         metadata: (event.metadata ?? undefined),
         ttlMs: event.ttlMs ?? undefined,
@@ -71,8 +82,13 @@ export async function startThreadEventWorker(
         workerContext,
         processors,
         async (ops: Operations, event: Event) => {
-            const thread = await ops.getThreadById(event.threadId);
-            if (!thread) throw new Error(`Thread not found: ${event.threadId}`);
+            const { threadId } = event;
+            if (typeof threadId !== "string") {
+                throw new Error("Invalid thread id for event");
+            }
+
+            const thread = await ops.getThreadById(threadId);
+            if (!thread) throw new Error(`Thread not found: ${threadId}`);
             return { ops, db, thread, context } as ProcessorDeps;
         }
     );
@@ -107,7 +123,7 @@ export async function startEventWorker<TDeps>(
 
     const dbInstance = db || await createDatabase({});
 
-    const ops = dbInstance.operations as Operations;
+    const ops = dbInstance.ops as Operations;
 
     const processing = await ops.getProcessingQueueItem(threadId);
 
@@ -140,7 +156,9 @@ export async function startEventWorker<TDeps>(
             break;
         }
 
-        await ops.updateQueueItemStatus(next.id, "processing");
+        const queueId = typeof next.id === "string" ? next.id : String(next.id);
+
+        await ops.updateQueueItemStatus(queueId, "processing");
 
         try {
             const deps = await buildDeps(ops, event, context);
@@ -182,13 +200,14 @@ export async function startEventWorker<TDeps>(
             }
 
             const finalStatus = overriddenByOnEvent ? "overwritten" : "completed";
-            await ops.updateQueueItemStatus(next.id, finalStatus);
+            await ops.updateQueueItemStatus(queueId, finalStatus);
         } catch (err) {
             console.error("Event worker failed:", err);
-            await ops.updateQueueItemStatus(next.id, "failed");
+            await ops.updateQueueItemStatus(queueId, "failed");
             break;
         }
     }
+
 }
 
 
