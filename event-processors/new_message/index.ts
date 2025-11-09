@@ -12,10 +12,11 @@ import type {
     Agent,
     Thread,
     NewMessage,
-    Tool,
     ChatContext,
     ProcessorDeps,
     Event,
+    ExecutableTool,
+    ToolExecutor,
 } from "@/interfaces/index.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
@@ -36,6 +37,51 @@ import {
 } from "./generators/index.ts";
 
 
+
+function toExecutableTool(tool: unknown): ExecutableTool | null {
+    if (!tool || typeof tool !== "object") return null;
+    const maybe = tool as Partial<ExecutableTool>;
+
+    const executeSource = maybe.execute;
+    if (typeof executeSource !== "function") return null;
+
+    const executor: ToolExecutor = (args, context) =>
+        executeSource.call(tool, args, context) as Promise<unknown> | unknown;
+
+    const key = maybe.key;
+    const name = maybe.name;
+    const description = maybe.description;
+    if (typeof key !== "string" || typeof name !== "string" || typeof description !== "string") {
+        return null;
+    }
+
+    const toDate = (value: unknown): Date => {
+        if (value instanceof Date) return value;
+        if (typeof value === "string" || typeof value === "number") {
+            const parsed = new Date(value);
+            if (!Number.isNaN(parsed.getTime())) return parsed;
+        }
+        return new Date();
+    };
+
+    return {
+        id: typeof maybe.id === "string"
+            ? maybe.id
+            : crypto.randomUUID(),
+        key,
+        name,
+        description,
+        externalId: typeof maybe.externalId === "string" ? maybe.externalId : null,
+        metadata: (maybe.metadata && typeof maybe.metadata === "object")
+            ? maybe.metadata
+            : null,
+        createdAt: toDate(maybe.createdAt),
+        updatedAt: toDate(maybe.updatedAt),
+        inputSchema: maybe.inputSchema ?? null,
+        outputSchema: maybe.outputSchema ?? null,
+        execute: executor,
+    };
+}
 
 function assertMessagePayload(payload: unknown): asserts payload is NewMessageEventPayload {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -140,8 +186,8 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
             // Select tools available to this agent
             const agentTools = agent.allowedTools
-                ?.map((key: string) => ctx.allTools.find((t: Tool) => t.key === key))
-                .filter((t: Tool | undefined): t is Tool => Boolean(t)) || [];
+                ?.map((key: string) => ctx.allTools.find((t) => t.key === key))
+                .filter((t): t is ExecutableTool => Boolean(t)) || [];
             const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
 
 
@@ -175,7 +221,7 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
     }
 };
 
-const formatToolsForAI = (tools: Tool[]): ToolDefinition[] => {
+const formatToolsForAI = (tools: ExecutableTool[]): ToolDefinition[] => {
     return tools.map((tool) => ({
         type: "function" as const,
         function: {
@@ -211,11 +257,16 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
         throw new Error("No agents provided in context for this session");
     }
 
-    const nativeToolsArray = Object.values(getNativeTools());
-    const userTools = context.tools || [];
+    const nativeToolsArray = Object.values(getNativeTools())
+        .map(toExecutableTool)
+        .filter((tool): tool is ExecutableTool => Boolean(tool));
+    const userTools =
+        (context.tools || [])
+            .map(toExecutableTool)
+            .filter((tool): tool is ExecutableTool => Boolean(tool));
     const apiTools = context.apis ? generateAllApiTools(context.apis) : [];
     const mcpTools = context.mcpServers ? await generateAllMcpTools(context.mcpServers) : [];
-    const allTools: Tool[] = [...nativeToolsArray, ...userTools, ...apiTools, ...mcpTools];
+    const allTools: ExecutableTool[] = [...nativeToolsArray, ...userTools, ...apiTools, ...mcpTools];
 
     let userMetadata = context.userMetadata;
     const threadMetadata = thread.metadata && typeof thread.metadata === "object"
@@ -257,7 +308,7 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
         chatHistory: NewMessage[];
         activeTask: unknown;
         availableAgents: Agent[];
-        allTools: Tool[];
+        allTools: ExecutableTool[];
         userMetadata?: Record<string, unknown>;
     };
 }

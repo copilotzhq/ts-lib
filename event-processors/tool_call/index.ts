@@ -17,6 +17,7 @@ import type {
   Agent,
   CopilotzDb,
 } from "@/interfaces/index.ts";
+import type { ExecutableTool } from "./types.ts";
 import type { ToolCall } from "@/connectors/llm/types.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
@@ -73,12 +74,12 @@ function assertToolCallPayload(payload: unknown): asserts payload is ToolCallPay
 }
 
 
-type ExecutableTool = Tool & {
-  execute: (args: unknown, context: ToolExecutionContext) => Promise<unknown> | unknown;
-};
-
-const hasExecute = (tool: Tool | undefined): tool is ExecutableTool =>
-  Boolean(tool && typeof (tool as { execute?: unknown }).execute === "function");
+const hasExecute = (tool: unknown): tool is ExecutableTool =>
+  Boolean(
+    tool &&
+    typeof tool === "object" &&
+    typeof (tool as { execute?: unknown }).execute === "function",
+  );
 
 export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> = {
   shouldProcess: () => true,

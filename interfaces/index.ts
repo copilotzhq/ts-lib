@@ -9,6 +9,7 @@ import type {
     Thread, NewThread,
     Tool, NewTool,
     User, NewUser,
+    MessagePayload,
 } from "@/database/schemas/index.ts";
 
 export type {
@@ -22,6 +23,7 @@ export type {
     Thread, NewThread,
     Tool, NewTool,
     User, NewUser,
+    MessagePayload,
 }
  
 import type {
@@ -39,12 +41,13 @@ export type {
 export type {
     EventProcessor,
     ProcessorDeps,
-    MessagePayload,
     ToolCallPayload,
     ToolResultPayload,
     ToolExecutionContext,
     LLMCallPayload,
     LLMResultPayload,
+    ExecutableTool,
+    ToolExecutor,
 } from "@/event-processors/index.ts";
 
 // Chat context interface

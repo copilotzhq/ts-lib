@@ -1,4 +1,4 @@
-import type { Tool } from "@/interfaces/index.ts";
+import type { NewTool } from "@/interfaces/index.ts";
 
 import ask_question from "./ask_question.ts";
 import create_thread from "./create_thread.ts";
@@ -15,7 +15,7 @@ import fetch_text from "./fetch_text.ts";
 import run_command from "./run_command.ts";
 import wait from "./wait.ts";
 
-export const nativeTools: { [key: string]: Tool } = {
+export const nativeTools: { [key: string]: NewTool } = {
     ask_question,
     create_thread,
     end_thread,
@@ -42,6 +42,6 @@ export const nativeTools: { [key: string]: Tool } = {
  * ```
  * @returns A dictionary of native tools. The key is the tool name and the value is the tool object.
  */
-export function getNativeTools(): { [key: string]: Tool } {
+export function getNativeTools(): { [key: string]: NewTool } {
     return nativeTools;
 }

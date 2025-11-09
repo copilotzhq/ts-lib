@@ -1,5 +1,6 @@
 import { defineSchema, type JsonSchema } from "omnipg";
 import type { FromSchema } from "npm:json-schema-to-ts@3.1.1";
+import { ulid } from "ulid";
 
 const UUID_SCHEMA: JsonSchema = {
   type: "string",
@@ -96,9 +97,12 @@ export const NewMessageEventPayloadSchema = {
   required: ["senderId", "senderType"],
 } as const;
 
+// create ulid
+const generateId = (): string => ulid();
+
 export type NewMessageEventPayload = FromSchema<typeof NewMessageEventPayloadSchema>;
 
-const schemas = defineSchema({
+const schemaDefinition = {
   agents: {
     schema: {
       type: "object",
@@ -193,7 +197,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId,
     }
   },
   apis: {
@@ -205,12 +209,127 @@ const schemas = defineSchema({
         name: { type: "string", minLength: 1 },
         externalId: { type: ["string", "null"], maxLength: 255 },
         description: { type: ["string", "null"] },
-        openApiSchema: { type: ["object", "null"] },
+        openApiSchema: {
+          anyOf: [
+            { type: "object" },
+            { type: "string" },
+            { type: "null" },
+          ],
+        },
         baseUrl: { type: ["string", "null"] },
-        headers: { type: ["object", "null"] },
-        auth: { type: ["object", "null"] },
+        headers: {
+          type: ["object", "null"],
+          additionalProperties: { type: "string" },
+        },
+        auth: {
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                type: { const: "apiKey" },
+                in: { type: "string", enum: ["header", "query"] },
+                name: { type: "string" },
+                key: { type: "string" },
+              },
+              required: ["type", "in", "name", "key"],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                type: { const: "bearer" },
+                scheme: { type: "string" },
+                token: { type: "string" },
+              },
+              required: ["type", "token"],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                type: { const: "basic" },
+                username: { type: "string" },
+                password: { type: "string" },
+              },
+              required: ["type", "username", "password"],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                type: { const: "custom" },
+                headers: {
+                  type: ["object", "null"],
+                  additionalProperties: { type: "string" },
+                },
+                queryParams: {
+                  type: ["object", "null"],
+                  additionalProperties: { type: ["string", "number", "boolean"] },
+                },
+              },
+              required: ["type"],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                type: { const: "dynamic" },
+                authEndpoint: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    url: { type: "string" },
+                    method: { type: "string" },
+                    headers: {
+                      type: ["object", "null"],
+                      additionalProperties: { type: "string" },
+                    },
+                    body: JSON_ANY_SCHEMA,
+                    credentials: JSON_ANY_SCHEMA,
+                  },
+                  required: ["url"],
+                },
+                tokenExtraction: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    path: { type: "string" },
+                    type: { type: "string", enum: ["bearer", "apiKey"] },
+                    prefix: { type: ["string", "null"] },
+                    headerName: { type: ["string", "null"] },
+                  },
+                  required: ["path", "type"],
+                },
+                cache: {
+                  type: ["object", "null"],
+                  additionalProperties: false,
+                  properties: {
+                    enabled: { type: "boolean" },
+                    duration: { type: "integer" },
+                  },
+                },
+                refreshConfig: {
+                  type: ["object", "null"],
+                  additionalProperties: false,
+                  properties: {
+                    refreshEndpoint: { type: ["string", "null"] },
+                    refreshBeforeExpiry: { type: ["integer", "null"] },
+                    refreshPath: { type: ["string", "null"] },
+                    expiryPath: { type: ["string", "null"] },
+                  },
+                },
+              },
+              required: ["type", "authEndpoint", "tokenExtraction"],
+            },
+            { type: "null" },
+          ],
+        },
         timeout: { type: ["integer", "null"] },
-        metadata: { type: ["object", "null"] },
+        metadata: {
+          type: ["object", "null"],
+          additionalProperties: true,
+        },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
       },
@@ -222,7 +341,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId
     }
   },
   mcpServers: {
@@ -249,7 +368,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId,
     }
   },
   messages: {
@@ -298,7 +417,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId,
     }
   },
   queue: {
@@ -516,7 +635,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId,
     }
   },
   tasks: {
@@ -543,7 +662,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId,
     },
   },
   threads: {
@@ -588,7 +707,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: () => crypto.randomUUID(),
+      id: generateId,
     },
   },
   tools: {
@@ -615,7 +734,7 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: crypto.randomUUID(),
+      id: generateId,
     }
   },
   users: {
@@ -639,20 +758,24 @@ const schemas = defineSchema({
       updatedAt: "updatedAt",
     },
     defaults: {
-      id: crypto.randomUUID(),
+      id: generateId,
     }
   },
-});
+} as const;
 
-const agents = schemas.agents;
-const apis = schemas.apis;
-const mcpServers = schemas.mcpServers;
-const messages = schemas.messages;
-const queue = schemas.queue;
-const tasks = schemas.tasks;
-const threads = schemas.threads;
-const tools = schemas.tools;
-const users = schemas.users;
+type SchemaInternal = ReturnType<typeof defineSchema<typeof schemaDefinition>>;
+
+const schemaInternal: SchemaInternal = defineSchema(schemaDefinition);
+
+const agents = schemaInternal.agents;
+const apis = schemaInternal.apis;
+const mcpServers = schemaInternal.mcpServers;
+const messages = schemaInternal.messages;
+const queue = schemaInternal.queue;
+const tasks = schemaInternal.tasks;
+const threads = schemaInternal.threads;
+const tools = schemaInternal.tools;
+const users = schemaInternal.users;
 
 
 export type Agent = typeof agents.$inferSelect;
@@ -682,7 +805,7 @@ export type NewTool = typeof tools.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 
-export const schema = schemas;
+export const schema: typeof schemaInternal = schemaInternal;
 
 export type MessagePayload = Omit<
   NewMessage,

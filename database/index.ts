@@ -9,7 +9,7 @@ import { splitSQLStatements } from "./migrations/utils.ts";
 import { schema as baseSchema } from "./schemas/index.ts";
 
 // Import Operations
-import { createOperations } from "./operations/index.ts";
+import { createOperations, type DatabaseOperations } from "./operations/index.ts";
 
 // Import Migrations File
 // import migrations from "./migrations/migration_0001.sql" with { type: "text" };
@@ -29,7 +29,7 @@ export interface DatabaseConfig {
 }
 
 
-type Operations = ReturnType<typeof createOperations>;
+type Operations = DatabaseOperations;
 
 // Strongly-typed instance returned by Ominipg when schemas are provided
 export type DbInstance = OminipgWithCrud<typeof baseSchema>;

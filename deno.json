@@ -32,7 +32,8 @@
     "zod": "npm:zod@3.24.8",
     "yaml": "npm:yaml@2.8.0",
     "js-tiktoken": "npm:js-tiktoken@1.0.21/lite",
-    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client"
+    "modelcontextprotocol/sdk/client": "npm:@modelcontextprotocol/sdk@1.17.0/client",
+    "ulid": "jsr:@std/ulid@1.0.0"
   },
   "lock": false
 }

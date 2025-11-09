@@ -1,9 +1,8 @@
 export const generateMigrations = (): string => (`-- Enable extensions once; safe to re-run.
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 CREATE TABLE IF NOT EXISTS "agents" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
   "role" text NOT NULL,
@@ -20,7 +19,7 @@ CREATE TABLE IF NOT EXISTS "agents" (
 );
 
 CREATE TABLE IF NOT EXISTS "tools" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "key" varchar(255) NOT NULL,
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
@@ -35,7 +34,7 @@ CREATE TABLE IF NOT EXISTS "tools" (
 );
 
 CREATE TABLE IF NOT EXISTS "threads" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
   "description" text,
@@ -44,14 +43,14 @@ CREATE TABLE IF NOT EXISTS "threads" (
   "mode" varchar DEFAULT 'immediate' NOT NULL,
   "status" varchar DEFAULT 'active' NOT NULL,
   "summary" text,
-  "parentThreadId" uuid,
+  "parentThreadId" varchar(255),
   "metadata" jsonb,
   "createdAt" timestamp DEFAULT now() NOT NULL,
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS "tasks" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
   "goal" text NOT NULL,
@@ -64,9 +63,9 @@ CREATE TABLE IF NOT EXISTS "tasks" (
 );
 
 CREATE TABLE IF NOT EXISTS "messages" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
-  "threadId" uuid NOT NULL,
-  "senderUserId" uuid,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
+  "threadId" varchar(255) NOT NULL,
+  "senderUserId" varchar(255),
   "senderId" text NOT NULL,
   "senderType" varchar NOT NULL,
   "externalId" varchar(255),
@@ -79,7 +78,7 @@ CREATE TABLE IF NOT EXISTS "messages" (
 );
 
 CREATE TABLE IF NOT EXISTS "mcpServers" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
   "description" text,
@@ -92,7 +91,7 @@ CREATE TABLE IF NOT EXISTS "mcpServers" (
 );
 
 CREATE TABLE IF NOT EXISTS "users" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255),
   "email" varchar(255),
   "externalId" varchar(255),
@@ -102,7 +101,7 @@ CREATE TABLE IF NOT EXISTS "users" (
 );
 
 CREATE TABLE IF NOT EXISTS "apis" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
   "externalId" varchar(255),
   "description" text,
@@ -117,11 +116,11 @@ CREATE TABLE IF NOT EXISTS "apis" (
 );
 
 CREATE TABLE IF NOT EXISTS "queue" (
-  "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4() NOT NULL,
-  "threadId" uuid NOT NULL,
+  "id" varchar(255) PRIMARY KEY NOT NULL,
+  "threadId" varchar(255) NOT NULL,
   "eventType" varchar(64) NOT NULL,
   "payload" jsonb NOT NULL,
-  "parentEventId" uuid,
+  "parentEventId" varchar(255),
   "traceId" varchar(255),
   "priority" integer,
   "ttlMs" integer,

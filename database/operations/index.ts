@@ -14,14 +14,58 @@ import type { DbInstance } from "../index.ts";
 const MAX_EXPIRED_CLEANUP_BATCH = 100;
 const EXPIRED_RETENTION_INTERVAL = "1 day";
 
-const generateUuid = () => crypto.randomUUID();
-const nowIsoString = () => new Date().toISOString();
 
 type MessageInsert =
   & Omit<NewMessage, "id">
   & { id?: string };
 type ThreadInsert = NewThread;
 type TaskInsert = NewTask;
+
+export interface QueueEventInput {
+  eventType: Queue["eventType"];
+  payload: Queue["payload"];
+  parentEventId?: string;
+  traceId?: string;
+  priority?: number;
+  metadata?: Queue["metadata"] | undefined;
+  ttlMs?: number;
+  expiresAt?: Date | string | null;
+  status?: Queue["status"];
+}
+
+export interface DatabaseOperations {
+  crud: DbInstance["crud"];
+  addToQueue: (threadId: string, event: QueueEventInput) => Promise<NewQueue>;
+  getProcessingQueueItem: (threadId: string) => Promise<Queue | undefined>;
+  getNextPendingQueueItem: (threadId: string) => Promise<Queue | undefined>;
+  updateQueueItemStatus: (queueId: string, status: Queue["status"]) => Promise<void>;
+  getMessageHistory: (threadId: string, userId: string, limit?: number) => Promise<Message[]>;
+  getThreadsForParticipant: (
+    participantId: string,
+    options?: {
+      status?: Thread["status"] | "all";
+      limit?: number;
+      offset?: number;
+      order?: "asc" | "desc";
+    },
+  ) => Promise<Thread[]>;
+  getMessagesForThread: (
+    threadId: string,
+    options?: {
+      limit?: number;
+      offset?: number;
+      order?: "asc" | "desc";
+    },
+  ) => Promise<Message[]>;
+  getThreadById: (threadId: string) => Promise<Thread | undefined>;
+  getThreadByExternalId: (externalId: string) => Promise<Thread | undefined>;
+  findOrCreateThread: (threadId: string, threadData: ThreadInsert) => Promise<Thread>;
+  createMessage: (message: MessageInsert) => Promise<Message>;
+  getTaskById: (taskId: string) => Promise<Task | undefined>;
+  createTask: (taskData: TaskInsert) => Promise<Task>;
+  getUserByExternalId: (externalId: string) => Promise<User | undefined>;
+  archiveThread: (threadId: string, summary: string) => Promise<Thread | null>;
+}
 
 const toIsoString = (
   value: Date | string | null | undefined,
@@ -31,7 +75,7 @@ const toIsoString = (
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 };
 
-export function createOperations(db: DbInstance) {
+export function createOperations(db: DbInstance): DatabaseOperations {
   const { crud } = db;
 
   const cleanupExpiredQueueItems = async (): Promise<void> => {
@@ -61,17 +105,7 @@ export function createOperations(db: DbInstance) {
 
   const addToQueue = async (
     threadId: string,
-    event: {
-      eventType: Queue["eventType"];
-      payload: Queue["payload"];
-      parentEventId?: string;
-      traceId?: string;
-      priority?: number;
-      metadata?: Queue["metadata"] | undefined;
-      ttlMs?: number;
-      expiresAt?: Date | string | null;
-      status?: Queue["status"];
-    },
+    event: QueueEventInput,
   ): Promise<NewQueue> => {
     const ttlMs = typeof event.ttlMs === "number" && event.ttlMs > 0
       ? Math.floor(event.ttlMs)
@@ -104,17 +138,17 @@ export function createOperations(db: DbInstance) {
 
   const getProcessingQueueItem = async (
     threadId: string,
-  ) => {
+  ): Promise<Queue | undefined> => {
     const item = await crud.queue.findOne({
       threadId,
       status: "processing",
-    });
+    }) as Queue | null;
     return item ?? undefined;
   };
 
   const getNextPendingQueueItem = async (
     threadId: string,
-  ) => {
+  ): Promise<Queue | undefined> => {
     while (true) {
       const [candidate] = await crud.queue.find({
         threadId,
@@ -144,7 +178,7 @@ export function createOperations(db: DbInstance) {
         }
       }
 
-      return candidate;
+      return candidate as Queue;
     }
   };
 
@@ -161,14 +195,14 @@ export function createOperations(db: DbInstance) {
     const thread = await crud.threads.findOne({
       id: threadId,
       status: "active",
-    });
+    }) as Thread | null;
     return thread ?? undefined;
   };
 
   const getThreadByExternalId = async (
     externalId: string,
   ): Promise<Thread | undefined> => {
-    const thread = await crud.threads.findOne({ externalId, status: "active" });
+    const thread = await crud.threads.findOne({ externalId, status: "active" }) as Thread | null;
     return thread ?? undefined;
   };
 
@@ -197,7 +231,7 @@ export function createOperations(db: DbInstance) {
         summary: threadData.summary ?? null,
         parentThreadId: threadData.parentThreadId ?? null,
         metadata: threadData.metadata ?? null
-      });
+      }) as Thread;
       return created;
     }
 
@@ -231,10 +265,10 @@ export function createOperations(db: DbInstance) {
     }
 
     const updated = await crud.threads.update({ id: threadId }, updates);
-    return updated ?? existing;
+    return (updated ?? existing) as Thread;
   };
 
-  const createMessage = async (message: MessageInsert)=> {
+  const createMessage = async (message: MessageInsert): Promise<Message> => {
     const created = await crud.messages.create({
       threadId: message.threadId,
       senderId: message.senderId,
@@ -246,27 +280,30 @@ export function createOperations(db: DbInstance) {
       toolCalls: message.toolCalls ?? undefined,
       metadata: message.metadata ?? undefined,
     });
-    return created;
+    return created as Message;
   };
 
   const getMessageHistory = async (
     threadId: string,
     userId: string,
     limit = 50,
-  ) => {
+  ): Promise<Message[]> => {
     const allMessages: { message: Message, threadLevel: number }[] = [];
     let currentThreadId: string | null = threadId;
     let level = 0;
 
     while (currentThreadId) {
 
-      const thread = await crud.threads.findOne({ id: currentThreadId });
+      const thread = await crud.threads.findOne({
+        id: currentThreadId,
+      }) as Thread | null;
       if (!thread || thread.status !== "active") {
         break;
       }
 
+
       const participants = Array.isArray(thread.participants)
-        ? thread.participants.filter((participant): participant is string =>
+        ? thread.participants.filter((participant: string): participant is string =>
           typeof participant === "string"
         )
         : [];
@@ -282,7 +319,7 @@ export function createOperations(db: DbInstance) {
         allMessages.push({ message: msg as Message, threadLevel: level });
       }
 
-      const parentId = typeof thread.parentThreadId === "string"
+      const parentId: string | null = typeof thread.parentThreadId === "string"
         ? thread.parentThreadId
         : null;
 
@@ -368,24 +405,23 @@ export function createOperations(db: DbInstance) {
       offset?: number;
       order?: "asc" | "desc";
     },
-  ) => {
+  ): Promise<Message[]> => {
     const order = options?.order === "desc" ? "desc" : "asc";
     const messages = await crud.messages.find({ threadId }, {
       limit: options?.limit,
       offset: options?.offset,
       sort: [["createdAt", order]],
     });
-    return messages;
+    return messages as Message[];
   };
 
   const getTaskById = async (taskId: string): Promise<Task | undefined> => {
-    const task = await crud.tasks.findOne({ id: taskId });
+    const task = await crud.tasks.findOne({ id: taskId }) as Task | null;
     return task ?? undefined;
   };
 
   const createTask = async (taskData: TaskInsert): Promise<Task> => {
     return await crud.tasks.create({
-      id: taskData.id ?? generateUuid(),
       name: taskData.name,
       externalId: taskData.externalId ?? null,
       goal: taskData.goal,
@@ -393,13 +429,13 @@ export function createOperations(db: DbInstance) {
       status: taskData.status ?? "pending",
       notes: taskData.notes ?? null,
       metadata: taskData.metadata ?? null,
-    });
+    }) as Task;
   };
 
   const getUserByExternalId = async (
     externalId: string,
   ): Promise<User | undefined> => {
-    const user = await crud.users.findOne({ externalId });
+    const user = await crud.users.findOne({ externalId }) as User | null;
     return user ?? undefined;
   };
 
@@ -410,7 +446,7 @@ export function createOperations(db: DbInstance) {
     const updated = await crud.threads.update({ id: threadId }, {
       status: "archived",
       summary,
-    });
+    }) as Thread | null;
     return updated ?? null;
   };
 

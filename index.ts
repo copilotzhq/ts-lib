@@ -24,7 +24,7 @@ declare function prompt(message?: string): string | null;
 export { getNativeTools } from "@/event-processors/tool_call/native-tools-registry/index.ts";
 export * from "@/interfaces/index.ts";
 export { createDatabase, schema, migrations };
-export type { MessagePayload, ToolCallPayload, LLMCallPayload } from "@/interfaces/index.ts";
+export type { ToolCallPayload, LLMCallPayload } from "@/interfaces/index.ts";
 
 // JSON-schema-derived database typing helpers (single source of truth)
 export type DbSchemas = typeof schema;
@@ -40,8 +40,6 @@ export type AgentConfig = Agent;
 export type ToolConfig = Tool;
 export type APIConfig = API;
 export type MCPServerConfig = MCPServer;
-
-
 
 type NormalizedCopilotzConfig = Omit<CopilotzConfig, "agents" | "tools" | "apis" | "mcpServers"> & {
     agents: Agent[];
