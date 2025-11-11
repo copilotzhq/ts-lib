@@ -2,7 +2,15 @@
 import { createDatabase, type CopilotzDb } from "@/database/index.ts";
 
 // Import Agent Interfaces  
-import type { Thread, Event, NewEvent } from "@/interfaces/index.ts";
+import type {
+    Thread,
+    Event,
+    NewEvent,
+    MessagePayload,
+    ToolCallEventPayload,
+    LlmCallEventPayload,
+    TokenEventPayload,
+} from "@/interfaces/index.ts";
 
 // Import Processors
 import { llmCallProcessor } from "./llm_call/index.ts";
@@ -34,11 +42,36 @@ type Operations = CopilotzDb["ops"];
 
 type EventProcessors = Record<EventType, EventProcessor<unknown, ProcessorDeps>>;
 
+function castEventPayload(type: "NEW_MESSAGE", payload: unknown): MessagePayload;
+function castEventPayload(type: "TOOL_CALL", payload: unknown): ToolCallEventPayload;
+function castEventPayload(type: "LLM_CALL", payload: unknown): LlmCallEventPayload;
+function castEventPayload(type: "TOKEN", payload: unknown): TokenEventPayload;
+function castEventPayload(type: Event["type"], payload: unknown): Event["payload"] {
+    switch (type) {
+        case "NEW_MESSAGE":
+            return payload as MessagePayload;
+        case "TOOL_CALL":
+            return payload as ToolCallEventPayload;
+        case "LLM_CALL":
+            return payload as LlmCallEventPayload;
+        case "TOKEN":
+        default:
+            return payload as TokenEventPayload;
+    }
+}
+
 // Processor registry
+const tokenProcessor: EventProcessor<unknown, ProcessorDeps> = {
+    shouldProcess: () => false,
+    process: () => ({ producedEvents: [] }),
+};
+
 const processors: EventProcessors = {
     LLM_CALL: llmCallProcessor,
     NEW_MESSAGE: messageProcessor,
     TOOL_CALL: toolCallProcessor,
+    TOKEN: tokenProcessor,
+    
 };
 
 // Public API
@@ -48,6 +81,10 @@ export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<voi
 
     if (typeof threadId !== "string") {
         throw new Error("Invalid thread id for event");
+    }
+
+    if (event.type === "TOKEN") {
+        throw new Error("TOKEN events are ephemeral and must not be enqueued");
     }
 
     const parentEventId = typeof event.parentEventId === "string"
@@ -61,9 +98,9 @@ export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<voi
         parentEventId,
         traceId,
         priority: event.priority ?? undefined,
-        metadata: (event.metadata ?? undefined),
+        metadata:event.metadata,
         ttlMs: event.ttlMs ?? undefined,
-        status: event.status ?? undefined,
+        status: event.status,
     });
 }
 
@@ -135,11 +172,10 @@ export async function startEventWorker<TDeps>(
 
         if (!next) break;
 
-        const event: Event = {
+        const eventType = next.eventType as Event["type"];
+        const baseEvent = {
             id: next.id,
             threadId: next.threadId,
-            type: next.eventType,
-            payload: next.payload,
             parentEventId: next.parentEventId,
             traceId: next.traceId,
             priority: next.priority,
@@ -150,6 +186,39 @@ export async function startEventWorker<TDeps>(
             updatedAt: next.updatedAt,
             status: next.status,
         };
+
+        let event: Event;
+        switch (eventType) {
+            case "NEW_MESSAGE":
+                event = {
+                    ...baseEvent,
+                    type: "NEW_MESSAGE",
+                    payload: castEventPayload("NEW_MESSAGE", next.payload),
+                };
+                break;
+            case "TOOL_CALL":
+                event = {
+                    ...baseEvent,
+                    type: "TOOL_CALL",
+                    payload: castEventPayload("TOOL_CALL", next.payload),
+                };
+                break;
+            case "LLM_CALL":
+                event = {
+                    ...baseEvent,
+                    type: "LLM_CALL",
+                    payload: castEventPayload("LLM_CALL", next.payload),
+                };
+                break;
+            case "TOKEN":
+            default:
+                event = {
+                    ...baseEvent,
+                    type: "TOKEN",
+                    payload: castEventPayload("TOKEN", next.payload),
+                };
+                break;
+        }
 
         if (typeof shouldAcceptEvent === 'function' && !shouldAcceptEvent(event)) {
             // Let another domain worker process this event

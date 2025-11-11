@@ -1,6 +1,6 @@
 import { chat } from "@/connectors/llm/index.ts";
-import type { ChatMessage, ChatRequest, ChatResponse, ProviderConfig, ToolDefinition } from "@/connectors/llm/types.ts";
-import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps } from "@/interfaces/index.ts";
+import type { ChatMessage, ChatRequest, ChatResponse } from "@/connectors/llm/types.ts";
+import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps, LlmCallEventPayload } from "@/interfaces/index.ts";
 import type { ToolCallInput } from "@/event-processors/tool_call/index.ts";
 
 export type {
@@ -14,24 +14,8 @@ export interface ContentStreamData {
     isComplete: boolean;
 }
 
-// Typed Event Payloads
-export type LLMCallPayload = {
-    agentName: string;
-    agentId: string;
-    agentType: "user" | "agent" | "tool" | "system";
-    messages: ChatMessage[],
-    tools: ToolDefinition[],
-    config: ProviderConfig;
-}
-
-export type LLMResultPayload = {
-    agentName: string;
-    agentId: string;
-    agentType: "user" | "agent" | "tool" | "system";
-    messages: ChatMessage[],
-    tools: ToolDefinition[],
-    config: ProviderConfig;
-}
+export type LLMCallPayload = LlmCallEventPayload;
+export type LLMResultPayload = LlmCallEventPayload;
 
 // Utilities reused from legacy engine (minimized/duplicated to avoid refactors)
 const escapeRegex = (string: string): string => string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -41,14 +25,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
     shouldProcess: () => true,
     process: async (event: Event, deps: ProcessorDeps) => {
 
-        const payload = event.payload as LLMCallPayload
+        const payload = event.payload as LlmCallEventPayload;
 
         const threadId = typeof event.threadId === "string"
             ? event.threadId
             : (() => { throw new Error("Invalid thread id for LLM call event"); })();
-
-        let _error: string | undefined;
-        let response: unknown;
 
         const producedEvents: NewEvent[] = [];
 
@@ -72,7 +53,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             }
             : undefined;
 
-            response = await chat(
+            const response = await chat(
                 {
                     messages: payload.messages,
                     tools: payload.tools,
@@ -110,19 +91,42 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             answer = answer.replace(selfPrefixPattern, '');
         }
 
+        const normalizedToolCalls = Array.isArray(toolCalls)
+            ? toolCalls.map((call) => {
+                let parsedArgs: Record<string, unknown> = {};
+                try {
+                    parsedArgs = call?.function?.arguments
+                        ? JSON.parse(call.function.arguments)
+                        : {};
+                } catch (_err) {
+                    parsedArgs = {};
+                }
+                return {
+                    id: call?.id ?? null,
+                    name: call?.function?.name ?? "",
+                    args: parsedArgs,
+                };
+            })
+            : undefined;
+
+        const newMessagePayload: MessagePayload = {
+            content: answer || "",
+            sender: {
+                id: payload.agentId,
+                type: "agent",
+                name: payload.agentName,
+            },
+            toolCalls: normalizedToolCalls,
+        };
+
         // Enqueue a NEW_MESSAGE event
         producedEvents.push({
             threadId,
             type: "NEW_MESSAGE",
-            payload: {
-                senderId: payload.agentId,
-                senderType: "agent",
-                content: answer || "",
-                toolCalls: toolCalls,
-            } as MessagePayload,
-            parentEventId: event.id,
-            traceId: event.traceId,
-            priority: event.priority,
+            payload: newMessagePayload,
+            parentEventId: typeof event.id === "string" ? event.id : undefined,
+            traceId: typeof event.traceId === "string" ? event.traceId : undefined,
+            priority: typeof event.priority === "number" ? event.priority : undefined,
         });
 
         return { producedEvents };

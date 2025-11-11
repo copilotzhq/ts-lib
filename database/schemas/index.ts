@@ -1,31 +1,15 @@
 import { defineSchema, type JsonSchema } from "omnipg";
-import type { FromSchema } from "npm:json-schema-to-ts@3.1.1";
+import type { FromSchema } from "json-schema-to-ts";
 import { ulid } from "ulid";
 
 const UUID_SCHEMA: JsonSchema = {
   type: "string",
-  format: "uuid",
-};
-
-const ISO_DATETIME_SCHEMA: JsonSchema = {
-  type: "string",
-  format: "date-time",
 };
 
 const READONLY_UUID_SCHEMA: JsonSchema = {
   ...UUID_SCHEMA,
   readOnly: true,
 };
-
-const READONLY_TIMESTAMP_SCHEMA: JsonSchema = {
-  ...ISO_DATETIME_SCHEMA,
-  readOnly: true,
-};
-
-const TIMESTAMP_COLUMNS = {
-  createdAt: "createdAt",
-  updatedAt: "updatedAt",
-} as const;
 
 const JSON_ANY_SCHEMA: JsonSchema = {
   anyOf: [
@@ -46,22 +30,87 @@ export const ToolMessageMetadataSchema = {
     toolName: { type: "string" },
     arguments: { type: "string" },
     // Allow any JSON for output/error
-    output: {},
-    error: {},
+    output: {
+      type: "object",
+      additionalProperties: true,
+    },
+    error: {
+      type: "object",
+      additionalProperties: true,
+    },
   },
 } as const;
 
-export const NewMessageEventPayloadSchema = {
+export const MessagePayloadSchema = {
   type: "object",
   additionalProperties: true,
   properties: {
-    senderId: { type: "string" },
-    senderType: {
-      type: "string",
-      enum: ["user", "agent", "tool", "system"],
+    content: {
+      anyOf: [
+        { type: "string" },
+        {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "text" },
+                  text: { type: "string" },
+                },
+                required: ["type", "text"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "image" },
+                  url: { type: "string" },
+                  dataBase64: { type: "string" },
+                  mimeType: { type: "string" },
+                  alt: { type: "string" },
+                },
+                required: ["type"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "audio" },
+                  url: { type: "string" },
+                  dataBase64: { type: "string" },
+                  mimeType: { type: "string" },
+                  transcript: { type: "string" },
+                },
+                required: ["type"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "file" },
+                  url: { type: "string" },
+                  dataBase64: { type: "string" },
+                  mimeType: { type: "string" },
+                  name: { type: "string" },
+                },
+                required: ["type"],
+              },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  type: { const: "json" },
+                  value: {},
+                },
+                required: ["type", "value"],
+              },
+            ],
+          },
+        },
+      ],
     },
-    content: { anyOf: [{ type: "string" }, { type: "null" }] },
-    toolCallId: { anyOf: [{ type: "string" }, { type: "null" }] },
     toolCalls: {
       anyOf: [
         { type: "null" },
@@ -71,36 +120,86 @@ export const NewMessageEventPayloadSchema = {
             type: "object",
             additionalProperties: true,
             properties: {
-              id: { anyOf: [{ type: "string" }, { type: "null" }] },
-              function: {
-                type: "object",
-                additionalProperties: true,
-                properties: {
-                  name: { type: "string" },
-                  arguments: { type: "string" },
-                },
-                required: ["name", "arguments"],
-              },
+              id: { type: ["string", "null"] },
+              name: { type: "string" },
+              args: { type: "object", additionalProperties: true },
             },
+            required: ["name", "args"],
+          },
+        },
+      ],
+    },
+    sender: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        id: { type: ["string", "null"] },
+        externalId: { type: ["string", "null"] },
+        type: { type: "string", enum: ["agent", "user", "tool", "system"] },
+        name: { type: ["string", "null"] },
+        identifierType: { type: ["string", "null"], enum: ["id", "name", "email"] },
+        metadata: { type: ["object", "null"] },
+      },
+      required: ["type"],
+    },
+    thread: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: ["string", "null"] },
+            name: { type: ["string", "null"] },
+            description: { type: ["string", "null"] },
+            externalId: { type: ["string", "null"] },
+            participants: { type: ["array", "null"], items: { type: "string" } },
+            metadata: { type: ["object", "null"] },
           },
         },
       ],
     },
     metadata: {
       anyOf: [
-        { $ref: "#/$defs/ToolMessageMetadata" },
-        { type: "object" },
         { type: "null" },
+        {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            toolCalls: {
+              type: ["array", "null"],
+              items: {
+                type: "object",
+                additionalProperties: true,
+                properties: {
+                  name: { type: "string" },
+                  args: { type: "string" },
+                  output: {},
+                  id: { type: ["string", "null"] },
+                  status: {
+                    type: ["string", "null"],
+                    enum: ["pending", "processing", "completed", "failed", "expired", "overwritten"],
+                  },
+                },
+                required: ["name", "args"],
+              },
+            },
+          },
+        },
       ],
     },
   },
-  required: ["senderId", "senderType"],
+  required: ["content", "sender"],
 } as const;
+
+export type MessagePayload = FromSchema<typeof MessagePayloadSchema>;
+
+export const NewMessageEventPayloadSchema = MessagePayloadSchema;
+
+export type NewMessageEventPayload = MessagePayload;
 
 // create ulid
 const generateId = (): string => ulid();
-
-export type NewMessageEventPayload = FromSchema<typeof NewMessageEventPayloadSchema>;
 
 const schemaDefinition = {
   agents: {
@@ -166,11 +265,6 @@ const schemaDefinition = {
         personality: { type: ["string", "null"] },
         instructions: { type: ["string", "null"] },
         description: { type: ["string", "null"] },
-        agentType: {
-          type: "string",
-          enum: ["agentic", "programmatic"],
-          default: "agentic",
-        },
         allowedAgents: {
           type: ["array", "null"],
           items: { type: "string" },
@@ -189,7 +283,7 @@ const schemaDefinition = {
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },
       },
-      required: ["id", "name", "role", "agentType"],
+      required: ["id", "name", "role"],
     },
     keys: [{ property: "id" }],
     timestamps: {
@@ -425,6 +519,17 @@ const schemaDefinition = {
       type: "object",
       additionalProperties: false,
       $defs: {
+        TokenEventPayload: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            threadId: { type: "string" },
+            agentName: { type: "string" },
+            token: { type: "string" },
+            isComplete: { type: "boolean" },
+          },
+          required: ["threadId", "agentName", "token", "isComplete"],
+        },
         ChatContentPart: {
           anyOf: [
             {
@@ -546,7 +651,7 @@ const schemaDefinition = {
         threadId: { $ref: "#/$defs/threads/properties/id" },
         eventType: {
           type: "string",
-          enum: ["NEW_MESSAGE", "TOOL_CALL", "LLM_CALL"],
+          enum: ["NEW_MESSAGE", "TOOL_CALL", "LLM_CALL", "TOKEN"],
         },
         payload: { type: "object" },
         thread: {
@@ -624,6 +729,16 @@ const schemaDefinition = {
           then: {
             properties: {
               payload: { $ref: "#/$defs/LlmCallEventPayload" },
+            },
+          },
+        },
+        {
+          if: {
+            properties: { eventType: { const: "TOKEN" } },
+          },
+          then: {
+            properties: {
+              payload: { $ref: "#/$defs/TokenEventPayload" },
             },
           },
         },
@@ -791,7 +906,7 @@ export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 
 export type Queue = typeof queue.$inferSelect;
-export type NewQueue = typeof queue.$inferInsert;
+export type NewQueue = Record<string, unknown>;
 
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
@@ -807,21 +922,40 @@ export type NewUser = typeof users.$inferInsert;
 
 export const schema: typeof schemaInternal = schemaInternal;
 
-export type MessagePayload = Omit<
-  NewMessage,
-  "id" | "threadId" | "senderUserId" | "createdAt" | "updatedAt"
->;
+// Strongly-typed MessagePayload for copilotz.run input
+type QueueRow = typeof queue.$inferSelect;
+type QueueStatus = QueueRow["status"];
 
-type EventType = Queue["eventType"];
+export type ToolCallEventPayload = FromSchema<typeof schemaDefinition.queue.schema.$defs.ToolCallEventPayload>;
+export type LlmCallEventPayload = FromSchema<typeof schemaDefinition.queue.schema.$defs.LlmCallEventPayload>;
+export type TokenEventPayload = FromSchema<typeof schemaDefinition.queue.schema.$defs.TokenEventPayload>;
 
-export type Event = Omit<Queue, "eventType"> & { type: EventType };
-export type NewEvent = Omit<
-  NewQueue,
-  "eventType" | "id" | "createdAt" | "updatedAt" | "status"
-> & {
-  type: EventType;
-  id?: string;
-  status?: Queue["status"];
-  createdAt?: string;
-  updatedAt?: string;
+type EventPayloadMap = {
+  NEW_MESSAGE: MessagePayload;
+  TOOL_CALL: ToolCallEventPayload;
+  LLM_CALL: LlmCallEventPayload;
+  TOKEN: TokenEventPayload;
 };
+
+type BaseEvent = Omit<QueueRow, "eventType" | "payload">;
+
+export type Event = {
+  [K in keyof EventPayloadMap]: BaseEvent & { type: K; payload: EventPayloadMap[K] }
+}[keyof EventPayloadMap];
+
+export type NewEvent = {
+  [K in keyof EventPayloadMap]: {
+    threadId: string;
+    type: K;
+    payload: EventPayloadMap[K];
+    parentEventId?: string;
+    traceId?: string;
+    priority?: number;
+    metadata?: Record<string, unknown> | null;
+    ttlMs?: number;
+    id?: string;
+    status?: QueueStatus;
+    createdAt?: string | Date;
+    updatedAt?: string | Date;
+  }
+}[keyof EventPayloadMap];

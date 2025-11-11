@@ -123,12 +123,45 @@ export function historyGenerator(chatHistory: NewMessage[], currentAgent: Agent)
             : content;
 
         // Prefer top-level toolCalls on assistant messages for rehydration
-        const toolCallsCandidate = (msg as unknown as { toolCalls?: Array<{ id?: string; function: { name: string; arguments: string } }> }).toolCalls;
-        const toolCalls: ToolCall[] | undefined = (toolCallsCandidate && Array.isArray(toolCallsCandidate) && toolCallsCandidate.length > 0)
-            ? toolCallsCandidate.map((call, i) => ({
-                id: call.id || `${call.function?.name || 'call'}_${i}`,
-                function: { name: call.function.name, arguments: call.function.arguments },
-            }))
+        const rawToolCalls = (msg as unknown as { toolCalls?: unknown }).toolCalls;
+        const toolCallsSource = Array.isArray(rawToolCalls) ? rawToolCalls : [];
+        const toolCalls: ToolCall[] | undefined = toolCallsSource.length > 0
+            ? toolCallsSource.map((call, i) => {
+                const maybeCall = call as
+                    | { id?: string | null; function?: { name?: string; arguments?: string } }
+                    | { id?: string | null; name?: string; args?: Record<string, unknown> };
+
+                const callId = typeof maybeCall.id === "string" && maybeCall.id.length > 0
+                    ? maybeCall.id
+                    : (() => {
+                        const candidateName = ('function' in maybeCall && maybeCall.function?.name)
+                            ? maybeCall.function?.name
+                            : ('name' in maybeCall ? maybeCall.name : undefined);
+                        return `${candidateName || 'call'}_${i}`;
+                    })();
+
+                let functionName = "";
+                let functionArguments = "{}";
+                if ('function' in maybeCall && maybeCall.function) {
+                    functionName = maybeCall.function.name ?? "";
+                    functionArguments = maybeCall.function.arguments ?? "{}";
+                } else if ('name' in maybeCall || 'args' in maybeCall) {
+                    functionName = (maybeCall as { name?: string }).name ?? "";
+                    try {
+                        functionArguments = JSON.stringify((maybeCall as { args?: Record<string, unknown> }).args ?? {});
+                    } catch (_err) {
+                        functionArguments = "{}";
+                    }
+                }
+
+                return {
+                    id: callId,
+                    function: {
+                        name: functionName,
+                        arguments: functionArguments,
+                    },
+                } satisfies ToolCall;
+            })
             : undefined;
 
         return {

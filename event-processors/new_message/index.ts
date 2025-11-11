@@ -17,6 +17,9 @@ import type {
     Event,
     ExecutableTool,
     ToolExecutor,
+    MessagePayload,
+    LlmCallEventPayload,
+    ToolCallEventPayload,
 } from "@/interfaces/index.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
@@ -83,18 +86,65 @@ function toExecutableTool(tool: unknown): ExecutableTool | null {
     };
 }
 
-function assertMessagePayload(payload: unknown): asserts payload is NewMessageEventPayload {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new Error("Invalid message payload");
+type NormalizedToolCall = {
+    id: string | null;
+    name: string;
+    args: Record<string, unknown>;
+};
+
+interface MessageContextDetails {
+    senderId: string;
+    senderType: "agent" | "user" | "tool" | "system";
+    senderName: string;
+    contentText: string;
+    toolCalls: NormalizedToolCall[];
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+
+function extractTextContent(content: MessagePayload["content"]): string {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+        return content.map((part) => {
+            if (!part || typeof part !== "object") return "";
+            const typed = part as { type?: string; text?: string; value?: unknown };
+            if (typed.type === "text" && typeof typed.text === "string") {
+                return typed.text;
+            }
+            if (typed.type === "json") {
+                return JSON.stringify(typed.value ?? "");
+            }
+            return "";
+        }).join("");
     }
-    const value = payload as Record<string, unknown>;
-    if (typeof value.senderId !== "string" || typeof value.senderType !== "string") {
-        throw new Error("Invalid message payload");
-    }
-    const metadata = (value as { metadata?: unknown }).metadata;
-    if (metadata != null && typeof metadata !== "object") {
-        throw new Error("Invalid message payload metadata");
-    }
+    return "";
+}
+
+function normalizeToolCalls(toolCalls: MessagePayload["toolCalls"]): NormalizedToolCall[] {
+    if (!Array.isArray(toolCalls)) return [];
+    return toolCalls
+        .filter((call): call is NonNullable<typeof call> => Boolean(call && call.name))
+        .map((call) => ({
+            id: call.id ?? null,
+            name: call.name,
+            args: (call.args && typeof call.args === "object")
+                ? call.args as Record<string, unknown>
+                : {},
+        }));
+}
+
+function getMessageContext(payload: MessagePayload): MessageContextDetails {
+    const senderType = (payload.sender?.type ?? "user") as MessageContextDetails["senderType"];
+    const senderId = payload.sender?.id ?? payload.sender?.externalId ?? payload.sender?.name ?? "user";
+    const senderName = payload.sender?.name ?? senderId;
+    return {
+        senderId: senderId,
+        senderType,
+        senderName,
+        contentText: extractTextContent(payload.content),
+        toolCalls: normalizeToolCalls(payload.toolCalls),
+    };
 }
 
 export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorDeps> = {
@@ -103,25 +153,46 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         const { db, thread, context } = deps;
         const ops = db.ops;
 
-        assertMessagePayload(event.payload);
-        const payload = event.payload;
+        const payload = event.payload as NewMessageEventPayload;
 
         const threadId = typeof event.threadId === "string"
             ? event.threadId
             : (() => { throw new Error("Invalid thread id for message event"); })();
 
-        const messageMetadata = payload.metadata !== null && typeof payload.metadata === "object"
+        const messageMetadata = isRecord(payload.metadata)
             ? payload.metadata as Record<string, unknown>
             : null;
+        const toolCallMetadata = Array.isArray((messageMetadata as { toolCalls?: unknown[] } | null)?.toolCalls)
+            ? ((messageMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
+            : [];
+
+        const messageContext = getMessageContext(payload);
+
+        let toolCallId: string | null = null;
+        for (const entry of toolCallMetadata) {
+            if (entry && typeof entry === "object") {
+                const maybeId = (entry as { id?: unknown }).id;
+                if (typeof maybeId === "string") {
+                    toolCallId = maybeId;
+                    break;
+                }
+            }
+        }
+        if (!toolCallId) {
+            const firstToolCall = messageContext.toolCalls.find((call) => typeof call.id === "string" && call.id.length > 0);
+            if (firstToolCall?.id) {
+                toolCallId = firstToolCall.id;
+            }
+        }
 
         const incomingMsg = {
             id: crypto.randomUUID(),
             threadId,
-            senderId: payload.senderId,
-            senderType: payload.senderType,
-            content: (payload.content ?? ""),
-            toolCallId: (payload.toolCallId ?? null),
-            toolCalls: (payload.toolCalls ?? null),
+            senderId: messageContext.senderId,
+            senderType: messageContext.senderType,
+            content: messageContext.contentText,
+            toolCallId: toolCallId,
+            toolCalls: payload.toolCalls ?? null,
             metadata: messageMetadata,
         };
 
@@ -130,7 +201,7 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
         // Resolve targets
         const availableAgents = context.agents || [];
-        const targets = discoverTargetAgentsForMessage(payload, thread, availableAgents);
+        const targets = discoverTargetAgentsForMessage(messageContext, thread, availableAgents);
 
         const producedEvents: NewEvent[] = [];
 
@@ -138,36 +209,40 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         const basePriority = 1000;
         // If this event already has a priority (continuation of a chain), keep it
 
+        const normalizedToolCalls = messageContext.toolCalls;
+
         for (let idx = 0; idx < targets.length; idx++) {
 
             const chainPriority = typeof event.priority === 'number' ? (event.priority as number) : (basePriority - idx);
 
             const agent = targets[idx];
-
-            const toolCalls = payload.toolCalls;
+            if (!agent) continue;
 
             // Emit tool calls as events
-            if (toolCalls && toolCalls.length > 0) {
-                toolCalls.forEach((call, i: number) => {
-                    if (!call?.function) return;
-                    const callId = call.id || `${call.function?.name || 'call'}_${i}`;
+            if (normalizedToolCalls.length > 0) {
+                normalizedToolCalls.forEach((call, i: number) => {
+                    const callName = call.name || agent.name || "unknown_tool";
+                    const callId = call.id || `${callName}_${i}`;
+                    const senderIdForTool = agent.id ?? agent.name ?? "agent";
+                    const argumentsString = JSON.stringify(call.args ?? {});
+                    const toolCallEventPayload = {
+                        agentName: agent.name,
+                        senderId: senderIdForTool,
+                        senderType: "agent",
+                        call: {
+                            id: callId,
+                            function: {
+                                name: callName,
+                                arguments: argumentsString,
+                            }
+                        }
+                    } as ToolCallEventPayload;
                     producedEvents.push({
                         threadId,
                         type: "TOOL_CALL",
-                        payload: {
-                            agentName: agent.name,
-                            senderId: agent.id,
-                            senderType: "agent",
-                            call: {
-                                id: callId,
-                                function: {
-                                    name: call.function.name,
-                                    arguments: call.function.arguments,
-                                }
-                            }
-                        },
-                        parentEventId: event.id,
-                        traceId: event.traceId,
+                        payload: toolCallEventPayload,
+                        parentEventId: typeof event.id === "string" ? event.id : undefined,
+                        traceId: typeof event.traceId === "string" ? event.traceId : undefined,
                         priority: chainPriority
                     });
                 });
@@ -185,9 +260,10 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             const llmHistory: ChatMessage[] = historyGenerator(ctx.chatHistory, agent);
 
             // Select tools available to this agent
-            const agentTools = agent.allowedTools
-                ?.map((key: string) => ctx.allTools.find((t) => t.key === key))
-                .filter((t): t is ExecutableTool => Boolean(t)) || [];
+            const allowedToolKeys: string[] = Array.isArray(agent.allowedTools) ? agent.allowedTools : [];
+            const agentTools: ExecutableTool[] = allowedToolKeys
+                .map((key) => ctx.allTools.find((t) => t.key === key))
+                .filter((t): t is ExecutableTool => Boolean(t));
             const llmTools: ToolDefinition[] = formatToolsForAI(agentTools);
 
 
@@ -200,18 +276,20 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                 ...llmHistory
             ];
 
+            const llmPayload = {
+                agentName: agent.name,
+                agentId: agent.id,
+                messages: llmMessages,
+                tools: llmTools,
+                config: agent.llmOptions as ProviderConfig,
+            } as LlmCallEventPayload;
+
             producedEvents.push({
                 threadId,
                 type: "LLM_CALL",
-                payload: {
-                    agentName: agent.name,
-                    agentId: agent.id,
-                    messages: llmMessages,
-                    tools: llmTools,
-                    config: agent.llmOptions as ProviderConfig,
-                },
-                parentEventId: event.id,
-                traceId: event.traceId,
+                payload: llmPayload,
+                parentEventId: typeof event.id === "string" ? event.id : undefined,
+                traceId: typeof event.traceId === "string" ? event.traceId : undefined,
                 priority: chainPriority,
             });
 
@@ -313,25 +391,30 @@ async function buildProcessingContext(ops: Operations, threadId: string, context
     };
 }
 
-function filterAllowedAgents(senderType: NewMessageEventPayload["senderType"], senderId: string, targetAgents: Agent[], availableAgents: Agent[]): Agent[] {
-    if (senderType !== "agent") return targetAgents;
-    const senderAgent = availableAgents.find(a => a.name === senderId);
-    if (!senderAgent || !senderAgent.allowedAgents) return targetAgents;
-    return targetAgents.filter(agent => senderAgent.allowedAgents!.includes(agent.name));
+function filterAllowedAgents(contextDetails: MessageContextDetails, targetAgents: Agent[], availableAgents: Agent[]): Agent[] {
+    if (contextDetails.senderType !== "agent") return targetAgents;
+    const senderAgent = availableAgents.find(a =>
+        a.name === contextDetails.senderName ||
+        a.id === contextDetails.senderId
+    );
+    if (!senderAgent) return targetAgents;
+    const allowed = Array.isArray(senderAgent.allowedAgents) ? senderAgent.allowedAgents : [];
+    if (allowed.length === 0) return targetAgents;
+    return targetAgents.filter((agent) => allowed.includes(agent.name));
 }
 
-function discoverTargetAgentsForMessage(payload: NewMessageEventPayload, thread: Thread, availableAgents: Agent[]): Agent[] {
+function discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, thread: Thread, availableAgents: Agent[]): Agent[] {
     // Tool messages route back to the requesting agent by senderId
     if (
-        (payload.senderType === "tool" || (payload.toolCalls && payload.toolCalls?.length > 0)) &&
-        payload.senderId
+        (contextDetails.senderType === "tool" || contextDetails.toolCalls.length > 0) &&
+        contextDetails.senderId
     ) {
-        const agent = availableAgents.find(a => a.id === payload.senderId);
+        const agent = availableAgents.find(a => a.id === contextDetails.senderId || a.name === contextDetails.senderName);
         return agent ? [agent] : [];
     }
 
     // Mentions (preserve mention order)
-    const mentions = payload.content?.match(/(?<!\w)@([\w](?:[\w.-]*[\w])?)/g);
+    const mentions = contextDetails.contentText.match(/(?<!\w)@([\w](?:[\w.-]*[\w])?)/g);
     if (mentions && mentions.length > 0) {
         const names = mentions.map((m: string) => m.substring(1));
         // Build in the order mentioned, unique by name
@@ -345,7 +428,7 @@ function discoverTargetAgentsForMessage(payload: NewMessageEventPayload, thread:
                 seen.add(name);
             }
         }
-        const allowedMentionedAgents = filterAllowedAgents(payload.senderType, payload.senderId, orderedMentioned, availableAgents);
+        const allowedMentionedAgents = filterAllowedAgents(contextDetails, orderedMentioned, availableAgents);
         if (allowedMentionedAgents.length > 0) {
             return allowedMentionedAgents;
         }
@@ -354,7 +437,7 @@ function discoverTargetAgentsForMessage(payload: NewMessageEventPayload, thread:
 
     // Default two-party fallback
     if (thread.participants && thread.participants.length === 2) {
-        const otherParticipant: string | undefined = thread.participants.find((p: string) => p !== payload.senderId);
+        const otherParticipant: string | undefined = thread.participants.find((p: string) => p !== contextDetails.senderName && p !== contextDetails.senderId);
         if (otherParticipant) {
             const otherAgent = availableAgents.find(a => a.name === otherParticipant);
             if (otherAgent) return [otherAgent];

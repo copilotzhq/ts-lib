@@ -10,6 +10,9 @@ import type {
     Tool, NewTool,
     User, NewUser,
     MessagePayload,
+    ToolCallEventPayload,
+    LlmCallEventPayload,
+    TokenEventPayload,
 } from "@/database/schemas/index.ts";
 
 export type {
@@ -24,6 +27,9 @@ export type {
     Tool, NewTool,
     User, NewUser,
     MessagePayload,
+    ToolCallEventPayload,
+    LlmCallEventPayload,
+    TokenEventPayload,
 }
  
 import type {
@@ -80,31 +86,9 @@ export interface ContentStreamData {
     isComplete: boolean;
 }
 
-// Chat framework initialization types
-export interface ChatInitMessage {
-    threadId?: string;
-    threadExternalId?: string; // Optional external thread identifier
-    senderId?: string;
-    senderType?: "user" | "agent" | "tool" | "system";
-    content: string;
-    threadName?: string;
-    parentThreadId?: string;
-    participants?: string[]; // Filter agents available for this conversation
-    threadMetadata?: Record<string, unknown>;
-    queueTTL?: number;
-    user?: {
-        id?: string;
-        externalId?: string;
-        name?: string;
-        email?: string;
-        metadata?: Record<string, unknown>;
-    };
-    metadata?: Record<string, unknown>;
-    toolCalls?: Array<{
-        id?: string;
-        function: {
-            name: string;
-            arguments: string;
-        };
-    }>;
+// Narrowing helpers for better DX on Event payloads
+type TokenPayload = ContentStreamData & { [x: string]: unknown };
+export type TokenEvent = Event & { type: "TOKEN"; payload: TokenPayload };
+export function isTokenEvent(event: Event): event is TokenEvent {
+    return event?.type === "TOKEN";
 }

@@ -152,20 +152,27 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         threadId,
         type: "NEW_MESSAGE",
         payload: {
-          senderId: payload.senderId,
-          senderType: "tool",
-          content: content,
-          toolCallId: callId,
+          content,
+          sender: {
+            type: "tool",
+            id: payload.senderId,
+            name: payload.senderId,
+          },
           metadata: {
-            toolName: call.function.name,
-            arguments: call.function.arguments,
-            output,
-            error,
+            toolCalls: [
+              {
+                name: call.function.name,
+                args: call.function.arguments,
+                output,
+                id: callId,
+                status: error ? "failed" : "completed",
+              },
+            ],
           },
         },
-        parentEventId: event.id,
-        traceId: event.traceId,
-        priority: event.priority,
+        parentEventId: typeof event.id === "string" ? event.id : undefined,
+        traceId: typeof event.traceId === "string" ? event.traceId : undefined,
+        priority: typeof event.priority === "number" ? event.priority : undefined,
       }
     ];
 
