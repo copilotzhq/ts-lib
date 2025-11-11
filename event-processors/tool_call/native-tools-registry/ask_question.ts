@@ -53,11 +53,16 @@ export default {
         try {
             await copilotz.run({
                 content: question,
-                threadId: questionThreadId,
-                senderId: context.senderId,
-                senderType: context.senderType,
-                threadName: `Question from ${context.senderId}`,
-                participants: [targetAgent],
+                sender: {
+                    type: (context.senderType ?? "user") as "agent" | "user" | "tool" | "system",
+                    id: context.senderId,
+                    name: context.senderId ?? null,
+                },
+                thread: {
+                    id: questionThreadId,
+                    name: `Question from ${context.senderId}`,
+                    participants: [targetAgent],
+                },
             });
 
             // Poll for the answer with timeout

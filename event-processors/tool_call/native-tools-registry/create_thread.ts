@@ -40,13 +40,17 @@ export default {
         const threadId = crypto.randomUUID();
         
         const initMessage = {
-            threadId,
             content: initialMessage || `Started thread: ${name}`,
-            threadName: name,
-            parentThreadId: context?.threadId,
-            senderId: context?.senderId || "system",
-            senderType: context?.senderType || "system" as const,
-            participants,
+            sender: {
+                type: (context?.senderType ?? "system") as "agent" | "user" | "tool" | "system",
+                id: context?.senderId ?? "system",
+                name: context?.senderId ?? "system",
+            },
+            thread: {
+                id: threadId,
+                name,
+                participants,
+            },
         };
 
         // Create ChatContext with inherited settings from parent

@@ -36,6 +36,22 @@ export type DbInstance = OminipgWithCrud<typeof baseSchema>;
 
 export type CopilotzDb = DbInstance & { ops: Operations };
 
+function getEnvVar(key: string): string | undefined {
+  try {
+    const anyGlobal = globalThis as unknown as {
+      Deno?: { env?: { get?: (k: string) => string | undefined } };
+      process?: { env?: Record<string, string | undefined> };
+    };
+    const fromDeno = anyGlobal?.Deno?.env?.get?.(key);
+    if (typeof fromDeno === "string") return fromDeno;
+    const fromNode = anyGlobal?.process?.env?.[key];
+    if (typeof fromNode === "string") return fromNode;
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 const createDbInstance = async (
   finalConfig: DatabaseConfig,
   debug: boolean,
@@ -95,11 +111,11 @@ export async function createDatabase(
   const isPgLite = !config?.url || config?.url.startsWith(":") ||
     config?.url.startsWith("file:") || config?.url.startsWith("pglite:");
 
-  const url = config?.url || Deno.env.get("DATABASE_URL") || ":memory:";
+  const url = config?.url || getEnvVar("DATABASE_URL") || ":memory:";
 
   const finalConfig: DatabaseConfig = {
     url,
-    syncUrl: config?.syncUrl || Deno.env.get("SYNC_DATABASE_URL"),
+    syncUrl: config?.syncUrl || getEnvVar("SYNC_DATABASE_URL"),
     pgliteExtensions: isPgLite
       ? config?.pgliteExtensions || ["uuid_ossp", "pg_trgm"]
       : [],
@@ -110,8 +126,7 @@ export async function createDatabase(
   };
 
   const cacheKey = `${finalConfig.url}|${finalConfig.syncUrl || ""}`;
-  const debug = typeof Deno !== "undefined" &&
-    (Deno.env.get("COPILOTZ_DB_DEBUG") === "1");
+  const debug = getEnvVar("COPILOTZ_DB_DEBUG") === "1";
   if (debug) {
     console.log(
       `[db] createDatabase requested: ${cacheKey} ${

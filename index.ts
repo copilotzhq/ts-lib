@@ -221,7 +221,18 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                         const token = e.payload.token ?? "";
                         const done = Boolean(e.payload.isComplete);
                         if (!done) {
-                            Deno.stdout.writeSync(new TextEncoder().encode(token));
+                            const anyGlobal = globalThis as unknown as {
+                                Deno?: { stdout?: { writeSync?: (data: Uint8Array) => unknown } };
+                                process?: { stdout?: { write?: (chunk: string) => unknown } };
+                            };
+                            const bytes = new TextEncoder().encode(token);
+                            if (anyGlobal?.Deno?.stdout?.writeSync) {
+                                anyGlobal.Deno.stdout.writeSync(bytes);
+                            } else if (anyGlobal?.process?.stdout?.write) {
+                                anyGlobal.process.stdout.write(token);
+                            } else {
+                                console.log(token);
+                            }
                         } else {
                             console.log("");
                         }
@@ -259,7 +270,8 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 }
 
                 while (!stopped) {
-                    const q = (prompt("Message: ") ?? "").trim();
+                    const anyGlobal = globalThis as unknown as { prompt?: (msg?: string) => string | null | undefined };
+                    const q = ((typeof anyGlobal.prompt === "function" ? anyGlobal.prompt("Message: ") : "") ?? "").trim();
                     if (!q || q.toLowerCase() === quitCommand) {
                         console.log("👋 Ending session. Goodbye!");
                         break;
