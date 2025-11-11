@@ -200,6 +200,13 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 const maybeThreadExternalId = (initialMessage as { threadExternalId?: string }).threadExternalId;
                 if (typeof maybeThreadExternalId === "string" && maybeThreadExternalId.trim().length > 0) {
                     threadExternalId = maybeThreadExternalId;
+                } else {
+                    // Fallback to the thread.externalId inside the initial MessagePayload if present
+                    const maybeMsg = initialMessage as unknown as MessagePayload;
+                    const fromThread = (maybeMsg && typeof maybeMsg === "object") ? (maybeMsg.thread as { externalId?: string } | undefined) : undefined;
+                    if (fromThread && typeof fromThread.externalId === "string" && fromThread.externalId.trim().length > 0) {
+                        threadExternalId = fromThread.externalId;
+                    }
                 }
             }
 

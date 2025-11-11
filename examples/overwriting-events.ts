@@ -29,7 +29,7 @@ const THREAD_EXT_ID = "overwriting-events-demo";
 
 const copilotz = await createCopilotz({
     agents: [overwriterAgent],
-    dbConfig: { url: `file://${dbFilePath}` },
+    dbConfig: { url: `file:${dbFilePath}` },
     stream: true,
 });
 

@@ -183,7 +183,7 @@ export async function runThread(
     // Participants: prefer provided; else, from configured agents; always unique
     const baseParticipants = Array.isArray(threadRef?.participants) && threadRef?.participants.length
         ? threadRef.participants
-        : (baseContext.agents ?? []).map((a) => a.name).filter((n): n is string => Boolean(n));
+        : (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
     const senderCanonical = (sender.id ?? sender.name ?? "user") as string;
     const participants = Array.from(new Set([senderCanonical, ...baseParticipants]));
 

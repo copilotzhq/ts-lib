@@ -1,10 +1,11 @@
 -- Enable extensions once; safe to re-run.
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
--- If legacy "queue" table exists, drop Copilotz tables to recreate with new schema
+-- If legacy "queue" table exists (and new 'events' doesn't), drop Copilotz tables to recreate with new schema
 DO $$
 BEGIN
-IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'queue') THEN
+IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'queue')
+   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'events') THEN
   -- Drop in dependency-safe order
   DROP TABLE IF EXISTS "messages";
   DROP TABLE IF EXISTS "queue";

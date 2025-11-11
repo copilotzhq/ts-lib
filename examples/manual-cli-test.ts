@@ -10,6 +10,7 @@ const testAgent: AgentConfig = {
         provider: "openai",
         model: "gpt-5",
         temperature: 1,
+        maxTokens: 100000,
         apiKey: Deno.env.get("DEFAULT_OPENAI_KEY") || "",
     },
     allowedTools: ['list_directory', 'read_file'],
