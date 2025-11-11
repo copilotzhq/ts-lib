@@ -514,7 +514,7 @@ const schemaDefinition = {
       id: generateId,
     }
   },
-  queue: {
+  events: {
     schema: {
       type: "object",
       additionalProperties: false,
@@ -886,7 +886,8 @@ const agents = schemaInternal.agents;
 const apis = schemaInternal.apis;
 const mcpServers = schemaInternal.mcpServers;
 const messages = schemaInternal.messages;
-const queue = schemaInternal.queue;
+const events = schemaInternal.events;
+const queue = events;
 const tasks = schemaInternal.tasks;
 const threads = schemaInternal.threads;
 const tools = schemaInternal.tools;
@@ -926,9 +927,9 @@ export const schema: typeof schemaInternal = schemaInternal;
 type QueueRow = typeof queue.$inferSelect;
 type QueueStatus = QueueRow["status"];
 
-export type ToolCallEventPayload = FromSchema<typeof schemaDefinition.queue.schema.$defs.ToolCallEventPayload>;
-export type LlmCallEventPayload = FromSchema<typeof schemaDefinition.queue.schema.$defs.LlmCallEventPayload>;
-export type TokenEventPayload = FromSchema<typeof schemaDefinition.queue.schema.$defs.TokenEventPayload>;
+export type ToolCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.ToolCallEventPayload>;
+export type LlmCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.LlmCallEventPayload>;
+export type TokenEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.TokenEventPayload>;
 
 type EventPayloadMap = {
   NEW_MESSAGE: MessagePayload;

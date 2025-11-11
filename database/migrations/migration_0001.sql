@@ -1,6 +1,23 @@
 -- Enable extensions once; safe to re-run.
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
+-- If legacy "queue" table exists, drop Copilotz tables to recreate with new schema
+DO $$
+BEGIN
+IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'queue') THEN
+  -- Drop in dependency-safe order
+  DROP TABLE IF EXISTS "messages";
+  DROP TABLE IF EXISTS "queue";
+  DROP TABLE IF EXISTS "threads";
+  DROP TABLE IF EXISTS "tasks";
+  DROP TABLE IF EXISTS "agents";
+  DROP TABLE IF EXISTS "tools";
+  DROP TABLE IF EXISTS "mcpServers";
+  DROP TABLE IF EXISTS "users";
+  DROP TABLE IF EXISTS "apis";
+END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS "agents" (
   "id" varchar(255) PRIMARY KEY NOT NULL,
   "name" varchar(255) NOT NULL,
@@ -115,7 +132,7 @@ CREATE TABLE IF NOT EXISTS "apis" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS "queue" (
+CREATE TABLE IF NOT EXISTS "events" (
   "id" varchar(255) PRIMARY KEY NOT NULL,
   "threadId" varchar(255) NOT NULL,
   "eventType" varchar(64) NOT NULL,
@@ -131,13 +148,13 @@ CREATE TABLE IF NOT EXISTS "queue" (
   "updatedAt" timestamp DEFAULT now() NOT NULL
 );
 
-ALTER TABLE IF EXISTS "queue"
+ALTER TABLE IF EXISTS "events"
   ADD COLUMN IF NOT EXISTS "ttlMs" integer;
 
-ALTER TABLE IF EXISTS "queue"
+ALTER TABLE IF EXISTS "events"
   ADD COLUMN IF NOT EXISTS "expiresAt" timestamp;
 
-ALTER TABLE IF EXISTS "queue"
+ALTER TABLE IF EXISTS "events"
   ADD COLUMN IF NOT EXISTS "metadata" jsonb;
 
 /* Foreign keys rewritten without DO blocks */
@@ -171,11 +188,11 @@ CREATE INDEX IF NOT EXISTS "idx_threads_participants_gin"
 CREATE INDEX IF NOT EXISTS "idx_messages_thread_id_created_at"
   ON "messages" ("threadId", "createdAt");
 
-CREATE INDEX IF NOT EXISTS "idx_queue_thread_status"
-  ON "queue" ("threadId", "status");
+CREATE INDEX IF NOT EXISTS "idx_events_thread_status"
+  ON "events" ("threadId", "status");
 
-CREATE INDEX IF NOT EXISTS "idx_queue_pending_order"
-  ON "queue" (
+CREATE INDEX IF NOT EXISTS "idx_events_pending_order"
+  ON "events" (
     "threadId",
     (COALESCE("priority", 0)) DESC,
     "createdAt" ASC,
@@ -183,8 +200,8 @@ CREATE INDEX IF NOT EXISTS "idx_queue_pending_order"
   )
   WHERE "status" = 'pending';
 
-CREATE INDEX IF NOT EXISTS "idx_queue_status_expires_at"
-  ON "queue" ("status", "expiresAt");
+CREATE INDEX IF NOT EXISTS "idx_events_status_expires_at"
+  ON "events" ("status", "expiresAt");
 
 CREATE INDEX IF NOT EXISTS "idx_agents_name"
   ON "agents" ("name");

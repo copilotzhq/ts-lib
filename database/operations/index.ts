@@ -80,9 +80,9 @@ export function createOperations(db: DbInstance): DatabaseOperations {
 
   const cleanupExpiredQueueItems = async (): Promise<void> => {
     await db.query(
-      `DELETE FROM "queue"
+      `DELETE FROM "events"
        WHERE "id" IN (
-         SELECT "id" FROM "queue"
+         SELECT "id" FROM "events"
          WHERE "status" = 'expired'
            AND "expiresAt" IS NOT NULL
            AND "expiresAt" < NOW() - INTERVAL '${EXPIRED_RETENTION_INTERVAL}'
@@ -93,7 +93,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
 
   const markQueueItemExpired = async (queueId: string): Promise<void> => {
     await db.query(
-      `UPDATE "queue"
+      `UPDATE "events"
        SET "status" = 'expired',
            "expiresAt" = COALESCE("expiresAt", NOW()),
            "updatedAt" = NOW()
@@ -130,7 +130,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
       metadata: event.metadata ?? null,
     };
 
-    const newQueueItem = await crud.queue.create(insertQueueItem);
+    const newQueueItem = await crud.events.create(insertQueueItem);
 
     await cleanupExpiredQueueItems();
     return newQueueItem;
@@ -139,7 +139,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   const getProcessingQueueItem = async (
     threadId: string,
   ): Promise<Queue | undefined> => {
-    const item = await crud.queue.findOne({
+    const item = await crud.events.findOne({
       threadId,
       status: "processing",
     }) as Queue | null;
@@ -150,7 +150,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     threadId: string,
   ): Promise<Queue | undefined> => {
     while (true) {
-      const [candidate] = await crud.queue.find({
+      const [candidate] = await crud.events.find({
         threadId,
         status: "pending",
       }, {
@@ -186,7 +186,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
     queueId: string,
     status: Queue["status"],
   ): Promise<void> => {
-    await crud.queue.update({ id: queueId }, { status });
+    await crud.events.update({ id: queueId }, { status });
   };
 
   const getThreadById = async (
