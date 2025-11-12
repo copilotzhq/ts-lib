@@ -121,7 +121,7 @@ const loadResources = async ({ path }: { path: string } = { path: "resources" })
             { with: { type: 'json' } },
         );
 
-        if (!openApiSchema) {   
+        if (!openApiSchema) {
             continue;
         }
 
@@ -152,7 +152,7 @@ const loadResources = async ({ path }: { path: string } = { path: "resources" })
             name: entry.name,
             ...config,
             execute,
-        }); 
+        });
     }
 
     const processors: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })> = [];
@@ -181,9 +181,9 @@ const loadResources = async ({ path }: { path: string } = { path: "resources" })
                     continue;
                 }
                 const specifier = processorsPath + eventTypeDir + '/' + file.name;
-                const specifierUrl = new URL(specifier, import.meta.url).href;
+                const specifierUrl = 'file://' + specifier;
                 let mod: Record<string, unknown> | undefined;
-                try{
+                try {
                     mod = await import(specifierUrl);
                 } catch (error) {
                     console.warn(`Failed to load processor: ${specifier}`, error);
