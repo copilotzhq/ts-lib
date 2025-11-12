@@ -935,19 +935,10 @@ export type EventPayloadMapBase = {
   TOOL_CALL: ToolCallEventPayload;
   LLM_CALL: LlmCallEventPayload;
   TOKEN: TokenEventPayload;
-}
+};
 
-// Consumers can augment this interface via global interface merging to add custom event types.
-// Example (in consumer code):
-// declare global { interface CustomEventMap { MEDIA: { url: string } } }
-// This global interface is used by the Event type mapping below.
-declare global {
-  // deno-lint-ignore no-empty-interface
-  interface CustomEventMap {}
-}
 
-type EventPayloadMap = EventPayloadMapBase & CustomEventMap;
-
+type EventPayloadMap = EventPayloadMapBase 
 export type EventBase = Omit<QueueRow, "eventType" | "payload">;
 
 export type Event = {

@@ -75,7 +75,7 @@ const asProcess = (
     };
 };
 
-const loadResources = async ({ path }: { path: string } = { path: "resources" }) => {
+const loadResources = async ({ path }: { path: string } = { path: "resources" }): Promise<Resources> => {
     const agentConfigs: Array<AgentConfig> = [];
 
     const agentsPath = Deno.cwd() + '/' + path + '/agents/';
