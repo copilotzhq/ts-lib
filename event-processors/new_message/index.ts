@@ -199,6 +199,12 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
         // Persist incoming message before processing
         await ops.createMessage(incomingMsg);
 
+        // Allow custom processors to emit follow-up NEW_MESSAGE events that should not trigger default routing/LLM
+        const skipRouting = !!(messageMetadata && typeof messageMetadata === "object" && (messageMetadata as { skipRouting?: unknown }).skipRouting === true);
+        if (skipRouting) {
+            return { producedEvents: [] };
+        }
+
         // Resolve targets
         const availableAgents = context.agents || [];
         const targets = discoverTargetAgentsForMessage(messageContext, thread, availableAgents);
@@ -251,7 +257,6 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
             /** If the message is not a tool call, we need to add the message to the LLM context */
 
-
             // Build processing context
             const ctx = await buildProcessingContext(ops, threadId, context, agent.name);
 
@@ -260,7 +265,9 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             const llmHistory: ChatMessage[] = historyGenerator(ctx.chatHistory, agent);
 
             // Select tools available to this agent
-            const allowedToolKeys: string[] = Array.isArray(agent.allowedTools) ? agent.allowedTools : [];
+            const allowedToolKeys: string[] = Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
+                ? agent.allowedTools
+                : ctx.allTools.map((t) => t.key);
             const agentTools: ExecutableTool[] = allowedToolKeys
                 .map((key) => ctx.allTools.find((t) => t.key === key))
                 .filter((t): t is ExecutableTool => Boolean(t));
@@ -437,7 +444,17 @@ function discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, t
 
     // Default two-party fallback
     if (thread.participants && thread.participants.length === 2) {
-        const otherParticipant: string | undefined = thread.participants.find((p: string) => p !== contextDetails.senderName && p !== contextDetails.senderId);
+        // Avoid self-targeting when sender provided only id or only name
+        const senderAgent = availableAgents.find(a =>
+            a.name === contextDetails.senderName ||
+            a.id === contextDetails.senderId
+        );
+        const otherParticipant: string | undefined = thread.participants.find((p: string) =>
+            p !== contextDetails.senderName &&
+            p !== contextDetails.senderId 
+            // p !== (senderAgent?.name ?? "") &&
+            // p !== (senderAgent?.id ?? "")
+        );
         if (otherParticipant) {
             const otherAgent = availableAgents.find(a => a.name === otherParticipant);
             if (otherAgent) return [otherAgent];

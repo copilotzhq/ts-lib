@@ -1,5 +1,6 @@
 import type { CopilotzDb } from "@/database/index.ts";
-import type { ChatContext, Event, NewEvent, ContentStreamData, MessagePayload, User, TokenEventPayload } from "@/interfaces/index.ts";
+import type { ChatContext, Event, NewEvent, NewUnknownEvent, ContentStreamData, MessagePayload, User, TokenEventPayload } from "@/interfaces/index.ts";
+import type { EventBase } from "@/database/schemas/index.ts";
 import { startThreadEventWorker } from "@/event-processors/index.ts";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -14,16 +15,18 @@ export type RunOptions = {
     queueTTL?: number;
 };
 
+export type StreamEvent = Event | (EventBase & { type: string; payload: Record<string, unknown> });
+
 export type RunHandle = {
     queueId: string;
     threadId: string;
     status: "queued";
-    events: AsyncIterable<Event>;
+    events: AsyncIterable<StreamEvent>;
     done: Promise<void>;
     cancel: () => void;
 };
 
-export type UnifiedOnEvent = (event: Event) => MaybePromise<{ producedEvents?: NewEvent[] } | void>;
+export type UnifiedOnEvent = (event: Event) => MaybePromise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void>;
 
 class AsyncQueue<T> implements AsyncIterable<T> {
     private buffer: T[] = [];
@@ -155,7 +158,7 @@ export async function runThread(
 ): Promise<RunHandle> {
     const ops = db.ops;
     const stream = options?.stream ?? baseContext.stream ?? false;
-    const queue = new AsyncQueue<Event>();
+    const queue = new AsyncQueue<StreamEvent>();
     const doneResolve = (() => {
         let resolve!: () => void;
         let reject!: (err: unknown) => void;
@@ -178,16 +181,28 @@ export async function runThread(
         const existingByExt = await ops.getThreadByExternalId(threadRef.externalId);
         if (existingByExt?.id) threadId = existingByExt.id as string;
     }
-    threadId = threadId || crypto.randomUUID();
+    // If still undefined, let the DB assign a ULID on creation
 
-    // Participants: prefer provided; else, from configured agents; always unique
-    const baseParticipants = Array.isArray(threadRef?.participants) && threadRef?.participants.length
-        ? threadRef.participants
-        : (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
+    // Participants: prefer provided; else, use existing thread participants if available; else, from configured agents
+    let baseParticipants: string[] = [];
+    if (Array.isArray(threadRef?.participants) && threadRef?.participants.length) {
+        baseParticipants = threadRef.participants;
+    } else {
+        try {
+            const existingThread = threadId ? await ops.getThreadById(threadId) : undefined;
+            if (existingThread && Array.isArray(existingThread.participants) && existingThread.participants.length > 0) {
+                baseParticipants = existingThread.participants as string[];
+            } else {
+                baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
+            }
+        } catch {
+            baseParticipants = (baseContext.agents ?? []).map((a) => a.name).filter(Boolean);
+        }
+    }
     const senderCanonical = (sender.id ?? sender.name ?? "user") as string;
     const participants = Array.from(new Set([senderCanonical, ...baseParticipants]));
 
-    await ops.findOrCreateThread(threadId, {
+    const ensuredThread = await ops.findOrCreateThread(threadId, {
         name: threadRef?.name ?? "Main Thread",
         description: threadRef?.description ?? undefined,
         participants,
@@ -197,6 +212,7 @@ export async function runThread(
         status: "active",
         mode: "immediate",
     });
+    threadId = ensuredThread.id as string;
 
     const normalizedSender: MessagePayload["sender"] = {
         id: message.sender?.id ?? message.sender?.externalId ?? message.sender?.name ?? undefined,
@@ -246,7 +262,7 @@ export async function runThread(
     }
 
     // Compose callbacks
-    const wrappedOnEvent = async (ev: Event): Promise<{ producedEvents?: NewEvent[] } | void> => {
+    const wrappedOnEvent = async (ev: Event): Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> => {
         if (cancelled) return;
         try {
             queue.push(ev);
@@ -254,8 +270,8 @@ export async function runThread(
         if (typeof externalOnEvent === "function" && ev.type !== "TOKEN") {
             try {
                 const res = await externalOnEvent(ev);
-                if (res && (res as { producedEvents?: NewEvent[] }).producedEvents) {
-                    return { producedEvents: (res as { producedEvents?: NewEvent[] }).producedEvents };
+                if (res && (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents) {
+                    return { producedEvents: (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents };
                 }
             } catch { /* ignore user callback errors */ }
         } else if (typeof externalOnEvent === "function" && ev.type === "TOKEN") {

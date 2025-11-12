@@ -13,6 +13,10 @@ import type {
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
+    NewUnknownEvent,
+    EventPayloadMapBase,
+    EventOfMap,
+    NewEventOfMap,
 } from "@/database/schemas/index.ts";
 
 export type {
@@ -30,6 +34,10 @@ export type {
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
+    NewUnknownEvent,
+    EventPayloadMapBase,
+    EventOfMap,
+    NewEventOfMap,
 }
  
 import type {
@@ -43,6 +51,8 @@ export type {
     DbInstance,
     CopilotzDb
 }
+
+import type { EventProcessor, ProcessorDeps } from "@/event-processors/index.ts";
 
 export type {
     EventProcessor,
@@ -71,12 +81,13 @@ export interface ChatContext {
     threadMetadata?: Record<string, unknown>;
     queueTTL?: number;
     userMetadata?: Record<string, unknown>;
+    customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
 }
 
 // Callback types that can return values for interception
 export interface ChatCallbacks {
     onContentStream?: (data: ContentStreamData) => void | Promise<void> | ContentStreamData;
-    onEvent?: (event: Event) => Promise<{ producedEvents?: NewEvent[] } | void> | { producedEvents?: NewEvent[] } | void;
+    onEvent?: (event: Event) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
 }
 
 export interface ContentStreamData {

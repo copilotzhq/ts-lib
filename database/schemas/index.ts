@@ -199,7 +199,7 @@ export const NewMessageEventPayloadSchema = MessagePayloadSchema;
 export type NewMessageEventPayload = MessagePayload;
 
 // create ulid
-const generateId = (): string => ulid();
+function generateId(): string { return ulid(); }
 
 const schemaDefinition = {
   agents: {
@@ -650,8 +650,7 @@ const schemaDefinition = {
         id: READONLY_UUID_SCHEMA,
         threadId: { $ref: "#/$defs/threads/properties/id" },
         eventType: {
-          type: "string",
-          enum: ["NEW_MESSAGE", "TOOL_CALL", "LLM_CALL", "TOKEN"],
+          type: "string"
         },
         payload: { type: "object" },
         thread: {
@@ -931,17 +930,28 @@ export type ToolCallEventPayload = FromSchema<typeof schemaDefinition.events.sch
 export type LlmCallEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.LlmCallEventPayload>;
 export type TokenEventPayload = FromSchema<typeof schemaDefinition.events.schema.$defs.TokenEventPayload>;
 
-type EventPayloadMap = {
+export type EventPayloadMapBase = {
   NEW_MESSAGE: MessagePayload;
   TOOL_CALL: ToolCallEventPayload;
   LLM_CALL: LlmCallEventPayload;
   TOKEN: TokenEventPayload;
-};
+}
 
-type BaseEvent = Omit<QueueRow, "eventType" | "payload">;
+// Consumers can augment this interface via global interface merging to add custom event types.
+// Example (in consumer code):
+// declare global { interface CustomEventMap { MEDIA: { url: string } } }
+// This global interface is used by the Event type mapping below.
+declare global {
+  // deno-lint-ignore no-empty-interface
+  interface CustomEventMap {}
+}
+
+type EventPayloadMap = EventPayloadMapBase & CustomEventMap;
+
+export type EventBase = Omit<QueueRow, "eventType" | "payload">;
 
 export type Event = {
-  [K in keyof EventPayloadMap]: BaseEvent & { type: K; payload: EventPayloadMap[K] }
+  [K in keyof EventPayloadMap]: EventBase & { type: K; payload: EventPayloadMap[K] }
 }[keyof EventPayloadMap];
 
 export type NewEvent = {
@@ -960,3 +970,44 @@ export type NewEvent = {
     updatedAt?: string | Date;
   }
 }[keyof EventPayloadMap];
+
+// Generic helpers to enable typed custom events without global augmentation
+export type EventOfMap<TCustom extends Record<string, unknown>> = {
+  [K in keyof (EventPayloadMapBase & TCustom)]: EventBase & {
+    type: K;
+    payload: (EventPayloadMapBase & TCustom)[K];
+  }
+}[keyof (EventPayloadMapBase & TCustom)];
+
+export type NewEventOfMap<TCustom extends Record<string, unknown>> = {
+  [K in keyof (EventPayloadMapBase & TCustom)]: {
+    threadId: string;
+    type: K;
+    payload: (EventPayloadMapBase & TCustom)[K];
+    parentEventId?: string;
+    traceId?: string;
+    priority?: number;
+    metadata?: Record<string, unknown> | null;
+    ttlMs?: number;
+    id?: string;
+    status?: QueueStatus;
+    createdAt?: string | Date;
+    updatedAt?: string | Date;
+  }
+}[keyof (EventPayloadMapBase & TCustom)];
+
+// Broadly-typed event shape to support custom events passed at runtime via config.processors
+export type NewUnknownEvent = {
+  threadId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  parentEventId?: string;
+  traceId?: string;
+  priority?: number;
+  metadata?: Record<string, unknown> | null;
+  ttlMs?: number;
+  id?: string;
+  status?: QueueStatus;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
+};

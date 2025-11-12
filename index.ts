@@ -8,6 +8,8 @@ import type {
     API,
     ChatCallbacks,
     ChatContext,
+    EventProcessor,
+    ProcessorDeps,
     CopilotzDb,
     DatabaseConfig,
     MCPServer,
@@ -26,10 +28,14 @@ export { getNativeTools } from "@/event-processors/tool_call/native-tools-regist
 export * from "@/interfaces/index.ts";
 export { createDatabase, schema, migrations };
 export type { ToolCallPayload, LLMCallPayload } from "@/interfaces/index.ts";
+export { registerEventProcessor } from "@/event-processors/index.ts";
+export type { StreamEvent } from "@/runtime/index.ts";
 
 // JSON-schema-derived database typing helpers (single source of truth)
 export type DbSchemas = typeof schema;
 export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
+
+export { default as loadResources } from "@/utils/loaders/resources.ts";
 
 export type CopilotzEvent =
     | { type: "NEW_MESSAGE"; payload: MessagePayload }
@@ -48,6 +54,7 @@ type NormalizedCopilotzConfig = Omit<CopilotzConfig, "agents" | "tools" | "apis"
     tools?: Tool[];
     apis?: API[];
     mcpServers?: MCPServer[];
+    customProcessorsByType?: ChatContext["customProcessors"];
 };
 
 function normalizeAgent(agent: AgentConfig): Agent {
@@ -91,6 +98,7 @@ export interface CopilotzConfig {
     tools?: ToolConfig[];
     apis?: APIConfig[];
     mcpServers?: MCPServerConfig[];
+    processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
     callbacks?: ChatCallbacks;
     dbConfig?: DatabaseConfig;
     dbInstance?: CopilotzDb;
@@ -154,6 +162,20 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
     }
     const baseOps = baseDb.ops;
 
+    // Prepare custom processors map (order preserved; highest priority first in provided array)
+    if (Array.isArray(config.processors) && config.processors.length > 0) {
+        const byType: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>> = {};
+        for (const p of config.processors) {
+            if (!p || typeof p !== "object") continue;
+            const eventType = (p as { eventType?: string }).eventType;
+            if (!eventType || typeof (p as EventProcessor<unknown, ProcessorDeps>).shouldProcess !== "function" || typeof (p as EventProcessor<unknown, ProcessorDeps>).process !== "function") continue;
+            const key = String(eventType).toUpperCase();
+            if (!byType[key]) byType[key] = [];
+            byType[key].push(p as EventProcessor<unknown, ProcessorDeps>);
+        }
+        baseConfig.customProcessorsByType = byType;
+    }
+
     const performRun = async (
         message: MessagePayload,
         onEvent?: UnifiedOnEvent,
@@ -174,6 +196,7 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             queueTTL: baseConfig.queueTTL,
             stream: options?.stream ?? baseConfig.stream ?? false,
             activeTaskId: baseConfig.activeTaskId,
+            customProcessors: baseConfig.customProcessorsByType,
         };
         return await runThread(baseDb, ctx, message, onEvent, options);
     };
@@ -188,6 +211,8 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             let quitCommand = "quit";
             let banner: string | null = typeof defaultBanner === "string" ? defaultBanner : null;
             let threadExternalId = crypto.randomUUID().slice(0, 24);
+            let sessionSender: MessagePayload["sender"] | undefined = { type: "user", name: "user" };
+            let sessionParticipants: string[] | undefined = undefined;
 
             if (initialMessage && typeof initialMessage === "object") {
                 if (typeof (initialMessage as { quitCommand?: string }).quitCommand === "string") {
@@ -207,6 +232,24 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                     if (fromThread && typeof fromThread.externalId === "string" && fromThread.externalId.trim().length > 0) {
                         threadExternalId = fromThread.externalId;
                     }
+                }
+                // Capture sender and participants for subsequent messages
+                const maybeMsg = initialMessage as unknown as MessagePayload;
+                if (maybeMsg?.sender && typeof maybeMsg.sender === "object") {
+                    sessionSender = {
+                        id: maybeMsg.sender.id ?? undefined,
+                        externalId: maybeMsg.sender.externalId ?? null,
+                        type: maybeMsg.sender.type ?? "user",
+                        name: maybeMsg.sender.name ?? null,
+                        identifierType: maybeMsg.sender.identifierType ?? undefined,
+                        metadata: (maybeMsg.sender.metadata && typeof maybeMsg.sender.metadata === "object")
+                            ? maybeMsg.sender.metadata as Record<string, unknown>
+                            : null,
+                    };
+                }
+                const fromParticipants = (initialMessage as { thread?: { participants?: string[] } }).thread?.participants;
+                if (Array.isArray(fromParticipants) && fromParticipants.length > 0) {
+                    sessionParticipants = fromParticipants.slice();
                 }
             }
 
@@ -249,8 +292,10 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                 const send = async (content: string) => {
                     const handle = await performRun({
                         content,
-                        sender: { type: "user", name: "user" },
-                        thread: { externalId: threadExternalId },
+                        sender: sessionSender ?? { type: "user", name: "user" },
+                        thread: sessionParticipants
+                            ? { externalId: threadExternalId, participants: sessionParticipants }
+                            : { externalId: threadExternalId },
                     }, unifiedOnEvent, { stream: true, ackMode: "onComplete" });
                     for await (const _ of handle.events) { /* drain */ }
                     await handle.done;

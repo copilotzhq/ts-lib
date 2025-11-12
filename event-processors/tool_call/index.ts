@@ -113,8 +113,11 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
       ...mcpTools,
     ];
 
+    const allowedKeys = Array.isArray(agent.allowedTools) && agent.allowedTools.length > 0
+      ? agent.allowedTools
+      : allTools.map((t) => t.key);
     const agentTools =
-      agent.allowedTools?.map((key: string) => allTools.find((t) => t.key === key)).filter(hasExecute) || [];
+      allowedKeys.map((key: string) => allTools.find((t) => t.key === key)).filter(hasExecute) || [];
 
     const results = await processToolCalls(
       [payload.call],

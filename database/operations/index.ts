@@ -59,7 +59,7 @@ export interface DatabaseOperations {
   ) => Promise<Message[]>;
   getThreadById: (threadId: string) => Promise<Thread | undefined>;
   getThreadByExternalId: (externalId: string) => Promise<Thread | undefined>;
-  findOrCreateThread: (threadId: string, threadData: ThreadInsert) => Promise<Thread>;
+  findOrCreateThread: (threadId: string | undefined, threadData: ThreadInsert) => Promise<Thread>;
   createMessage: (message: MessageInsert) => Promise<Message>;
   getTaskById: (taskId: string) => Promise<Task | undefined>;
   createTask: (taskData: TaskInsert) => Promise<Task>;
@@ -207,10 +207,15 @@ export function createOperations(db: DbInstance): DatabaseOperations {
   };
 
   const findOrCreateThread = async (
-    threadId: string,
+    threadId: string | undefined,
     threadData: ThreadInsert,
   ): Promise<Thread> => {
-    const existing = await crud.threads.findOne({ id: threadId });
+    let existing: Thread | null = null;
+    if (threadId) {
+      existing = await crud.threads.findOne({ id: threadId }) as Thread | null;
+    } else if (typeof threadData.externalId === "string" && threadData.externalId) {
+      existing = await crud.threads.findOne({ externalId: threadData.externalId }) as Thread | null;
+    }
 
     const normalizeParticipants = (participants?: string[] | null) => {
       if (!Array.isArray(participants)) return participants ?? null;
@@ -219,8 +224,7 @@ export function createOperations(db: DbInstance): DatabaseOperations {
 
     if (!existing) {
       const participants = normalizeParticipants(threadData.participants);
-      const created = await crud.threads.create({
-        id: threadId,
+      const baseInsert = {
         name: threadData.name,
         externalId: threadData.externalId ?? null,
         description: threadData.description ?? null,
@@ -231,7 +235,10 @@ export function createOperations(db: DbInstance): DatabaseOperations {
         summary: threadData.summary ?? null,
         parentThreadId: threadData.parentThreadId ?? null,
         metadata: threadData.metadata ?? null
-      }) as Thread;
+      };
+      const created = await crud.threads.create(
+        threadId ? { id: threadId, ...baseInsert } : baseInsert
+      ) as Thread;
       return created;
     }
 

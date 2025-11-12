@@ -10,6 +10,7 @@ import type {
     ToolCallEventPayload,
     LlmCallEventPayload,
     TokenEventPayload,
+    NewUnknownEvent,
 } from "@/interfaces/index.ts";
 
 // Import Processors
@@ -29,7 +30,7 @@ import type { ExecutableTool, ToolExecutor } from "./tool_call/types.ts";
 export type { LLMCallPayload, LLMResultPayload, ToolCallPayload, ToolResultPayload, ToolExecutionContext, ExecutableTool, ToolExecutor };
 
 export interface ProcessResult {
-    producedEvents: NewEvent[];
+    producedEvents: Array<NewEvent | NewUnknownEvent>;
 }
 
 export type ProcessorDeps = {
@@ -42,22 +43,8 @@ type Operations = CopilotzDb["ops"];
 
 type EventProcessors = Record<EventType, EventProcessor<unknown, ProcessorDeps>>;
 
-function castEventPayload(type: "NEW_MESSAGE", payload: unknown): MessagePayload;
-function castEventPayload(type: "TOOL_CALL", payload: unknown): ToolCallEventPayload;
-function castEventPayload(type: "LLM_CALL", payload: unknown): LlmCallEventPayload;
-function castEventPayload(type: "TOKEN", payload: unknown): TokenEventPayload;
-function castEventPayload(type: Event["type"], payload: unknown): Event["payload"] {
-    switch (type) {
-        case "NEW_MESSAGE":
-            return payload as MessagePayload;
-        case "TOOL_CALL":
-            return payload as ToolCallEventPayload;
-        case "LLM_CALL":
-            return payload as LlmCallEventPayload;
-        case "TOKEN":
-        default:
-            return payload as TokenEventPayload;
-    }
+function castPayload<T>(payload: unknown): T {
+    return payload as T;
 }
 
 // Processor registry
@@ -71,11 +58,18 @@ const processors: EventProcessors = {
     NEW_MESSAGE: messageProcessor,
     TOOL_CALL: toolCallProcessor,
     TOKEN: tokenProcessor,
-    
 };
 
+export function registerEventProcessor<TPayload = unknown>(
+    type: string,
+    processor: EventProcessor<TPayload, ProcessorDeps>,
+): void {
+    (processors as Record<string, EventProcessor<unknown, ProcessorDeps>>)[type] =
+        processor as unknown as EventProcessor<unknown, ProcessorDeps>;
+}
+
 // Public API
-export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<void> {
+export async function enqueueEvent(db: CopilotzDb, event: NewEvent | NewUnknownEvent): Promise<void> {
     const ops = db.ops;
     const { threadId } = event;
 
@@ -94,7 +88,7 @@ export async function enqueueEvent(db: CopilotzDb, event: NewEvent): Promise<voi
 
     await ops.addToQueue(threadId, {
         eventType: event.type,
-        payload: event.payload,
+        payload: event.payload as Record<string, unknown>,
         parentEventId,
         traceId,
         priority: event.priority ?? undefined,
@@ -109,11 +103,12 @@ export async function startThreadEventWorker(
     threadId: string,
     context: ChatContext
 ): Promise<void> {
-    const workerContext: WorkerContext = context.callbacks?.onEvent
-        ? { callbacks: { onEvent: context.callbacks.onEvent } }
-        : {};
+    const workerContext: WorkerContext = {
+        callbacks: context.callbacks?.onEvent ? { onEvent: context.callbacks.onEvent } : undefined,
+        customProcessors: context.customProcessors,
+    };
 
-    await startEventWorker<ProcessorDeps>(
+    await startEventWorker(
         db,
         threadId,
         workerContext,
@@ -133,28 +128,29 @@ export async function startThreadEventWorker(
 
 export interface EventProcessor<TPayload = unknown, TDeps = unknown> {
     shouldProcess: (event: Event, deps: TDeps) => boolean | Promise<boolean>;
-    process: (event: Event, deps: TDeps) => Promise<{ producedEvents?: NewEvent[] } | void> | { producedEvents?: NewEvent[] } | void;
+    process: (event: Event, deps: TDeps) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
 }
 
 export type OnEventResponse =
     | void
     | { event: Event }
-    | { producedEvents: NewEvent[] }
+    | { producedEvents: Array<NewEvent | NewUnknownEvent> }
     | { drop: true };
 
 export interface WorkerContext {
     callbacks?: {
-        onEvent?: (ev: Event) => Promise<{ producedEvents?: NewEvent[] } | void> | { producedEvents?: NewEvent[] } | void;
+        onEvent?: (ev: Event) => Promise<{ producedEvents?: Array<NewEvent | NewUnknownEvent> } | void> | { producedEvents?: Array<NewEvent | NewUnknownEvent> } | void;
     };
+    customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
 }
 
 // Generic worker
-export async function startEventWorker<TDeps>(
+export async function startEventWorker(
     db: CopilotzDb,
     threadId: string,
     context: WorkerContext,
-    processors: Record<string, EventProcessor<unknown, TDeps>>,
-    buildDeps: (ops: Operations, event: Event, context: WorkerContext) => Promise<TDeps> | TDeps,
+    processors: Record<string, EventProcessor<unknown, ProcessorDeps>>,
+    buildDeps: (ops: Operations, event: Event, context: WorkerContext) => Promise<ProcessorDeps> | ProcessorDeps,
     shouldAcceptEvent?: (event: Event) => boolean
 ): Promise<void> {
 
@@ -193,30 +189,37 @@ export async function startEventWorker<TDeps>(
                 event = {
                     ...baseEvent,
                     type: "NEW_MESSAGE",
-                    payload: castEventPayload("NEW_MESSAGE", next.payload),
+                    payload: castPayload<MessagePayload>(next.payload),
                 };
                 break;
             case "TOOL_CALL":
                 event = {
                     ...baseEvent,
                     type: "TOOL_CALL",
-                    payload: castEventPayload("TOOL_CALL", next.payload),
+                    payload: castPayload<ToolCallEventPayload>(next.payload),
                 };
                 break;
             case "LLM_CALL":
                 event = {
                     ...baseEvent,
                     type: "LLM_CALL",
-                    payload: castEventPayload("LLM_CALL", next.payload),
+                    payload: castPayload<LlmCallEventPayload>(next.payload),
                 };
                 break;
             case "TOKEN":
-            default:
                 event = {
                     ...baseEvent,
                     type: "TOKEN",
-                    payload: castEventPayload("TOKEN", next.payload),
+                    payload: castPayload<TokenEventPayload>(next.payload),
                 };
+                break;
+            default:
+                // Pass through unknown/custom event types; allow callback or custom processor to handle them
+                event = {
+                    ...baseEvent,
+                    type: eventType,
+                    payload: next.payload as Record<string, unknown>,
+                } as unknown as Event;
                 break;
         }
 
@@ -230,13 +233,13 @@ export async function startEventWorker<TDeps>(
         await ops.updateQueueItemStatus(queueId, "processing");
 
         try {
-            const deps = await buildDeps(ops, event, context);
+            const deps: ProcessorDeps = (await buildDeps(ops, event, context)) as ProcessorDeps;
 
             const processor = processors[event.type];
 
             // Buckets to respect override semantics
-            const preEvents: NewEvent[] = [];
-            let finalEvents: NewEvent[] = [];
+            const preEvents: Array<NewEvent | NewUnknownEvent> = [];
+            let finalEvents: Array<NewEvent | NewUnknownEvent> = [];
 
             // 1) onEvent callback with override semantics
             const handler = context?.callbacks?.onEvent;
@@ -244,19 +247,38 @@ export async function startEventWorker<TDeps>(
             if (handler) {
                 try {
                     const res = await handler(event);
-                    if (res && (res).producedEvents) {
-                        finalEvents = (res).producedEvents as NewEvent[];
+                    if (res && (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents) {
+                        finalEvents = (res as { producedEvents?: Array<NewEvent | NewUnknownEvent> }).producedEvents as Array<NewEvent | NewUnknownEvent>;
                         overriddenByOnEvent = true;
                     }
                 } catch (_err) { /* ignore user callback errors */ }
             }
 
-            // 2) Default processor path (only if not overridden)
-            if (!overriddenByOnEvent && processor) {
+            // 2) Custom processors by event type (only if not overridden). Stop on first production.
+            if (!overriddenByOnEvent && context?.customProcessors) {
+                const list = context.customProcessors[event.type] ?? [];
+                for (const p of list) {
+                    try {
+                        const ok = await p.shouldProcess(event, deps);
+                        if (!ok) continue;
+                        const res = await p.process(event, deps);
+                        if (res?.producedEvents && res.producedEvents.length > 0) {
+                            finalEvents = res.producedEvents;
+                            // Stop at first production
+                            break;
+                        }
+                    } catch (_err) {
+                        // Ignore custom processor errors; move to next
+                    }
+                }
+            }
+
+            // 3) Default processor path (only if not overridden and nothing produced by custom)
+            if (!overriddenByOnEvent && finalEvents.length === 0 && processor) {
                 const ok = await processor.shouldProcess(event, deps);
                 if (ok) {
                     const res = await processor.process(event, deps);
-                    if (res?.producedEvents) finalEvents = res.producedEvents
+                    if (res?.producedEvents) finalEvents = res.producedEvents;
                 }
             }
 
