@@ -18,7 +18,9 @@ export type Resources = {
 const readDir = (relativePath: string) => Deno.readDir(relativePath);
 
 const loadModule = async (specifier: string, options?: ImportCallOptions) => {
-    const module = await import('file://' + specifier, options);
+    const s = 'file://' + specifier;
+    console.log('importing', s);
+    const module = await import(s, options);
     return module?.default ?? module;
 };
 
