@@ -15,7 +15,15 @@ export type Resources = {
     processors?: Array<(EventProcessor<unknown, ProcessorDeps> & { eventType: string; priority?: number; id?: string })>;
 };
 
-const readDir = (relativePath: string) => Deno.readDir(relativePath);
+async function* readDir(relativePath: string) {
+    try {
+        for await (const entry of Deno.readDir(relativePath)) {
+            yield entry;
+        }
+    } catch {
+        return;
+    }
+}
 
 const loadModule = async (specifier: string, options?: ImportCallOptions) => {
     const s = 'file://' + specifier;

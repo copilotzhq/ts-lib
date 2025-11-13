@@ -937,7 +937,6 @@ export type EventPayloadMapBase = {
   TOKEN: TokenEventPayload;
 };
 
-
 type EventPayloadMap = EventPayloadMapBase 
 export type EventBase = Omit<QueueRow, "eventType" | "payload">;
 

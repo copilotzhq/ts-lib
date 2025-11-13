@@ -444,16 +444,11 @@ function discoverTargetAgentsForMessage(contextDetails: MessageContextDetails, t
 
     // Default two-party fallback
     if (thread.participants && thread.participants.length === 2) {
-        // Avoid self-targeting when sender provided only id or only name
-        const senderAgent = availableAgents.find(a =>
-            a.name === contextDetails.senderName ||
-            a.id === contextDetails.senderId
-        );
+      
         const otherParticipant: string | undefined = thread.participants.find((p: string) =>
             p !== contextDetails.senderName &&
             p !== contextDetails.senderId 
-            // p !== (senderAgent?.name ?? "") &&
-            // p !== (senderAgent?.id ?? "")
+
         );
         if (otherParticipant) {
             const otherAgent = availableAgents.find(a => a.name === otherParticipant);
