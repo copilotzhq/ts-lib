@@ -103,6 +103,53 @@ interface MessageContextDetails {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
 
+function extractAttachmentsFromContent(content: MessagePayload["content"]) {
+	const attachments: Array<{ kind: "image" | "audio" | "file"; data?: string; dataUrl?: string; mimeType?: string; format?: string; fileName?: string }> = [];
+	if (!Array.isArray(content)) return attachments;
+
+	for (const part of content) {
+		if (!part || typeof part !== "object") continue;
+		const p = part as Record<string, unknown>;
+
+		const type = typeof p.type === "string" ? p.type : undefined;
+		switch (type) {
+			case "image": {
+				const mimeType = typeof p.mimeType === "string" ? p.mimeType : undefined;
+				if (typeof p.dataBase64 === "string") {
+					attachments.push({ kind: "image", data: p.dataBase64, mimeType });
+				} else if (typeof p.url === "string") {
+					attachments.push({ kind: "image", dataUrl: p.url, mimeType });
+				}
+				break;
+			}
+			case "audio": {
+				const mimeType = typeof p.mimeType === "string" ? p.mimeType : undefined;
+				const format = typeof p.format === "string" ? p.format : undefined;
+				if (typeof p.dataBase64 === "string") {
+					attachments.push({ kind: "audio", data: p.dataBase64, mimeType, format });
+				} else if (typeof p.url === "string") {
+					attachments.push({ kind: "audio", dataUrl: p.url, mimeType, format });
+				}
+				break;
+			}
+			case "file": {
+				const mimeType = typeof p.mimeType === "string" ? p.mimeType : undefined;
+				const fileName = typeof p.name === "string" ? p.name : undefined;
+				if (typeof p.dataBase64 === "string") {
+					attachments.push({ kind: "file", data: p.dataBase64, mimeType, fileName });
+				} else if (typeof p.url === "string") {
+					attachments.push({ kind: "file", dataUrl: p.url, mimeType, fileName });
+				}
+				break;
+			}
+			default:
+				break;
+		}
+	}
+
+	return attachments;
+}
+
 function extractTextContent(content: MessagePayload["content"]): string {
     if (typeof content === "string") return content;
     if (Array.isArray(content)) {
@@ -159,9 +206,15 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             ? event.threadId
             : (() => { throw new Error("Invalid thread id for message event"); })();
 
-        const messageMetadata = isRecord(payload.metadata)
-            ? payload.metadata as Record<string, unknown>
-            : null;
+		const derivedAttachments = extractAttachmentsFromContent(payload.content);
+		const baseMetadata = (isRecord(payload.metadata) ? payload.metadata : {}) as Record<string, unknown>;
+		const existingRaw = (baseMetadata as { attachments?: unknown }).attachments;
+		const existing = Array.isArray(existingRaw) ? existingRaw : [];
+		const mergedAttachments = existing.concat(derivedAttachments);
+		const messageMetadata = {
+			...baseMetadata,
+			...(mergedAttachments.length ? { attachments: mergedAttachments } : {}),
+		} as Record<string, unknown> | null;
         const toolCallMetadata = Array.isArray((messageMetadata as { toolCalls?: unknown[] } | null)?.toolCalls)
             ? ((messageMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
             : [];

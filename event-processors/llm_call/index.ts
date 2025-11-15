@@ -34,14 +34,14 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         const producedEvents: NewEvent[] = [];
 
         // Get context from dependencies
-        const context= deps.context;
+        const context = deps.context;
 
         // Streaming callback: ai/llm filters out <function_calls> already.
         const streamCallback = (context.stream && (context.callbacks?.onContentStream))
             ? (token: string) => {
 
                 if (context.callbacks?.onContentStream) {
-                    
+
                     const callbackData: ContentStreamData = {
                         threadId,
                         agentName: payload.agentName,
@@ -53,37 +53,37 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             }
             : undefined;
 
-            const envVars: Record<string, string> = (() => {
-                try {
-                    const anyGlobal = globalThis as unknown as {
-                        Deno?: { env?: { toObject?: () => Record<string, string> } };
-                        process?: { env?: Record<string, string | undefined> };
-                    };
-                    const fromDeno = anyGlobal?.Deno?.env?.toObject?.();
-                    if (fromDeno && typeof fromDeno === "object") return fromDeno;
-                    const fromNode = anyGlobal?.process?.env;
-                    if (fromNode && typeof fromNode === "object") {
-                        const out: Record<string, string> = {};
-                        for (const [k, v] of Object.entries(fromNode)) {
-                            if (typeof v === "string") out[k] = v;
-                        }
-                        return out;
+        const envVars: Record<string, string> = (() => {
+            try {
+                const anyGlobal = globalThis as unknown as {
+                    Deno?: { env?: { toObject?: () => Record<string, string> } };
+                    process?: { env?: Record<string, string | undefined> };
+                };
+                const fromDeno = anyGlobal?.Deno?.env?.toObject?.();
+                if (fromDeno && typeof fromDeno === "object") return fromDeno;
+                const fromNode = anyGlobal?.process?.env;
+                if (fromNode && typeof fromNode === "object") {
+                    const out: Record<string, string> = {};
+                    for (const [k, v] of Object.entries(fromNode)) {
+                        if (typeof v === "string") out[k] = v;
                     }
-                } catch {
-                    // ignore
+                    return out;
                 }
-                return {};
-            })();
+            } catch {
+                // ignore
+            }
+            return {};
+        })();
 
-            const response = await chat(
-                {
-                    messages: payload.messages,
-                    tools: payload.tools,
-                } as ChatRequest,
-                payload.config,
-                envVars,
-                streamCallback
-            );
+        const response = await chat(
+            {
+                messages: payload.messages,
+                tools: payload.tools,
+            } as ChatRequest,
+            payload.config,
+            envVars,
+            streamCallback
+        );
 
 
         const llmResponse = response as unknown as ChatResponse;

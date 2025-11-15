@@ -26,7 +26,15 @@ export const anthropicProvider: ProviderFactory = (config: ProviderConfig) => {
           contentBlocks = (msg.content as ChatContentPart[]).flatMap((p) => {
             if (p.type === 'text') return [{ type: 'text', text: p.text }];
             if (p.type === 'image_url' && p.image_url?.url) {
-              return [{ type: 'image', source: { type: 'url', url: p.image_url.url } }];
+              const url = p.image_url.url;
+              if (typeof url === 'string' && url.startsWith('data:')) {
+                const header = url.substring(5); // mime;base64,....
+                const [mimeType, base64Data] = header.split(';base64,');
+                if (base64Data) {
+                  return [{ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Data } }];
+                }
+              }
+              return [{ type: 'image', source: { type: 'url', url } }];
             }
             if (p.type === 'file' && p.file?.file_data) {
               const fileData = p.file.file_data;

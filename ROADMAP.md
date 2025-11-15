@@ -33,3 +33,10 @@
 - Default behavior: omit headers, include numeric status; provide compatibility flag to keep legacy full response structure.
 - Update documentation and tests/examples to cover slim vs detailed response modes and migration guidance.
 
+## Native CLI Tooling & Safety
+
+- Centralize workspace path resolution with normalization, escape prevention, and shared error helpers, reusing it across all filesystem/command tools.
+- Harden `run_command` with cwd guarding, allow/deny lists, timeout cleanup, and stdout/stderr truncation; explore optional streaming mode.
+- Expand native command-line tools (`apply_patch`, `delete_file`, `mkdir`, `glob_search`, `grep_regex`, `tail_file`) with structured outputs and consistent schemas.
+- Add output limits and policy-oriented error messages for existing tools; document usage patterns and security constraints.
+- Instrument tool executions for logging/metrics, redacting sensitive args and capturing duration/error codes.

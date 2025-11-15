@@ -48,6 +48,13 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
         const kind = typeof attachment.kind === "string" ? attachment.kind : undefined;
         const dataInfo = toDataUrl(attachment);
 
+		if (typeof attachment.dataUrl === "string" && /^https?:\/\//.test(attachment.dataUrl)) {
+			if (kind === "image") {
+				parts.push({ type: "image_url", image_url: { url: attachment.dataUrl } });
+				continue;
+			}
+		}
+
         if (!dataInfo) {
             continue;
         }
