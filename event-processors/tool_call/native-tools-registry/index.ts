@@ -14,6 +14,8 @@ import search_files from "./search_files.ts";
 import fetch_text from "./fetch_text.ts";
 import run_command from "./run_command.ts";
 import wait from "./wait.ts";
+import save_asset from "./save_asset.ts";
+import fetch_asset from "./fetch_asset.ts";
 
 export const nativeTools: { [key: string]: NewTool } = {
     ask_question,
@@ -29,7 +31,9 @@ export const nativeTools: { [key: string]: NewTool } = {
     search_files,
     fetch_text,
     run_command,
-    wait
+    wait,
+    save_asset,
+    fetch_asset,
 };
 
 

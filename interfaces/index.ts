@@ -1,5 +1,7 @@
+import type { ProviderConfig, ChatMessage, ToolDefinition } from "@/connectors/llm/types.ts";
+
 import type {
-    Agent, NewAgent,
+    Agent as DbAgent, NewAgent,
     API, NewAPI,
     MCPServer, NewMCPServer,
     Message, NewMessage,
@@ -20,7 +22,7 @@ import type {
 } from "@/database/schemas/index.ts";
 
 export type {
-    Agent, NewAgent,
+    NewAgent,
     API, NewAPI,
     MCPServer, NewMCPServer,
     Message, NewMessage,
@@ -66,6 +68,28 @@ export type {
     ToolExecutor,
 } from "@/event-processors/index.ts";
 
+import type { AssetStore, AssetConfig } from "@/utils/assets.ts";
+
+export interface AgentLlmOptionsResolverPayload {
+    agentName: string;
+    agentId: string;
+    messages: ChatMessage[];
+    tools: ToolDefinition[];
+    config?: ProviderConfig;
+}
+
+export interface AgentLlmOptionsResolverArgs {
+    payload: AgentLlmOptionsResolverPayload;
+    sourceEvent: Event;
+    deps: ProcessorDeps;
+}
+
+export type AgentLlmOptionsResolver = (args: AgentLlmOptionsResolverArgs) => ProviderConfig | Promise<ProviderConfig>;
+
+export type Agent = Omit<DbAgent, "llmOptions"> & {
+    llmOptions?: DbAgent["llmOptions"] | AgentLlmOptionsResolver;
+};
+
 // Chat context interface
 export interface ChatContext {
     agents?: Agent[];
@@ -82,6 +106,9 @@ export interface ChatContext {
     queueTTL?: number;
     userMetadata?: Record<string, unknown>;
     customProcessors?: Record<string, Array<EventProcessor<unknown, ProcessorDeps>>>;
+    assetStore?: AssetStore;
+    assetConfig?: AssetConfig;
+    resolveAsset?: (ref: string) => Promise<{ bytes: Uint8Array; mime: string }>;
 }
 
 // Callback types that can return values for interception

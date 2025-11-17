@@ -1,7 +1,8 @@
 import { chat } from "@/connectors/llm/index.ts";
-import type { ChatMessage, ChatRequest, ChatResponse } from "@/connectors/llm/types.ts";
+import type { ChatMessage, ChatRequest, ChatResponse, ProviderConfig } from "@/connectors/llm/types.ts";
 import type { Event, NewEvent, EventProcessor, MessagePayload, ProcessorDeps, LlmCallEventPayload } from "@/interfaces/index.ts";
 import type { ToolCallInput } from "@/event-processors/tool_call/index.ts";
+import { resolveAssetRefsInMessages } from "@/utils/assets.ts";
 
 export type {
     ChatMessage,
@@ -75,12 +76,48 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             return {};
         })();
 
+        // If allowed, resolve asset:// refs in message parts to provider-acceptable data URLs.
+        // Otherwise, strip multimodal parts and send text-only to let the LLM call a fetch tool.
+        const shouldResolve = context.assetConfig?.resolveInLLM !== false;
+        const resolvedMessages = (await (async () => {
+            try {
+                if (shouldResolve) {
+                    const res = await resolveAssetRefsInMessages(payload.messages as ChatMessage[], context.assetStore);
+                    return res.messages;
+                }
+                const msgs = (payload.messages as ChatMessage[]).map((m) => {
+                    if (Array.isArray(m.content)) {
+                        const textOnly = m.content
+                            .map((p) => (p && typeof p === "object" && (p as { type?: string }).type === "text") ? (p as { text?: string }).text ?? "" : "")
+                            .join("");
+                        return { ...m, content: textOnly };
+                    }
+                    return m;
+                });
+                return msgs;
+            } catch {
+                return payload.messages as ChatMessage[];
+            }
+        })());
+
+        const agentForCall = context.agents?.find((a) => a.id === payload.agentId);
+        let finalConfig: ProviderConfig | undefined = payload.config;
+
+        if (!finalConfig && agentForCall) {
+            const agentLlmOptions = agentForCall.llmOptions;
+            if (agentLlmOptions && typeof agentLlmOptions !== "function") {
+                finalConfig = agentLlmOptions;
+            }
+        }
+
+        const configForCall: ProviderConfig = finalConfig ?? {};
+
         const response = await chat(
             {
-                messages: payload.messages,
+                messages: resolvedMessages,
                 tools: payload.tools,
             } as ChatRequest,
-            payload.config,
+            configForCall,
             envVars,
             streamCallback
         );

@@ -22,6 +22,7 @@ import type { ToolCall } from "@/connectors/llm/types.ts";
 
 import Ajv from "npm:ajv@^8.17.1";
 import addFormats from "npm:ajv-formats@^3.0.1";
+import { normalizeOutputToAssetRefs, extractAssetId, findAssetRefs } from "@/utils/assets.ts";
 
 // Tool call with optional id (before being sent to LLM)
 export type ToolCallInput = Omit<ToolCall, 'id'> & { id?: string };
@@ -130,6 +131,11 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
         agents: availableAgents,
         tools: allTools,
         db,
+        resolveAsset: async (ref: string) => {
+          if (!context.assetStore) throw new Error("Asset store is not configured");
+          const id = ref.startsWith("asset://") ? ref.slice("asset://".length) : ref;
+          return await context.assetStore.get(id);
+        },
       }
     );
 
@@ -141,11 +147,67 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
     const output = result.output;
     const error = result.error;
 
+    // Normalize output into asset refs when media is detected
     let content: string;
+    let metadataAttachments: Array<Record<string, unknown>> = [];
     if (error) {
       content = `tool error: ${String(error)}\n\nPlease review the error above and try again with the correct format.`;
-    } else if (output) {
-      content = typeof output === 'string' ? `${output}` : `${JSON.stringify(output)}`;
+    } else if (typeof output !== "undefined") {
+      try {
+        const normalized = await normalizeOutputToAssetRefs(output, context.assetStore);
+        // Build attachments for LLM history consumption
+        if (normalized.created.length > 0) {
+          metadataAttachments = normalized.created.map((c) => ({
+            kind: c.kind,
+            mimeType: c.mime,
+            assetRef: c.ref,
+          }));
+        }
+        const normalizedOutput = normalized.normalized;
+        content = typeof normalizedOutput === "string" ? normalizedOutput : JSON.stringify(normalizedOutput);
+
+        // Emit ASSET_CREATED for any refs we can find: newly created or returned by the tool
+        const refs = new Set<string>();
+        for (const c of normalized.created) refs.add(c.ref);
+        for (const r of findAssetRefs(output)) refs.add(r);
+        for (const r of findAssetRefs(normalizedOutput)) refs.add(r);
+
+        if (refs.size > 0 && context.callbacks?.onEvent) {
+          for (const ref of refs) {
+            try {
+              const id = extractAssetId(ref);
+              let base64: string | undefined = undefined;
+              let mimeForEvent: string | undefined = undefined;
+              let dataUrl: string | undefined = undefined;
+              const store = context.assetStore;
+              if (store) {
+                const { bytes, mime } = await store.get(id);
+                mimeForEvent = mime;
+                base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+                dataUrl = base64 ? `data:${mime};base64,${base64}` : undefined;
+              }
+              await context.callbacks.onEvent({
+                id: crypto.randomUUID(),
+                threadId,
+                type: "ASSET_CREATED" as unknown as Event["type"],
+                payload: { assetId: id, ref, ...(mimeForEvent ? { mime: mimeForEvent } : {}), by: "tool", tool: call.function.name, ...(base64 ? { base64 } : {}), ...(dataUrl ? { dataUrl } : {}) } as unknown as Event["payload"],
+                parentEventId: event.id as string,
+                traceId: event.traceId,
+                priority: null,
+                metadata: null,
+                ttlMs: null,
+                expiresAt: null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                status: "completed",
+              } as unknown as Event);
+            } catch { /* ignore */ }
+          }
+        }
+      } catch {
+        // Fallback to plain serialization
+        content = typeof output === "string" ? output : JSON.stringify(output);
+      }
     } else {
       content = `No output returned`;
     }
@@ -171,6 +233,7 @@ export const toolCallProcessor: EventProcessor<ToolCallPayload, ProcessorDeps> =
                 status: error ? "failed" : "completed",
               },
             ],
+            ...(metadataAttachments.length > 0 ? { attachments: metadataAttachments } : {}),
           },
         },
         parentEventId: typeof event.id === "string" ? event.id : undefined,

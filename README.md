@@ -242,6 +242,189 @@ allowedTools: [
 ]
 ```
 
+### Media and Assets
+
+COPILOTZ provides first‑class handling for media returned by tools or LLMs without stuffing raw base64 into history.
+
+- Asset refs: Stable identifiers `asset://<id>` pointing to stored bytes.
+- Default store: In‑memory `AssetStore` (no persistence). Provider adapters use data URLs generated on demand.
+- Event: `ASSET_CREATED` is emitted (ephemeral) when media is stored. Payload includes `assetId`, `ref`, `mime` and convenience `base64`/`dataUrl` for clients.
+- Helpers:
+  - `copilotz.assets.getBase64(refOrId) → { base64, mime }`
+  - `copilotz.assets.getDataUrl(refOrId) → string`
+
+Configure:
+
+```typescript
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  // Optional assets configuration
+  assets: {
+    config: {
+      inlineThresholdBytes: 256_000, // default
+      resolveInLLM: true,            // default: resolve asset:// to data URLs for LLMs
+    },
+    // store?: AssetStore // bring your own (filesystem, S3, etc.)
+  },
+});
+```
+
+Resolution behavior in LLM calls:
+
+- resolveInLLM = true (default):
+  - Attachments become provider‑specific parts.
+  - Images/files → data URLs via `image_url`/`file`; audio → base64 in `input_audio`.
+- resolveInLLM = false:
+  - Multimodal parts are stripped; text remains (e.g., JSON with `assetRef`).
+  - Let the model fetch on demand via a tool (see `fetch_asset` below) to save tokens.
+
+Native media tools:
+
+```typescript
+// Save bytes to asset store; returns { assetRef, mimeType, size, kind }
+// Allow this tool for agents that will create media
+allowedTools: ["save_asset", "fetch_asset"];
+
+// Fetch previously saved asset by ref/id
+// Args:
+//  - ref?: "asset://<id>" or id?: "<id>"
+//  - format?: "dataUrl" | "base64" (default "dataUrl")
+```
+
+Listen for asset events:
+
+```typescript
+const handle = await copilotz.run(message);
+for await (const ev of handle.events) {
+  if (ev.type === "ASSET_CREATED") {
+    const { assetId, ref, mime, base64, dataUrl } = (ev as any).payload;
+    // client can display or persist as needed
+  }
+}
+await handle.done;
+```
+
+### Asset Store
+
+The Asset Store manages binary media referenced in conversations.
+
+Interface:
+
+```typescript
+export interface AssetConfig {
+  inlineThresholdBytes?: number; // default ~256k
+  resolveInLLM?: boolean;        // default true (resolve to provider-acceptable formats)
+  backend?: "memory" | "fs" | "s3"; // default "memory"
+  fs?: { rootDir: string; baseUrl?: string; prefix?: string; connector?: FsConnector };
+  s3?: { bucket: string; connector: S3Connector; publicBaseUrl?: string; keyPrefix?: string };
+}
+
+export interface AssetStore {
+  save(bytes: Uint8Array, mime: string): Promise<{ assetId: string }>;
+  get(assetId: string): Promise<{ bytes: Uint8Array; mime: string }>;
+  urlFor(assetId: string, opts?: { inline?: boolean }): Promise<string>; // return data URL or external URL
+  info?(assetId: string): Promise<{ id: string; mime: string; size: number; createdAt: Date } | undefined>;
+}
+```
+
+Backends:
+- **memory** (default): In-memory store, returns data URLs, does not persist across restarts.
+- **fs**: Filesystem-backed store. Requires `fs.rootDir`. Optionally set `fs.baseUrl` for public URLs.
+- **s3**: S3-compatible store. Requires `s3.bucket` and `s3.connector`. Optionally set `s3.publicBaseUrl` or use connector's signed URLs.
+
+Defaults:
+- When `resolveInLLM` is true, attachments resolve to provider-specific parts (image_url/file/input_audio).
+- When `resolveInLLM` is false, only text is sent; the model can use `fetch_asset` to retrieve media on demand.
+
+Configuration examples:
+
+```typescript
+// Memory (default)
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  assets: {
+    config: {
+      inlineThresholdBytes: 256_000,
+      resolveInLLM: true,
+    },
+  },
+});
+
+// Filesystem backend
+import { createFsConnector } from "@copilotz/copilotz/connectors/storage/fs";
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  assets: {
+    config: {
+      backend: "fs",
+      fs: {
+        rootDir: "./assets",
+        baseUrl: "https://cdn.example.com/assets", // optional public URL
+        prefix: "media", // optional subfolder
+      },
+    },
+  },
+});
+
+// S3 backend
+import { createS3Connector } from "@copilotz/copilotz/connectors/storage/s3";
+const s3Connector = createS3Connector({
+  baseUrl: "https://s3.amazonaws.com",
+  // ... your S3 config (credentials, region, etc.)
+});
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  assets: {
+    config: {
+      backend: "s3",
+      s3: {
+        bucket: "my-assets-bucket",
+        connector: s3Connector,
+        publicBaseUrl: "https://cdn.example.com", // optional
+        keyPrefix: "copilotz", // optional key prefix
+      },
+    },
+  },
+});
+
+// Or inject a custom store directly
+const copilotz = await createCopilotz({
+  agents: [/* ... */],
+  assets: {
+    store: myCustomAssetStore, // implements AssetStore interface
+  },
+});
+```
+
+Runtime usage:
+- In tools/processors: `context.assetStore.save/get/urlFor`, and `context.resolveAsset(ref)` to obtain bytes+mime.
+- From clients: `copilotz.assets.getBase64(refOrId)` and `copilotz.assets.getDataUrl(refOrId)`.
+
+Custom store (sketch):
+
+```typescript
+function createFilesystemAssetStore(root: string): AssetStore {
+  return {
+    async save(bytes, mime) {
+      const id = crypto.randomUUID();
+      await Deno.writeFile(`${root}/${id}`, bytes);
+      return { assetId: id };
+    },
+    async get(id) {
+      const bytes = await Deno.readFile(`${root}/${id}`);
+      // determine mime from sidecar/extension, omitted for brevity
+      return { bytes, mime: "application/octet-stream" };
+    },
+    async urlFor(id) {
+      // return signed/public URL if available; fallback to data URL
+      const { bytes, mime } = await this.get(id);
+      const b64 = btoa(String.fromCharCode(...bytes));
+      return `data:${mime};base64,${b64}`;
+    },
+  };
+}
+```
+
 #### Custom Tools
 
 ```typescript

@@ -1,5 +1,6 @@
 import type { NewMessage, Agent } from "@/interfaces/index.ts";
 import type { ChatMessage, ToolCall, ChatContentPart } from "@/connectors/llm/types.ts";
+import { isAssetRef } from "@/utils/assets.ts";
 
 type StoredAttachment = {
     kind?: string;
@@ -9,6 +10,7 @@ type StoredAttachment = {
     durationMs?: number;
     format?: string;
     fileName?: string;
+    assetRef?: string;
 };
 
 type MessageMetadata = Record<string, unknown> & {
@@ -47,6 +49,34 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
     for (const attachment of attachments) {
         const kind = typeof attachment.kind === "string" ? attachment.kind : undefined;
         const dataInfo = toDataUrl(attachment);
+
+        // Prefer assetRef if provided; resolved later in LLM_CALL
+        if (typeof attachment.assetRef === "string" && isAssetRef(attachment.assetRef)) {
+            if (kind === "image") {
+                parts.push({ type: "image_url", image_url: { url: attachment.assetRef } });
+                continue;
+            }
+            if (kind === "audio") {
+                const format = typeof attachment.format === "string" ? attachment.format : undefined;
+                parts.push({
+                    type: "input_audio",
+                    input_audio: {
+                        data: attachment.assetRef,
+                        ...(format ? { format } : {}),
+                    },
+                });
+                continue;
+            }
+            // file or video -> treat as file
+            parts.push({
+                type: "file",
+                file: {
+                    file_data: attachment.assetRef,
+                    mime_type: typeof attachment.mimeType === "string" ? attachment.mimeType : undefined,
+                },
+            });
+            continue;
+        }
 
 		if (typeof attachment.dataUrl === "string" && /^https?:\/\//.test(attachment.dataUrl)) {
 			if (kind === "image") {

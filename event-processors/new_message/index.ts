@@ -20,6 +20,7 @@ import type {
     MessagePayload,
     LlmCallEventPayload,
     ToolCallEventPayload,
+    AgentLlmOptionsResolverArgs,
 } from "@/interfaces/index.ts";
 
 type Operations = ProcessorDeps["db"]["ops"];
@@ -336,12 +337,39 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
                 ...llmHistory
             ];
 
-            const llmPayload = {
+            const resolverPayload = {
                 agentName: agent.name,
                 agentId: agent.id,
                 messages: llmMessages,
                 tools: llmTools,
-                config: agent.llmOptions as ProviderConfig,
+            } as AgentLlmOptionsResolverArgs["payload"];
+
+            let providerConfig: ProviderConfig = {};
+            const agentLlmOptions = agent.llmOptions;
+            if (agentLlmOptions) {
+                if (typeof agentLlmOptions === "function") {
+                    try {
+                        const dynamicConfig = await agentLlmOptions({
+                            payload: resolverPayload,
+                            sourceEvent: event,
+                            deps,
+                        });
+                        if (dynamicConfig && typeof dynamicConfig === "object") {
+                            providerConfig = dynamicConfig;
+                        }
+                    } catch (error) {
+                        console.warn(`[new_message] Failed to resolve dynamic llmOptions for agent "${agent.name ?? agent.id}":`, error);
+                    }
+                } else {
+                    providerConfig = agentLlmOptions;
+                }
+            }
+
+            resolverPayload.config = providerConfig;
+
+            const llmPayload = {
+                ...resolverPayload,
+                config: providerConfig as unknown as Record<string, unknown>,
             } as LlmCallEventPayload;
 
             producedEvents.push({

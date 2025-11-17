@@ -31,6 +31,8 @@ export type { ToolCallPayload, LLMCallPayload } from "@/interfaces/index.ts";
 export { registerEventProcessor } from "@/event-processors/index.ts";
 export type { StreamEvent } from "@/runtime/index.ts";
 
+import type { AssetStore, AssetConfig } from "@/utils/assets.ts";
+import { createMemoryAssetStore, createAssetStore } from "@/utils/assets.ts";
 // JSON-schema-derived database typing helpers (single source of truth)
 export type DbSchemas = typeof schema;
 export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
@@ -106,6 +108,10 @@ export interface CopilotzConfig {
     queueTTL?: number;
     stream?: boolean;
     activeTaskId?: string;
+    assets?: {
+        config?: AssetConfig;
+        store?: AssetStore;
+    };
 }
 
 export type CopilotzRunResult = RunHandle;
@@ -133,6 +139,10 @@ export interface Copilotz {
     run(message: MessagePayload, onEvent?: UnifiedOnEvent, options?: RunOptions): Promise<CopilotzRunResult>;
     start(initialMessage?: (MessagePayload & { banner?: string | null; quitCommand?: string; threadExternalId?: string }) | string, onEvent?: UnifiedOnEvent): CopilotzCliController;
     shutdown(): Promise<void>;
+    assets: {
+        getBase64: (refOrId: string) => Promise<{ base64: string; mime: string }>;
+        getDataUrl: (refOrId: string) => Promise<string>;
+    };
 }
 
 export interface CopilotzCliController {
@@ -176,6 +186,11 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
         baseConfig.customProcessorsByType = byType;
     }
 
+    // Single asset store instance per Copilotz
+    const assetStoreInstance = (config.assets && config.assets.store)
+        ? config.assets.store
+        : (config.assets?.config ? createAssetStore(config.assets.config) : createMemoryAssetStore());
+
     const performRun = async (
         message: MessagePayload,
         onEvent?: UnifiedOnEvent,
@@ -197,6 +212,12 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             stream: options?.stream ?? baseConfig.stream ?? false,
             activeTaskId: baseConfig.activeTaskId,
             customProcessors: baseConfig.customProcessorsByType,
+            assetStore: assetStoreInstance,
+            assetConfig: config.assets?.config,
+            resolveAsset: async (ref: string) => {
+                const id = ref.startsWith("asset://") ? ref.slice("asset://".length) : ref;
+                return await assetStoreInstance.get(id);
+            },
         };
         return await runThread(baseDb, ctx, message, onEvent, options);
     };
@@ -341,6 +362,20 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
                     await resource.end.call(resource);
                 }
             }
+        },
+        assets: {
+            getBase64: async (refOrId: string) => {
+                const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
+                const { bytes, mime } = await assetStoreInstance.get(id);
+                const base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+                return { base64, mime };
+            },
+            getDataUrl: async (refOrId: string) => {
+                const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
+                const { bytes, mime } = await assetStoreInstance.get(id);
+                const base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+                return `data:${mime};base64,${base64}`;
+            },
         },
     } satisfies Copilotz;
 }
