@@ -83,6 +83,7 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             try {
                 if (shouldResolve) {
                     const res = await resolveAssetRefsInMessages(payload.messages as ChatMessage[], context.assetStore);
+                    Deno.env.get("COPILOTZ_DEBUG") === "1" && console.log("resolvedMessages", res.messages);
                     return res.messages;
                 }
                 const msgs = (payload.messages as ChatMessage[]).map((m) => {

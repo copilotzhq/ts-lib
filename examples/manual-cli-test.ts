@@ -13,11 +13,17 @@ const selectModelForInput = ({ payload }: AgentLlmOptionsResolverArgs): Provider
     // Check if any message contains an audio part
     const hasAudioInput = payload.messages.some(msg => hasAudioPart(msg.content));
 
+    console.log("hasAudioInput", hasAudioInput);
+
+    if (hasAudioInput) {
+        console.log(payload.messages);
+    }
+
     const config = payload.config || {
         provider: "openai",
         model: "gpt-4o-mini",
         temperature: 0.7,
-        maxTokens: 100000,
+        maxTokens: 16384,
         apiKey: Deno.env.get("DEFAULT_OPENAI_KEY") || "",
     };
 
@@ -26,7 +32,7 @@ const selectModelForInput = ({ payload }: AgentLlmOptionsResolverArgs): Provider
             provider: "openai",
             model: "gpt-audio-mini",
             temperature: 0.4,
-            maxTokens: 100000,
+            maxTokens: 16384,
             apiKey: Deno.env.get("DEFAULT_OPENAI_KEY") || "",
         };
     }

@@ -84,7 +84,7 @@ for await (const ev of handle.events) {
             Deno.stdout.writeSync(new TextEncoder().encode(token));
         }
     } else {
-        console.log("[EVENT]", ev.type, ev.payload);
+        // console.log("[EVENT]", ev.type, ev.payload);
     }
 	// if (ev.type === "ASSET_CREATED") {
 	// 	const p = (ev as any).payload || {};
@@ -138,7 +138,7 @@ for await (const ev of handle2.events) {
 			Deno.stdout.writeSync(new TextEncoder().encode(token));
 		}
 	} else {
-		console.log("[EVENT-2]", ev.type, ev.payload);
+		// console.log("[EVENT-2]", ev.type, ev.payload);
 	}
 }
 await handle2.done;
