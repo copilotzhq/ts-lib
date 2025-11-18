@@ -1,4 +1,5 @@
 import type { ToolExecutionContext } from "../index.ts";
+import { bytesToBase64 } from "@/utils/assets.ts";
 
 type Params = {
 	ref?: string;   // asset://<id>
@@ -31,7 +32,7 @@ export default {
 			return { assetRef: `asset://${assetId}`, dataUrl: url };
 		}
 		const { bytes, mime } = await context.assetStore.get(assetId);
-		const base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+		const base64 = bytesToBase64(bytes);
 		return { assetRef: `asset://${assetId}`, base64, mime };
 	},
 }; 

@@ -6,6 +6,7 @@ import {
     isDataUrl,
     normalizeOutputToAssetRefs,
     extractAssetId,
+    bytesToBase64,
 } from "@/utils/assets.ts";
 
 type AttachmentKind = "image" | "audio" | "file";
@@ -249,7 +250,7 @@ export async function processAssetsForNewMessage(args: {
                 let dataUrl: string | undefined = undefined;
                 const { bytes, mime } = await store.get(id);
                 mimeForEvent = mime;
-                base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+                base64 = bytesToBase64(bytes);
                 dataUrl = base64 ? `data:${mime};base64,${base64}` : undefined;
 
                 const by =

@@ -418,7 +418,7 @@ function createFilesystemAssetStore(root: string): AssetStore {
     async urlFor(id) {
       // return signed/public URL if available; fallback to data URL
       const { bytes, mime } = await this.get(id);
-      const b64 = btoa(String.fromCharCode(...bytes));
+      const b64 = bytesToBase64(bytes);
       return `data:${mime};base64,${b64}`;
     },
   };

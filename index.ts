@@ -32,7 +32,7 @@ export { registerEventProcessor } from "@/event-processors/index.ts";
 export type { StreamEvent } from "@/runtime/index.ts";
 
 import type { AssetStore, AssetConfig } from "@/utils/assets.ts";
-import { createMemoryAssetStore, createAssetStore } from "@/utils/assets.ts";
+import { createMemoryAssetStore, createAssetStore, bytesToBase64 } from "@/utils/assets.ts";
 // JSON-schema-derived database typing helpers (single source of truth)
 export type DbSchemas = typeof schema;
 export type DbCrud = OminipgWithCrud<DbSchemas>["crud"];
@@ -367,13 +367,13 @@ export async function createCopilotz(config: CopilotzConfig): Promise<Copilotz> 
             getBase64: async (refOrId: string) => {
                 const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
                 const { bytes, mime } = await assetStoreInstance.get(id);
-                const base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+                const base64 = bytesToBase64(bytes);
                 return { base64, mime };
             },
             getDataUrl: async (refOrId: string) => {
                 const id = refOrId.startsWith("asset://") ? refOrId.slice("asset://".length) : refOrId;
                 const { bytes, mime } = await assetStoreInstance.get(id);
-                const base64 = (typeof btoa === "function") ? btoa(String.fromCharCode(...bytes)) : "";
+                const base64 = bytesToBase64(bytes);
                 return `data:${mime};base64,${base64}`;
             },
         },

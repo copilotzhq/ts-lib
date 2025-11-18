@@ -60,8 +60,15 @@ export function extractAssetId(ref: AssetRef | string): AssetId {
 }
 
 export function bytesToBase64(bytes: Uint8Array): string {
-	// Deno / Web-safe base64
-	return btoa(String.fromCharCode(...bytes));
+	// Deno / Web-safe base64 with chunking to avoid "Maximum call stack size exceeded"
+	if (typeof btoa !== "function") return "";
+	let binary = "";
+	const chunkSize = 0x8000;
+	for (let i = 0; i < bytes.length; i += chunkSize) {
+		const chunk = bytes.subarray(i, i + chunkSize);
+		binary += String.fromCharCode(...chunk);
+	}
+	return btoa(binary);
 }
 
 export function base64ToBytes(base64: string): Uint8Array {

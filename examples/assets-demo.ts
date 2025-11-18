@@ -1,4 +1,5 @@
 import { createCopilotz } from "../index.ts";
+import { bytesToBase64 } from "../utils/assets.ts";
 import type { AgentConfig } from "../index.ts";
 
 // Default AssetStore is in-memory (createMemoryAssetStore) and returns data URLs from urlFor().
@@ -40,7 +41,7 @@ const returnDataUrlTool = {
 		const t = typeof text === "string" ? text : "Hello from data URL tool";
 		const m = typeof mimeType === "string" && mimeType.length > 0 ? mimeType : "text/plain";
 		const bytes = new TextEncoder().encode(t);
-		const b64 = btoa(String.fromCharCode(...bytes));
+		const b64 = bytesToBase64(bytes);
 		return `data:${m};base64,${b64}`;
 	},
 };
