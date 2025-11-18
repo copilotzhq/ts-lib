@@ -114,8 +114,11 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
 
 
         if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
+            console.log("shouldResolve", shouldResolve);
+            console.log("hasAssetStore", !!context.assetStore);
             console.log("configForCall", configForCall);
             console.log("resolvedMessages", resolvedMessages);
+            console.log("payload.messages", payload.messages);
             console.log("payload.tools", payload.tools);
         }
 
