@@ -95,7 +95,20 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
                     return m;
                 });
                 return msgs;
-            } catch {
+            } catch (err) {
+                // In debug mode, surface the underlying error so asset resolution issues are visible.
+                try {
+                    const anyGlobal = globalThis as unknown as {
+                        Deno?: { env?: { get?: (key: string) => string | undefined }; stderr?: { writeSync?: (data: Uint8Array) => unknown } };
+                        console?: { warn?: (...args: unknown[]) => void };
+                    };
+                    const debugFlag = anyGlobal?.Deno?.env?.get?.("COPILOTZ_DEBUG");
+                    if (debugFlag === "1" && anyGlobal.console?.warn) {
+                        anyGlobal.console.warn("[llm_call] resolveAssetRefsInMessages failed:", err);
+                    }
+                } catch {
+                    // ignore logging failures
+                }
                 return payload.messages as ChatMessage[];
             }
         })());
