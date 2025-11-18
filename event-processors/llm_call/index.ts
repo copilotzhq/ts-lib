@@ -83,7 +83,6 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
             try {
                 if (shouldResolve) {
                     const res = await resolveAssetRefsInMessages(payload.messages as ChatMessage[], context.assetStore);
-                    Deno.env.get("COPILOTZ_DEBUG") === "1" && console.log("resolvedMessages", res.messages);
                     return res.messages;
                 }
                 const msgs = (payload.messages as ChatMessage[]).map((m) => {
@@ -112,6 +111,13 @@ export const llmCallProcessor: EventProcessor<LLMCallPayload, ProcessorDeps> = {
         }
 
         const configForCall: ProviderConfig = finalConfig ?? {};
+
+
+        if (Deno.env.get("COPILOTZ_DEBUG") === "1") {
+            console.log("configForCall", configForCall);
+            console.log("resolvedMessages", resolvedMessages);
+            console.log("payload.tools", payload.tools);
+        }
 
         const response = await chat(
             {
