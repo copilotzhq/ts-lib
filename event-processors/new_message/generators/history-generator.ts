@@ -1,6 +1,6 @@
 import type { NewMessage, Agent } from "@/interfaces/index.ts";
 import type { ChatMessage, ToolCall, ChatContentPart } from "@/connectors/llm/types.ts";
-import { isAssetRef } from "@/utils/assets.ts";
+import { isAssetRef, extractAssetId } from "@/utils/assets.ts";
 
 type StoredAttachment = {
     kind?: string;
@@ -52,6 +52,10 @@ const buildAttachmentParts = (metadata?: MessageMetadata): ChatContentPart[] | n
 
         // Prefer assetRef if provided; resolved later in LLM_CALL
         if (typeof attachment.assetRef === "string" && isAssetRef(attachment.assetRef)) {
+            const assetId = extractAssetId(attachment.assetRef);
+            if (assetId) {
+                parts.push({ type: "text", text: `[asset:${assetId}]` });
+            }
             if (kind === "image") {
                 parts.push({ type: "image_url", image_url: { url: attachment.assetRef } });
                 continue;
