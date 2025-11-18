@@ -165,6 +165,7 @@ async function normalizeAttachments(
 export interface AssetProcessingResult {
     messageMetadata: Record<string, unknown> | null;
     toolCallMetadata: unknown[];
+    contentOverride?: string;
 }
 
 export async function processAssetsForNewMessage(args: {
@@ -236,6 +237,31 @@ export async function processAssetsForNewMessage(args: {
         ? ((messageMetadata as { toolCalls?: unknown[] }).toolCalls ?? [])
         : [];
 
+    let contentOverride: string | undefined = undefined;
+    if (senderType === "tool" && toolCallMetadata.length > 0) {
+        const outputs = toolCallMetadata
+            .map((entry) => {
+                if (entry && typeof entry === "object") {
+                    return (entry as { output?: unknown }).output;
+                }
+                return undefined;
+            })
+            .filter((output): output is unknown => typeof output !== "undefined");
+
+        if (outputs.length > 0) {
+            const representative = outputs.length === 1 ? outputs[0] : outputs;
+            if (typeof representative === "string") {
+                contentOverride = representative;
+            } else {
+                try {
+                    contentOverride = JSON.stringify(representative);
+                } catch {
+                    contentOverride = undefined;
+                }
+            }
+        }
+    }
+
     // Emit ASSET_CREATED events for any newly created assets (from content or tool outputs)
     const newlyCreatedRefs = new Set<string>();
     for (const c of createdFromAttachments) newlyCreatedRefs.add(c.ref);
@@ -295,6 +321,7 @@ export async function processAssetsForNewMessage(args: {
     return {
         messageMetadata,
         toolCallMetadata,
+        contentOverride,
     };
 }
 

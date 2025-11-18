@@ -166,7 +166,7 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
 
         const baseMetadata = (isRecord(payload.metadata) ? payload.metadata : {}) as Record<string, unknown>;
 
-        const { messageMetadata, toolCallMetadata } = await processAssetsForNewMessage({
+        const { messageMetadata, toolCallMetadata, contentOverride } = await processAssetsForNewMessage({
             payload,
             baseMetadata,
             senderType: messageContext.senderType,
@@ -192,12 +192,20 @@ export const messageProcessor: EventProcessor<NewMessageEventPayload, ProcessorD
             }
         }
 
+        if (typeof contentOverride === "string") {
+            payload.content = contentOverride;
+        }
+
+        const persistedContent = typeof contentOverride === "string"
+            ? contentOverride
+            : messageContext.contentText;
+
         const incomingMsg = {
             id: crypto.randomUUID(),
             threadId,
             senderId: messageContext.senderId,
             senderType: messageContext.senderType,
-            content: messageContext.contentText,
+            content: persistedContent,
             toolCallId: toolCallId,
             toolCalls: payload.toolCalls ?? null,
             metadata: messageMetadata,
