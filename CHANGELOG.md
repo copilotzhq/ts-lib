@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.66.3 — 2026-09-05
+
+Authorize conversation Asset reads through their owning thread and message,
+including exact content and reasoning references. Filter private history before
+pagination and expose the typed Core message Asset client. Content reads no
+longer depend on an asynchronous application access projection. Existing
+messages, Assets, and database schemas remain unchanged.
+
 ## 0.66.2 — 2026-09-05
 
 Restore independent conversation participant selection and message recipients.
