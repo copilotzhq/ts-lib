@@ -44,6 +44,12 @@ export type HttpObservation = Readonly<{
   replayCursor?: string;
   /** Thread feeds track one durable Event position per operation. */
   compositeCursor?: boolean;
+  /** Durable prefixes captured before attaching a thread observation. */
+  bootstrap?: readonly Readonly<{
+    streamId: string;
+    offset: number;
+    terminal: boolean;
+  }>[];
   /** Transport interruption detaches; it never durably cancels an operation. */
   cancel(reason?: string): Promise<void>;
 }>;

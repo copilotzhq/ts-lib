@@ -56,7 +56,12 @@ export async function* decodeObservation(
   let complete = false;
   const fill = async (size: number) => {
     while (buffer.length < size) {
-      const next = await reader.read();
+      const next = await reader.read().catch((cause: unknown) => {
+        throw new TruncatedObservationError(
+          "Observation connection was interrupted.",
+          { cause },
+        );
+      });
       if (next.done) {
         throw new TruncatedObservationError(
           "Multipart response was truncated.",

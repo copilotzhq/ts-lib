@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.66.6 — 2026-09-06
+
+- Restore history-aware stream checkpoints and bounded snapshot catch-up over
+  multipart observations.
+- Correct descending history pagination and preserve older-page cursor
+  direction.
+- Retry interrupted observation reads without fabricating failed stream
+  outcomes.
+- Keep stream-origin caches bounded without limiting the total Actions in long
+  runs.
+
 ## 0.66.5 — 2026-09-06
 
 - Project authorized public tool status into conversation history without

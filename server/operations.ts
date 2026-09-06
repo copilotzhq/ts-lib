@@ -7,6 +7,7 @@ import type {
   InternalCopilotzApplication,
 } from "../runtime/application/types.ts";
 import {
+  createOperationReplayCursorTracker,
   decodeOperationReplayCursor,
   encodeOperationReplayCursor,
 } from "../runtime/streams/cursor.ts";
@@ -75,8 +76,61 @@ export async function createHttpOperations(
   };
   return Object.freeze({
     get,
-    async checkpoint(threadId: string) {
+    async checkpoint(
+      threadId: string,
+      coverage?: { checkpoint: string; actionRunIds: readonly string[] },
+    ) {
       await thread(threadId);
+      if (coverage) {
+        const position = decodeOperationReplayCursor(coverage.checkpoint);
+        let tracker = createOperationReplayCursorTracker(position);
+        const covered = new Set(coverage.actionRunIds);
+        for (
+          const operationId of await discover(threadId, position.eventPosition)
+        ) {
+          let afterStreamOrdinal: string | undefined;
+          while (true) {
+            const page = await runtime.operations.listStreams({
+              namespace,
+              operationId,
+              afterStreamOrdinal,
+              limit: 1000,
+            });
+            for (const stream of page) {
+              if (
+                stream.state === "terminal" &&
+                covered.has(
+                  String(stream.descriptor.metadata.sourceActionRunId),
+                )
+              ) {
+                const candidate = createOperationReplayCursorTracker(
+                  decodeOperationReplayCursor(tracker.cursor()),
+                );
+                try {
+                  candidate.commit([{
+                    kind: "operation-stream",
+                    action: "end",
+                    operationId,
+                    streamOrdinal: stream.streamOrdinal,
+                    offset: stream.committedOffset,
+                  }]);
+                  tracker = candidate;
+                } catch (error) {
+                  // Sparse coverage is optional: replay the omitted prefix instead
+                  // of exceeding the cursor's existing concurrent-lane bound.
+                  if (
+                    (error as { code?: string }).code !==
+                      "operation_replay_capacity_exceeded"
+                  ) throw error;
+                }
+              }
+            }
+            if (page.length < 1000) break;
+            afterStreamOrdinal = page.at(-1)!.streamOrdinal;
+          }
+        }
+        return tracker.cursor();
+      }
       const position =
         await runtime.operations.threadEventWatermark(namespace, threadId) ??
           "0";
@@ -148,6 +202,43 @@ export async function createHttpOperations(
         );
       }
       for (const id of ids) await get(id);
+      const bootstrap = selection.threadId
+        ? [] as {
+          streamId: string;
+          offset: number;
+          terminal: boolean;
+        }[]
+        : undefined;
+      if (bootstrap) {
+        const tracker = createOperationReplayCursorTracker(position);
+        for (const operationId of ids) {
+          let afterStreamOrdinal: string | undefined;
+          while (true) {
+            const page = await runtime.operations.listStreams({
+              namespace,
+              operationId,
+              afterStreamOrdinal,
+              limit: 1000,
+            });
+            for (const stream of page) {
+              if (
+                !tracker.streamPosition({
+                  operationId,
+                  streamOrdinal: stream.streamOrdinal,
+                }).consumed
+              ) {
+                bootstrap.push({
+                  streamId: stream.streamId,
+                  offset: stream.committedOffset,
+                  terminal: stream.state === "terminal",
+                });
+              }
+            }
+            if (page.length < 1000) break;
+            afterStreamOrdinal = page.at(-1)!.streamOrdinal;
+          }
+        }
+      }
       const transport = new TransformStream<
         ApplicationOutput,
         ApplicationOutput
@@ -250,6 +341,7 @@ export async function createHttpOperations(
       void done.catch(() => undefined);
       return Object.freeze({
         type: HTTP_OBSERVATION,
+        ...(bootstrap ? { bootstrap } : {}),
         outputs: transport.readable,
         done,
         replayCursor: checkpoint,

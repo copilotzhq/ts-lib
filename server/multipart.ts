@@ -99,23 +99,6 @@ function descriptor(output: ApplicationOutput): unknown {
   return value;
 }
 
-function boundedStreamError(
-  streamId: string,
-  offset: number,
-): Uint8Array {
-  return encoder.encode(JSON.stringify({
-    type: "stream.error",
-    streamId,
-    offset,
-    code: "stream_unavailable",
-    outcome: "abandoned",
-    availability: "missing",
-    capture: "truncated",
-    terminalAt: new Date().toISOString(),
-    message: "Progressive stream became unavailable.",
-  }));
-}
-
 function isReplayCapacityError(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code ===
     "operation_replay_capacity_exceeded";
@@ -265,20 +248,8 @@ export function applicationOutputsMultipartResponse(
         );
       }
     } catch (error) {
-      if (!cancelled) {
-        await writePart((replayCursor) =>
-          part(
-            boundary,
-            "stream-error",
-            boundedStreamError(output.streamId, offset),
-            {
-              streamId: output.streamId,
-              offset,
-              cursor: replayCursor,
-            },
-          )
-        ).catch(() => undefined);
-      }
+      // A failed read is an interrupted observation, not a durable stream outcome.
+      // Closing the transport lets clients retry their last applied checkpoint.
       if (!cancelled) throw error;
     } finally {
       readers.delete(reader);
@@ -305,6 +276,31 @@ export function applicationOutputsMultipartResponse(
         });
     }, 15_000);
     try {
+      if (source.bootstrap) {
+        for (
+          let offset = 0;
+          offset < Math.max(1, source.bootstrap.length);
+          offset += 128
+        ) {
+          await writePart((cursor) =>
+            part(
+              boundary,
+              "output",
+              encoder.encode(JSON.stringify({
+                type: "observation.bootstrap",
+                streams: source.bootstrap!.slice(offset, offset + 128),
+                more: offset + 128 < source.bootstrap!.length,
+              })),
+              { cursor },
+            )
+          );
+        }
+      }
+      const bootstrapTerminals = new Set(
+        source.bootstrap?.filter((stream) => stream.terminal).map((stream) =>
+          stream.streamId
+        ),
+      );
       for await (const output of source.outputs) {
         if (isTerminalOperationOutput(output)) await Promise.all(pumps);
         else if (!isStream(output)) {
@@ -391,6 +387,8 @@ export function applicationOutputsMultipartResponse(
               actionPumps.delete(actionRunId);
             }
           }, detach);
+          // Retained terminal lanes do not consume the concurrent-open cursor budget.
+          if (bootstrapTerminals.has(output.streamId)) await pending;
         }
       }
       await Promise.all(pumps);

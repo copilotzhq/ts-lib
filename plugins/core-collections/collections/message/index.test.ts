@@ -71,7 +71,7 @@ Deno.test("Message history pages the true newest records beyond one thousand", a
     input: {
       threadId: "thread-a",
       order: "desc",
-      before: "message-1000",
+      after: "message-1000",
       limit: 2,
     },
     read,

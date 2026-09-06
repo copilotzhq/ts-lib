@@ -16,15 +16,8 @@ export function createStreamOriginResolver(
     if (typeof runId !== "string") return output;
     const key = JSON.stringify([operationId, runId]);
     if (!origins.has(key)) {
-      if (origins.size >= 256) {
-        throw Object.assign(
-          new Error("Observation exceeds 256 stream origins."),
-          {
-            status: 409,
-            code: "operation_replay_capacity_exceeded",
-          },
-        );
-      }
+      // Bound cache memory, not the lifetime number of Actions in a long run.
+      if (origins.size >= 256) origins.delete(origins.keys().next().value!);
       let afterPosition: string | undefined;
       let origin: Record<string, unknown> | undefined;
       search: while (true) {

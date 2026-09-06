@@ -304,15 +304,14 @@ export const messageCollection: CollectionDefinition = defineCollection({
         const selectedLimit = Math.min(limit, 1_001);
         const selected: HistoryMessageRecord[] = [];
         const batchLimit = 1_000;
-        const chronologicalAfter = order === "asc" ? after : before;
-        const chronologicalBefore = order === "asc" ? before : after;
-        let scanAfter = chronologicalAfter;
+        // Collection cursors already follow the requested sort direction.
+        let scanAfter = after;
         while (selected.length < selectedLimit) {
           const page = await read.list("message", {
             where: { threadId },
             order: { field: "createdAt", direction: order },
             ...(scanAfter ? { after: scanAfter } : {}),
-            ...(chronologicalBefore ? { before: chronologicalBefore } : {}),
+            ...(before ? { before } : {}),
             limit: batchLimit,
           }) as readonly HistoryMessageRecord[];
           for (const record of page) {

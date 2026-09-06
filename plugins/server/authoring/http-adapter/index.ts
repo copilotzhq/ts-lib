@@ -41,7 +41,10 @@ export type HttpHandlerContext = Readonly<{
   ): Promise<unknown>;
   content: Readonly<{ get(assetId: string): Promise<Response> }>;
   operations: Readonly<{
-    checkpoint(threadId: string): Promise<string>;
+    checkpoint(
+      threadId: string,
+      coverage?: { checkpoint: string; actionRunIds: readonly string[] },
+    ): Promise<string>;
     observe(
       selection: {
         threadId?: string;

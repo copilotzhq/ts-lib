@@ -114,3 +114,43 @@ Deno.test("replay retains a stream's source Action context when invocation prece
     await database.close();
   }
 });
+
+Deno.test("stream origin cache remains bounded without limiting a long run's Action count", async () => {
+  const { createStreamOriginResolver } = await import("./stream-origin.ts");
+  type Runtime = Parameters<typeof createStreamOriginResolver>[0];
+  let reads = 0;
+  const runtime = {
+    operations: {
+      listEventIds: ({ operationId }: { operationId: string }) =>
+        Promise.resolve([{ eventId: operationId, position: "1" }]),
+    },
+    events: {
+      get: (_namespace: string, id: string) =>
+        Promise.resolve({ subject: { id }, type: "test.invoked" }),
+      resolve: (_namespace: string, id: string) => {
+        reads++;
+        return Promise.resolve({
+          data: { actionRunId: id, metadata: { safe: true } },
+        });
+      },
+    },
+  } as unknown as Runtime;
+  const resolve = createStreamOriginResolver(
+    runtime,
+    "tenant",
+    new AbortController().signal,
+  );
+  for (let index = 0; index <= 300; index++) {
+    const run = index === 300 ? "run-0" : `run-${index}`;
+    const stream = {
+      metadata: { sourceActionRunId: run },
+    } as unknown as Parameters<
+      typeof resolve
+    >[1];
+    assertEquals((await resolve(run, stream)).metadata.sourceAction, {
+      actionRunId: run,
+      metadata: { safe: true },
+    });
+  }
+  assertEquals(reads, 301);
+});

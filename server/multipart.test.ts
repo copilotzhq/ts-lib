@@ -405,3 +405,88 @@ Deno.test("an unread HTTP response backpressures progressive body reads and deta
   await new Promise((resolve) => setTimeout(resolve, 0));
   assertEquals(cancelled, true);
 });
+
+Deno.test("replay read interruption does not fabricate a terminal stream failure", async () => {
+  const source: HttpObservation = {
+    type: HTTP_OBSERVATION,
+    operationId: "interrupted",
+    outputs: new ReadableStream({
+      start(c) {
+        c.enqueue({
+          type: "stream.output",
+          namespace: "tenant",
+          streamId: "s",
+          streamOrdinal: "1",
+          mediaType: "text/plain",
+          kind: "text",
+          role: "content",
+          metadata: {},
+          payload: new ReadableStream({
+            pull() {
+              throw new Error("temporary storage read failure");
+            },
+          }),
+          terminal: completedTerminal(1),
+        });
+        c.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  };
+  const frames: string[] = [];
+  await assertRejects(
+    async () => {
+      for await (
+        const frame of decodeObservation(
+          applicationOutputsMultipartResponse(source),
+        )
+      ) frames.push(frame.kind);
+    },
+    ProtocolError,
+    "interrupted",
+  );
+  assertEquals(frames.includes("stream-error"), false);
+});
+
+Deno.test("bootstrap drains historical terminal lanes without exhausting concurrent cursor capacity", async () => {
+  const count = 300;
+  const source: HttpObservation = {
+    type: HTTP_OBSERVATION,
+    operationId: "long-run",
+    bootstrap: Array.from(
+      { length: count },
+      (_, i) => ({ streamId: `s${i}`, offset: 1, terminal: true }),
+    ),
+    outputs: new ReadableStream({
+      start(c) {
+        for (let i = 0; i < count; i++) {
+          c.enqueue({
+            type: "stream.output",
+            namespace: "tenant",
+            streamId: `s${i}`,
+            streamOrdinal: String(i + 1),
+            mediaType: "text/plain",
+            kind: "text",
+            role: "content",
+            metadata: {},
+            payload: new ReadableStream({
+              start(p) {
+                p.enqueue(new Uint8Array([65]));
+                p.close();
+              },
+            }),
+            terminal: completedTerminal(1),
+          });
+        }
+        c.close();
+      },
+    }),
+    done: Promise.resolve(),
+    cancel: () => Promise.resolve(),
+  };
+  const frames = await Array.fromAsync(
+    decodeObservation(applicationOutputsMultipartResponse(source)),
+  );
+  assertEquals(frames.filter((f) => f.kind === "stream-end").length, count);
+});

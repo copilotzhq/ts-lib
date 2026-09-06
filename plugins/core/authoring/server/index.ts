@@ -167,10 +167,30 @@ export function createCoreServerPlugin(): CopilotzPlugin {
               );
             }),
           );
+          const actionRunIds = records.slice(0, limit).flatMap(
+            (record, index) => {
+              const metadata = record.metadata as Record<string, unknown>;
+              const workflow = metadata.copilotzWorkflow as
+                | Record<string, unknown>
+                | undefined;
+              // Only returned Agent content replaces its LLM lanes. A tool result
+              // or public status need not contain that tool's progressive output.
+              if (
+                messages[index].sender.participantType !== "agent" ||
+                !Array.isArray(record.content) || !record.content.length
+              ) return [];
+              const run = workflow?.llmAttemptId;
+              return typeof run === "string" ? [run] : [];
+            },
+          );
+          const coveredCheckpoint = await context.operations.checkpoint(
+            context.params.id,
+            { checkpoint, actionRunIds },
+          );
           return Response.json({
             data: messages,
             pageInfo: {
-              checkpoint,
+              checkpoint: coveredCheckpoint,
               hasMore: records.length > limit,
               next: records.length > limit ? messages.at(-1)?.id : undefined,
             },
