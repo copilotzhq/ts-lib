@@ -204,6 +204,44 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       externalId: "foreign-human",
       participantType: "human",
     });
+    await records.participant.create({
+      id: "test-tool",
+      externalId: "test-tool",
+      participantType: "tool",
+    });
+    await records.message.create({
+      id: "status-result",
+      threadId: result.threadId,
+      senderId: "test-tool",
+      recipientIds: [],
+      content: page.data[1].content,
+      visibility: {
+        kind: "tool",
+        policy: "public_status",
+        requesterId: "support",
+      },
+      metadata: {
+        toolStatus: "completed",
+        toolId: "test-tool",
+        toolInvocation: { id: "call", input: "private-input" },
+        copilotzWorkflow: { sourceMessageId: "plan" },
+      },
+    });
+    const status = (await core.threads.messages(result.threadId)).data.find(
+      (message) => message.id === "status-result",
+    )!;
+    assertEquals(status.metadata.toolStatus, "completed");
+    assertEquals(status.content, []);
+    assertEquals(JSON.stringify(status).includes("private-input"), false);
+    await assertRejects(
+      () =>
+        core.messages.asset(
+          result.threadId,
+          status.id,
+          page.data[1].content[0].assetId,
+        ),
+      CopilotzHttpError,
+    );
     // Membership cannot invite a human from another thread, or partially enroll
     // valid selections before rejecting a forged selection.
     const answer = page.data[1];
@@ -323,7 +361,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       () => client.operations.result(rejected.operationId),
       CopilotzHttpError,
     );
-    assertEquals((await core.threads.messages(result.threadId)).data.length, 4);
+    assertEquals((await core.threads.messages(result.threadId)).data.length, 5);
     assertEquals(
       ((await records.thread.get({ id: result.threadId }))
         ?.participantIds as string[]).includes("foreign-human"),

@@ -59,11 +59,53 @@ function isPublicHistoryMessage(
     : {};
   return !scope && visibility.kind !== "internal" &&
     (viewerParticipantIds === undefined || visibility.kind === undefined ||
-      visibility.kind === "public" || visibility.kind === "participants" &&
+      visibility.kind === "public" ||
+      visibility.kind === "tool" &&
+        (visibility.policy === "public" ||
+          visibility.policy === "public_status" ||
+          viewerParticipantIds.includes(String(visibility.requesterId))) ||
+      visibility.kind === "participants" &&
         Array.isArray(visibility.participantIds) &&
         visibility.participantIds.some((id) =>
           viewerParticipantIds.includes(id)
         ));
+}
+
+/** Public tool status never grants access to a result body or execution metadata. */
+function projectHistoryRecord(
+  record: HistoryMessageRecord,
+  viewers?: readonly string[],
+): HistoryMessageRecord {
+  const visibility = record.visibility as Record<string, unknown> | undefined;
+  if (
+    !viewers || visibility?.kind !== "tool" ||
+    visibility.policy !== "public_status" ||
+    viewers.includes(String(visibility.requesterId))
+  ) return record;
+  const metadata = record.metadata as Record<string, unknown>;
+  const invocation = metadata.toolInvocation as
+    | Record<string, unknown>
+    | undefined;
+  const workflow = metadata.copilotzWorkflow as
+    | Record<string, unknown>
+    | undefined;
+  const action = metadata.copilotzToolAction as
+    | Record<string, unknown>
+    | undefined;
+  return {
+    ...record,
+    content: [],
+    metadata: {
+      toolStatus: metadata.toolStatus,
+      toolId: metadata.toolId,
+      toolInvocation: { id: invocation?.id, tool: { id: metadata.toolId } },
+      copilotzWorkflow: { sourceMessageId: workflow?.sourceMessageId },
+      copilotzToolAction: {
+        actionRunId: action?.actionRunId,
+        planMessageId: action?.planMessageId,
+      },
+    },
+  };
 }
 
 type ActiveBranchWindow = Readonly<{
@@ -233,7 +275,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
             | HistoryMessageRecord
             | null;
           return message && message.threadId === threadId && visible(message)
-            ? [message]
+            ? [projectHistoryRecord(message, viewers)]
             : [];
         }
         const cursorId = after ?? before;
@@ -277,7 +319,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
             if (
               visible(record)
             ) {
-              selected.push(record);
+              selected.push(projectHistoryRecord(record, viewers));
               if (selected.length === selectedLimit) break;
             }
           }

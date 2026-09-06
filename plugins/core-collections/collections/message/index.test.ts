@@ -81,3 +81,67 @@ Deno.test("Message history pages the true newest records beyond one thousand", a
     "message-0998",
   ]);
 });
+
+Deno.test("browser history projects tool status without exposing private results", async () => {
+  const make = (id: string, policy: string) => ({
+    id,
+    threadId: "thread",
+    senderId: "tool",
+    content: [{ assetId: "secret" }],
+    visibility: { kind: "tool", policy, requesterId: "agent" },
+    metadata: {
+      toolStatus: "completed",
+      toolId: "search",
+      toolInvocation: { id: "call", tool: { id: "search" }, input: "secret" },
+      copilotzWorkflow: { sourceMessageId: "plan", private: "secret" },
+      copilotzToolAction: {
+        actionRunId: "run",
+        planMessageId: "plan",
+        input: "secret",
+      },
+      private: "secret",
+    },
+  });
+  const records = [
+    make("status", "public_status"),
+    make("private", "requester_only"),
+    make("public", "public"),
+  ];
+  const read: CollectionNamedQueryRead = {
+    get(collection, id) {
+      return Promise.resolve(
+        collection === "thread"
+          ? { id }
+          : records.find((r) => r.id === id) ?? null,
+      );
+    },
+    list() {
+      return Promise.resolve(records);
+    },
+  };
+  const select = messageCollection.queries!.history.select!;
+  const input = { threadId: "thread", viewerParticipantIds: ["human"] };
+  const result = await select({ input, read });
+  assertEquals(result.map((r) => r.id), ["status", "public"]);
+  assertEquals(result[0].content, []);
+  assertEquals(
+    (result[0].metadata as Record<string, unknown>).toolStatus,
+    "completed",
+  );
+  assertEquals(JSON.stringify(result[0]).includes("secret"), false);
+  assertEquals(
+    (await select({ input: { ...input, messageId: "status" }, read }))[0]
+      .content,
+    [],
+  );
+  assertEquals(
+    await select({ input: { ...input, messageId: "private" }, read }),
+    [],
+  );
+  const requester = await select({
+    input: { ...input, viewerParticipantIds: ["agent"] },
+    read,
+  });
+  assertEquals(requester.length, 3);
+  assertEquals(requester[0].content, records[0].content);
+});

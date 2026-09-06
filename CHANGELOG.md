@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.66.5 — 2026-09-06
+
+- Project authorized public tool status into conversation history without
+  exposing private output or asset access.
+- Preserve requester-only tool visibility and exact execution/source identities.
+
 ## 0.66.4 — 2026-09-05
 
 - Clarify parallel tool-call framing and malformed-call repair instructions.
