@@ -16,8 +16,6 @@ export {
   resolveCollectionEventBody,
 } from "./kernel.ts";
 export type {
-  BoundCollection,
-  BoundCollectionQuery,
   CollectionRuntime,
   CollectionScope,
   CollectionTransactionCollections,
@@ -67,3 +65,17 @@ export type {
   GraphRelationIntent,
   GraphRelationUpsertInput,
 } from "./types.ts";
+
+export type {
+  CollectionContentOptions,
+  ResolvedCollectionContent,
+  ResolvedCollectionContentEntry,
+  ResolvedCollectionFields,
+} from "./read-options.ts";
+
+export type { CollectionOperations, CollectionRead } from "./operations.ts";
+
+export type {
+  CollectionPredicate,
+  CollectionPredicateValue,
+} from "./predicate.ts";

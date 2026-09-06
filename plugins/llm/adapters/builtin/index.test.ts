@@ -468,3 +468,37 @@ Deno.test("built-in HTTP providers reject unsupported live-session mode explicit
   );
   await assertRejects(() => collectFrames(streamedInput.frames));
 });
+
+Deno.test("prepared assistant reasoning reaches the provider through existing escaped think formatting", async () => {
+  const originalFetch = globalThis.fetch;
+  let body = "";
+  globalThis.fetch = (_input, init) => {
+    body = String(init?.body);
+    return Promise.resolve(openAiStream("continued"));
+  };
+  try {
+    const adapter = builtin("openai", {
+      apiKey: "test",
+      baseUrl: "https://provider.example/v1",
+    });
+    const invocation = adapter.call(callInput({
+      request: {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "question" }] },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "answer" }],
+            reasoning: "Check <bounds> carefully.",
+          },
+          { role: "user", content: [{ type: "text", text: "continue" }] },
+        ],
+      },
+    }));
+    await Promise.all([collectFrames(invocation.frames), invocation.result]);
+    assertStringIncludes(body, "<think>");
+    assertStringIncludes(body, "Check &lt;bounds&gt; carefully.");
+    assertStringIncludes(body, "</think>");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

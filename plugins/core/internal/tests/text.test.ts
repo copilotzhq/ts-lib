@@ -1,3 +1,4 @@
+import type { LlmCallInput } from "@copilotz/copilotz/llm";
 import {
   assert,
   assertEquals,
@@ -214,32 +215,35 @@ async function startRun(
   }>,
 ): Promise<string> {
   await collection(fixture.engine, "participant").create({
+    namespace: NAMESPACE,
+  }, {
     id: "user-a",
     externalId: "user-a",
     participantType: "human",
     metadata: { locale: "pt-BR" },
-  }, { namespace: NAMESPACE });
+  }, {});
   await collection(fixture.engine, "participant").create({
+    namespace: NAMESPACE,
+  }, {
     id: "agent-north",
     externalId: "north",
     participantType: "agent",
     agentId: "north",
     name: "North",
     metadata: {},
-  }, { namespace: NAMESPACE });
-  await collection(fixture.engine, "thread").create({
+  }, {});
+  await collection(fixture.engine, "thread").create({ namespace: NAMESPACE }, {
     id: "thread-a",
     participantIds: ["user-a", "agent-north"],
     metadata: {},
-  }, {
-    namespace: NAMESPACE,
-    identity: { deduplicationId: "thread-a:create" },
-  });
+  }, { identity: { deduplicationId: "thread-a:create" } });
   const content = await fixture.engine.content.preparer.prepare(text, {
     namespace: NAMESPACE,
     idempotencyKey: "message:user:content",
   });
   const created = await collection(fixture.engine, "message").create({
+    namespace: NAMESPACE,
+  }, {
     id: "message:user",
     threadId: "thread-a",
     senderId: "user-a",
@@ -254,7 +258,6 @@ async function startRun(
       : {},
     ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
   }, {
-    namespace: NAMESPACE,
     threadId: "thread-a",
     routing: { senderId: "user-a", recipientIds: ["agent-north"] },
     ...(visibility ? { visibility } : {}),
@@ -263,7 +266,15 @@ async function startRun(
       deduplicationId: "message:user:create",
     },
   });
-  return created.event.id;
+  const events = await fixture.engine.events.list({
+    namespace: NAMESPACE,
+    limit: 1000,
+  });
+  const event = events.find((event) =>
+    event.type === "message.created" && event.subject?.id === created.id
+  );
+  if (!event) throw new Error("Created message event was not found.");
+  return event.id;
 }
 
 async function continueRun(
@@ -276,6 +287,8 @@ async function continueRun(
     idempotencyKey: `${id}:content`,
   });
   const created = await collection(fixture.engine, "message").create({
+    namespace: NAMESPACE,
+  }, {
     id,
     threadId: "thread-a",
     senderId: "user-a",
@@ -283,7 +296,6 @@ async function continueRun(
     content,
     metadata: {},
   }, {
-    namespace: NAMESPACE,
     threadId: "thread-a",
     routing: { senderId: "user-a", recipientIds: ["agent-north"] },
     identity: {
@@ -291,7 +303,15 @@ async function continueRun(
       deduplicationId: `${id}:create`,
     },
   });
-  return created.event.id;
+  const events = await fixture.engine.events.list({
+    namespace: NAMESPACE,
+    limit: 1000,
+  });
+  const event = events.find((event) =>
+    event.type === "message.created" && event.subject?.id === created.id
+  );
+  if (!event) throw new Error("Created message event was not found.");
+  return event.id;
 }
 
 async function waitForRun(
@@ -1522,6 +1542,59 @@ Deno.test("invalid dynamic Agent instruction output fails before llm.call", asyn
       "dead-lettered",
     );
     assertEquals(fixture.inputs, []);
+  } finally {
+    await fixture.close();
+  }
+});
+
+Deno.test("Core replays persisted own reasoning through prepared LLM input without embedding bodies in receipts", async () => {
+  const fixture = await createFixture(() => ({
+    result: {
+      content: { type: "text", text: "Answer", role: "body" },
+      reasoning: {
+        type: "text",
+        text: "Remember the earlier derivation.",
+        role: "reasoning",
+      },
+      attempts: [{ status: "completed" }],
+    },
+  }));
+  try {
+    const first = await startRun(fixture, "First question");
+    await waitForRun(fixture, first, 2);
+    const second = await continueRun(
+      fixture,
+      "follow-up",
+      "Continue the argument",
+    );
+    await waitForRun(fixture, second, 4);
+    assertEquals(fixture.inputs.length, 2);
+    const previous = fixture.inputs[1].request.messages.find((message) =>
+      message.role === "assistant"
+    );
+    assertExists(previous);
+    if (previous.role === "assistant") {
+      assertEquals(previous.reasoning, "Remember the earlier derivation.");
+    }
+    const lifecycle = await projectActionEvents(
+      fixture.engine,
+      NAMESPACE,
+      "llm.call",
+    );
+    const inputs = lifecycle.filter((event) => event.status === "invoked").map(
+      (event) => event.input as LlmCallInput,
+    );
+    const reasoning = inputs.flatMap((input) =>
+      input.request.messages.flatMap((message) =>
+        message.role === "assistant" ? message.reasoning ?? [] : []
+      )
+    );
+    assertEquals(reasoning.length, 1);
+    assertEquals("value" in reasoning[0], false);
+    assertEquals(
+      JSON.stringify(inputs).includes("Remember the earlier derivation."),
+      false,
+    );
   } finally {
     await fixture.close();
   }

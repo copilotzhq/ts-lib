@@ -150,7 +150,7 @@ async function runCollectionContentContract(
         } as never);
       },
       Error,
-      "Durable content",
+      "Unsupported content value",
     );
 
     const empty = await scoped.contract_content_owner.create({
@@ -466,7 +466,7 @@ async function runCollectionContentContract(
           third.content[0].assetId,
         ),
       Error,
-      "still referenced by declared Collection content",
+      "still referenced by durable content",
     );
 
     const raced = await engine.content.preparer.prepare("raced body", {
@@ -645,4 +645,99 @@ Deno.test("custom collection replay preserves object Bodies without rewriting th
     },
     puts: () => puts,
   });
+});
+
+Deno.test("collection source content is prepared atomically and reused across transaction retries", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const registry = await createPluginRegistry({
+    plugins: [definePlugin({
+      id: "test.raw-content",
+      version: "1.0.0",
+      collections: { owner: contentOwnerCollection },
+    })],
+  });
+  const engine = await createCopilotzEngine({
+    session: createSqlSession(db),
+    registry,
+    defaultDatabaseSchema: "raw_content",
+  });
+  try {
+    const scoped = engine.collections.withScope({ namespace: "tenant-a" });
+    const source = {
+      type: "file" as const,
+      bytes: new Uint8Array([0, 255, 3]),
+      mediaType: "application/octet-stream",
+    };
+    const write = () =>
+      engine.collections.transaction({
+        namespace: "tenant-a",
+        operationKey: "source-write",
+        async execute({ collections }) {
+          await collections.contract_content_owner.create({
+            id: "one",
+            body: source,
+          });
+          await collections.contract_content_owner.create({
+            id: "two",
+            body: source,
+          });
+        },
+      });
+    await write();
+    await write();
+    const first = await scoped.contract_content_owner.get({ id: "one" }, {
+      content: true,
+    });
+    const second = await scoped.contract_content_owner.get({ id: "two" }, {
+      content: true,
+    });
+    assertExists(first);
+    assertExists(second);
+    assertEquals(first.body, second.body);
+    assertEquals(
+      (first.body as { value: Uint8Array }[])[0].value,
+      source.bytes,
+    );
+    await scoped.contract_content_owner.update({
+      id: "one",
+      set: { body: "replacement" },
+    });
+    const updated = await scoped.contract_content_owner.get({ id: "one" }, {
+      content: true,
+    });
+    assertEquals(
+      (updated?.body as { value: string }[])[0].value,
+      "replacement",
+    );
+    await assertRejects(
+      () =>
+        engine.collections.transaction({
+          namespace: "tenant-a",
+          operationKey: "rollback-source",
+          async execute({ collections }) {
+            await collections.contract_content_owner.create({
+              id: "rolled-back",
+              body: "not committed",
+            });
+            throw new Error("rollback");
+          },
+        }),
+      Error,
+      "rollback",
+    );
+    assertEquals(
+      await scoped.contract_content_owner.get({ id: "rolled-back" }),
+      null,
+    );
+    await engine.collections.rebuild("tenant-a");
+    assertEquals(
+      (await scoped.contract_content_owner.get({ id: "two" }, {
+        content: true,
+      }))?.body,
+      second.body,
+    );
+  } finally {
+    await engine.shutdown();
+    await db.close();
+  }
 });

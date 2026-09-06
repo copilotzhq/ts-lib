@@ -1,3 +1,4 @@
+import { retainActionInputContent } from "./content-retention.ts";
 import type { EventCoordinator } from "../events/index.ts";
 import type { DurableEvent, EventStore } from "../events/index.ts";
 import {
@@ -119,6 +120,14 @@ export function createActionLifecycleAppender(
       draft: { ...draft, payload },
       matchData: prepared.publicData,
       mutate: async (context) => {
+        if (action) {
+          await retainActionInputContent(
+            context,
+            draft.namespace,
+            action,
+            data,
+          );
+        }
         for (const value of prepared.prepared) {
           await options.protectedValues!.adopt(
             context,

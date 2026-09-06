@@ -1,10 +1,11 @@
 /** Projects Core Collection records into public conversation values. @module */
 
 import type {
+  CollectionPredicate,
   CollectionRecord,
   ScopedCollection,
 } from "@copilotz/copilotz/collections";
-import type { ContentSequence } from "@copilotz/copilotz/content";
+import { type ContentSequence, isContentRef } from "@copilotz/copilotz/content";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   ConversationMessage,
@@ -34,7 +35,10 @@ function stringArray(value: unknown): readonly string[] {
 
 function contentSequence(value: unknown): ContentSequence {
   if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value) as ContentSequence;
+  if (!value.every(isContentRef)) {
+    throw new TypeError("Message content contains invalid reference metadata.");
+  }
+  return Object.freeze(value);
 }
 
 function requireScopedCollection(
@@ -112,6 +116,22 @@ export function mapParticipantRecord(record: CollectionRecord): Participant {
   });
 }
 
+/** Preserve prepared content and reasoning types through the same message projection. */
+export function mapMessageRecord<
+  Content extends ContentSequence,
+  Metadata extends Readonly<Record<string, unknown>>,
+>(
+  record: CollectionRecord & { content: Content; metadata: Metadata },
+  sender: Participant,
+): ConversationMessage<Content, Metadata>;
+export function mapMessageRecord<Content extends ContentSequence>(
+  record: CollectionRecord & { content: Content },
+  sender: Participant,
+): ConversationMessage<Content>;
+export function mapMessageRecord(
+  record: CollectionRecord,
+  sender: Participant,
+): ConversationMessage;
 export function mapMessageRecord(
   record: CollectionRecord,
   sender: Participant,
@@ -281,6 +301,77 @@ export function threadMessageRecordInWindow(
     activeInBranch(record, window.branch);
 }
 
+/** Storage predicate matching the private window's scope, branch and immutable anchor. */
+export function threadMessageWindowFilter(
+  window: ThreadMessageRecordWindow,
+): CollectionPredicate {
+  const boundary = (
+    record: CollectionRecord,
+    op: "lt" | "gte" | "lte",
+  ): CollectionPredicate => ({
+    or: [
+      {
+        field: "createdAt",
+        ...(op === "gte"
+          ? { gt: String(record.createdAt) }
+          : { lt: String(record.createdAt) }),
+      },
+      {
+        and: [{ field: "createdAt", eq: String(record.createdAt) }, {
+          field: "id",
+          ...(op === "gte"
+            ? { gte: record.id }
+            : op === "lte"
+            ? { lte: record.id }
+            : { lt: record.id }),
+        }],
+      },
+    ],
+  });
+  const publicScope: CollectionPredicate = {
+    and: [
+      {
+        or: [{ field: "historyScopeId", exists: false }, {
+          field: "historyScopeId",
+          isNull: true,
+        }, { field: "historyScopeId", isBlank: true }],
+      },
+      { field: "visibility.kind", ne: "internal" },
+    ],
+  };
+  return {
+    and: [
+      { field: "threadId", eq: String(window.threadRecord.id) },
+      {
+        or: [
+          publicScope,
+          ...(window.historyScopeId
+            ? [
+              {
+                and: [{
+                  field: "historyScopeId",
+                  trimEq: window.historyScopeId,
+                }, { field: "visibility.kind", eq: "internal" }],
+              } satisfies CollectionPredicate,
+            ]
+            : []),
+        ],
+      },
+      ...(window.branch
+        ? [
+          {
+            or: [
+              boundary(window.branch.root, "lt"),
+              boundary(window.branch.head, "gte"),
+            ],
+          } satisfies CollectionPredicate,
+        ]
+        : []),
+      ...(window.anchor ? [boundary(window.anchor, "lte")] : []),
+    ],
+  };
+}
+
 /**
  * Loads a chronological active-history window. Selection runs newest-first so
  * the bounded result is the latest history through the immutable anchor; only
@@ -339,13 +430,18 @@ export async function loadThreadMessageRecordWindow(
     let cursor = anchor?.id;
     while (requestedLimit === undefined || selected.length < requestedLimit) {
       const page = await messages.list({
-        where: { threadId },
+        filter: threadMessageWindowFilter(base),
         order: {
           field: "createdAt",
           direction: descending ? "desc" : "asc",
         },
         ...(cursor ? { after: cursor } : {}),
-        limit: MESSAGE_PAGE_SIZE,
+        limit: Math.min(
+          MESSAGE_PAGE_SIZE,
+          requestedLimit === undefined
+            ? MESSAGE_PAGE_SIZE
+            : requestedLimit - selected.length,
+        ),
       });
       if (!page.length) break;
       for (const record of page) {

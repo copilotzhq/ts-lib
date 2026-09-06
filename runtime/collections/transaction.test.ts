@@ -1,12 +1,10 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
-
 import {
   type BoundCollection,
-  type CollectionRecord,
-  createCollectionRuntime,
-  defineCollection,
-  relation,
-} from "./index.ts";
+  createCollectionKernel as createCollectionRuntime,
+} from "./kernel.ts";
+import { assert, assertEquals, assertRejects } from "@std/assert";
+
+import { type CollectionRecord, defineCollection, relation } from "./index.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
 import { createTestProcessorContext } from "../testing/processor-context.ts";
 import {
@@ -134,7 +132,6 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
   }
   const store = createEventStore({ session, schema });
   const observed: Fixture["observed"] = { noteAtJobCreated: null };
-  let notes: BoundCollection<CollectionRecord> | undefined;
   const processor = defineProcessor({
     id: "job.created.observe-sibling",
     on: [{ eventType: "job.created" }],
@@ -165,7 +162,7 @@ async function createFixture(url: string, schema: string): Promise<Fixture> {
     now: () => new Date(NOW),
   });
   const jobs = runtime.bind(jobDefinition);
-  notes = runtime.bind(jobNoteDefinition);
+  const notes = runtime.bind(jobNoteDefinition);
   return Object.freeze({
     db,
     session,

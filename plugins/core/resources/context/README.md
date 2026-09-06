@@ -16,5 +16,8 @@ Create one with `defineContextResource` and register it under
 
 ## How it works
 
-Core selects contributors by purpose, validates unique contributions,
-materializes content, and renders it into the prompt.
+Core selects contributors by purpose and validates unique contributions.
+`prepareContextContributions` uses runtime `resolveContentInputs` to resolve
+references in one authorized batch without persisting literal contributions.
+`renderContextContent(content)` is a synchronous, pure projection of prepared
+values; it receives no runtime services and never loads Assets.

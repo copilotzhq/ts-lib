@@ -59,14 +59,19 @@ export type ConversationThread = Readonly<{
   updatedAt: string;
 }>;
 
-export type ConversationMessage = Readonly<{
+export type ConversationMessage<
+  Content extends ContentSequence = ContentSequence,
+  Metadata extends Readonly<Record<string, unknown>> = Readonly<
+    Record<string, unknown>
+  >,
+> = Readonly<{
   id: string;
   namespace: string;
   threadId: string;
   sender: Participant;
   recipientIds: readonly string[];
-  content: ContentSequence;
-  metadata: Readonly<Record<string, unknown>>;
+  content: Content;
+  metadata: Metadata;
   revision?: MessageRevision;
   createdAt: string;
   updatedAt: string;

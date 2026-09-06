@@ -41,7 +41,10 @@ import type {
 } from "./types.ts";
 
 export type ActionContentHandle = Readonly<{
-  resolver: Pick<ContentResolver, "getMany">;
+  authorize?(ref: ContentRef): Promise<void>;
+  resolver:
+    & Pick<ContentResolver, "getMany">
+    & Partial<Pick<ContentResolver, "authorize">>;
   stream: ContentStreamRuntime;
   bodies?: BodyStore;
   prepare(
@@ -285,6 +288,15 @@ export function createActionContext(
 
   const actions = createActionCallers(bindings.plugins.actions, {
     actionLifecycle: lifecycle,
+    content: {
+      ...content,
+      authorize: content.authorize ?? (async (ref) => {
+        if (!content.resolver.authorize) {
+          throw new Error("Action content requires an authorization service.");
+        }
+        await content.resolver.authorize(ref, { namespace, signal });
+      }),
+    },
     signal,
     createInvocationKey: () => `invocation:${crypto.randomUUID()}`,
     createContext({ frame, actions: nestedActions, progress }) {

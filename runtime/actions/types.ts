@@ -1,3 +1,4 @@
+import type { ActionContentDeclaration } from "./content.ts";
 import type { ExtendedJSONSchema } from "../../dependencies/json-schema-to-ts.ts";
 import type { CoordinatedMutationResult } from "../events/coordinator.ts";
 import type { DurableEvent, DurableEventDraft } from "../events/types.ts";
@@ -54,6 +55,7 @@ export type RuntimeActionCallerMap = Readonly<
 
 /** Runtime-native durable content operations available to Actions. */
 export type RuntimeContent = Readonly<{
+  authorize?(ref: ContentRef): Promise<void>;
   prepare(
     input: ContentInput | readonly ContentInput[],
     options: { operationKey: string; origin?: AssetOrigin },
@@ -189,6 +191,7 @@ export type ActionDefinition<
   TOutputSchema extends ActionSchema | undefined = ActionSchema | undefined,
 > = Readonly<{
   id: string;
+  content?: ActionContentDeclaration;
   inputSchema?: TInputSchema;
   outputSchema?: TOutputSchema;
   execute(
@@ -204,6 +207,7 @@ export type ActionDefinition<
 
 export type AnyActionDefinition = Readonly<{
   id: string;
+  content?: ActionContentDeclaration;
   inputSchema?: ActionSchema;
   outputSchema?: ActionSchema;
   execute: (...args: never[]) => unknown;

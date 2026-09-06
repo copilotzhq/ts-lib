@@ -1,4 +1,5 @@
 /** Defines the human-message revision Action. @module */
+import { decodeContent } from "@copilotz/copilotz/content";
 
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
@@ -7,11 +8,7 @@ import {
   defineAction,
 } from "@copilotz/copilotz/actions";
 import type { EventVisibility } from "@copilotz/copilotz/events";
-import {
-  asRecord,
-  prepareActionContent,
-  requiredText,
-} from "../internal/content-policy.ts";
+import { asRecord, requiredText } from "../internal/validation.ts";
 
 export const REVISE_MESSAGE_ACTION_ID = "copilotz.core.message.revise";
 
@@ -65,11 +62,7 @@ async function revise(
   if (data.content === undefined) {
     throw new TypeError("Edited content is required.");
   }
-  const content = await prepareActionContent(
-    data.content,
-    context,
-    "revision-content",
-  );
+  const content = decodeContent(data.content);
   const created = await context.transaction(async (tx) => {
     const createdRef = await tx.collections.message.create({
       id,

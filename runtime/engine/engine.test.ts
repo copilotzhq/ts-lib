@@ -240,24 +240,21 @@ Deno.test("factory engine scopes typed processor capabilities and deduplicates r
     assertExists(participants);
     assertExists(threads);
     assertExists(messages);
-    await participants.create({
+    await participants.create({ namespace: namespace }, {
       id: "user-a",
       externalId: "user-a",
       participantType: "human",
-    }, { namespace });
-    await participants.create({
+    }, {});
+    await participants.create({ namespace: namespace }, {
       id: "agent-a",
       externalId: "support",
       participantType: "agent",
       agentId: "support",
-    }, { namespace });
-    await threads.create({
+    }, {});
+    await threads.create({ namespace: namespace }, {
       id: "thread-a",
       participantIds: ["user-a", "agent-a"],
-    }, {
-      namespace,
-      identity: { deduplicationId: "thread-a:create" },
-    });
+    }, { identity: { deduplicationId: "thread-a:create" } });
     await createTestDomainContext(fixture.engine, namespace).actions
       .createThreadMessage({
         id: "message-a",

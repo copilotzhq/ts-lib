@@ -4,7 +4,7 @@
  * @module
  */
 
-import { base64ToBytes, parseDataUrl } from "@copilotz/copilotz/content";
+import { decodeContent } from "@copilotz/copilotz/content";
 import { cloneChannelJson } from "../../../channel-core/authoring/channel-ingress/index.ts";
 import type {
   ChannelAdapter,
@@ -16,7 +16,6 @@ import type {
   ChannelThreadInput,
 } from "../../../channel-core/internal/contracts.ts";
 
-const MEDIA_TYPES = new Set(["image", "audio", "video", "file"]);
 const VISIBILITIES = new Set<ChannelMessageVisibility>([
   "public",
   "participants",
@@ -35,43 +34,6 @@ function record(value: unknown, label: string): Record<string, unknown> {
     throw new TypeError(`${label} must be a JSON object.`);
   }
   return cloned as Record<string, unknown>;
-}
-
-function webContent(value: unknown): unknown {
-  if (typeof value === "string") return value;
-  const item = record(value, "Web Channel content");
-  if (typeof item.type !== "string" || !MEDIA_TYPES.has(item.type)) {
-    return item;
-  }
-  const data = typeof item.dataBase64 === "string"
-    ? {
-      bytes: base64ToBytes(item.dataBase64),
-      mediaType: typeof item.mediaType === "string"
-        ? item.mediaType
-        : "application/octet-stream",
-    }
-    : typeof item.dataUrl === "string"
-    ? parseDataUrl(item.dataUrl)
-    : null;
-  if (!data) {
-    throw new TypeError(
-      `Web Channel ${item.type} content requires dataBase64 or dataUrl.`,
-    );
-  }
-  const { dataBase64: _dataBase64, dataUrl: _dataUrl, ...rest } = item;
-  return Object.freeze({
-    ...rest,
-    bytes: data.bytes,
-    mediaType: typeof item.mediaType === "string"
-      ? required(item.mediaType, "Web Channel media type")
-      : data.mediaType,
-  });
-}
-
-function content(value: unknown): unknown {
-  return Array.isArray(value)
-    ? Object.freeze(value.map(webContent))
-    : webContent(value);
 }
 
 function participant(value: unknown, label: string): ChannelParticipantInput {
@@ -236,7 +198,7 @@ export function createWebChannelAdapter(): ChannelAdapter {
         ),
         sender: participant(input.sender, "Web Channel sender"),
         ...(recipients ? { recipients } : {}),
-        content: content(input.content) as never,
+        content: decodeContent(input.content),
         ...(input.thread && typeof input.thread === "object"
           ? { thread: thread(input.thread) }
           : {}),

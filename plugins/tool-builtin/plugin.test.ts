@@ -88,6 +88,7 @@ async function createFixture(
   let active: RunAction<unknown> | undefined;
   let output: unknown;
   let failure: unknown;
+  let completed: (() => void) | undefined;
   const runner = defineProcessor<ProcessorContext>({
     id: "test.core-tools.runner",
     on: [{ eventType: "message.created" }],
@@ -97,6 +98,8 @@ async function createFixture(
         output = await active?.(context, event);
       } catch (error) {
         failure = error;
+      } finally {
+        completed?.();
       }
     },
   });
@@ -134,23 +137,23 @@ async function createFixture(
   if (!participants || !threads || !messages) {
     throw new Error("Core collections are not bound.");
   }
-  await participants.create({
+  await participants.create({ namespace: namespace }, {
     id: "user-participant",
     externalId: "user-a",
     participantType: "human",
     metadata: { profile: true },
-  }, { namespace });
-  await participants.create({
+  }, {});
+  await participants.create({ namespace: namespace }, {
     id: "agent-participant",
     externalId: "agent-a",
     participantType: "agent",
     agentId: "agent-a",
     metadata: { retained: true },
-  }, { namespace });
-  await threads.create({
+  }, {});
+  await threads.create({ namespace: namespace }, {
     id: "thread-a",
     participantIds: ["user-participant", "agent-participant"],
-  }, { namespace });
+  }, {});
   let trigger = 0;
   return Object.freeze({
     db,
@@ -160,11 +163,14 @@ async function createFixture(
       active = action as RunAction<unknown>;
       output = undefined;
       failure = undefined;
+      const done = new Promise<void>((resolve) => {
+        completed = resolve;
+      });
       const content = await engine.content.preparer.prepare(
         `trigger-${++trigger}`,
         { namespace, idempotencyKey: `trigger:${trigger}` },
       );
-      const created = await messages.create({
+      await messages.create({ namespace: namespace }, {
         id: `trigger-${trigger}`,
         threadId: "thread-a",
         senderId: "user-participant",
@@ -172,14 +178,14 @@ async function createFixture(
         content,
         metadata: {},
       }, {
-        namespace,
         threadId: "thread-a",
         routing: {
           senderId: "user-participant",
           recipientIds: ["agent-participant"],
         },
       });
-      await Promise.all(created.dispatch.handles.map((handle) => handle.done));
+      await done;
+      completed = undefined;
       active = undefined;
       if (failure) throw failure;
       return output as T;
@@ -513,15 +519,15 @@ Deno.test("create_thread fails closed on an initial Message conflict without par
     assertExists(messages);
     assertExists(threads);
     const conflictThreadId = "thread:conflict-holder";
-    await threads.create({
+    await threads.create({ namespace: namespace }, {
       id: conflictThreadId,
       participantIds: ["user-participant"],
-    }, { namespace });
+    }, {});
     const content = await fixture.engine.content.preparer.prepare(
       "pre-existing conflict",
       { namespace, idempotencyKey: "atomic-conflict:content" },
     );
-    await messages.create({
+    await messages.create({ namespace: namespace }, {
       id: messageId,
       threadId: conflictThreadId,
       senderId: "user-participant",
@@ -529,7 +535,6 @@ Deno.test("create_thread fails closed on an initial Message conflict without par
       content,
       metadata: {},
     }, {
-      namespace,
       threadId: conflictThreadId,
       routing: { senderId: "user-participant", recipientIds: [] },
     });

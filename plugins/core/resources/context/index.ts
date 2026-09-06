@@ -44,6 +44,7 @@ export function isContextResource(value: unknown): value is ContextResource {
 export {
   collectContextContributions,
   type CollectedContextContribution,
+  prepareContextContributions,
   renderContextContent,
 } from "./internal/contributions.ts";
 export type {

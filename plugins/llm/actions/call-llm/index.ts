@@ -10,11 +10,9 @@ import type {
   ContentInput,
   ContentRef,
   ContentSequence,
-  PreparedAsset,
   PreparedContent,
-  ResolvedContent,
 } from "@copilotz/copilotz/content";
-import { formatAssetRef } from "@copilotz/copilotz/content";
+import { adoptPreparedBody, formatAssetRef } from "@copilotz/copilotz/content";
 import {
   type LlmAdapter,
   type LlmAdapterAttempt,
@@ -562,39 +560,29 @@ function contentFields(ref: ContentRef): Readonly<Record<string, unknown>> {
   };
 }
 
-function resolvedPart(value: ResolvedContent): LlmAdapterContentPart {
-  const { ref } = value;
+type PreparedEntry = ContentRef & { value?: unknown; resolve?: false };
+
+function preparedPart(ref: PreparedEntry): LlmAdapterContentPart {
   const fields = contentFields(ref);
   if (ref.kind === "text") {
-    return Object.freeze({
+    return {
       type: "text",
-      text: value.text ?? new TextDecoder().decode(value.bytes),
+      text: ref.value as string,
       ...fields,
-    }) as LlmAdapterContentPart;
+    } as LlmAdapterContentPart;
   }
   if (ref.kind === "json") {
-    let json = value.value;
-    if (json === undefined) {
-      try {
-        json = JSON.parse(value.text ?? new TextDecoder().decode(value.bytes));
-      } catch (cause) {
-        throw new TypeError(
-          `LLM content '${ref.assetId}' is not valid JSON.`,
-          { cause },
-        );
-      }
-    }
-    return Object.freeze({
+    return {
       type: "json",
-      value: structuredClone(json),
+      value: structuredClone(ref.value),
       ...fields,
-    }) as LlmAdapterContentPart;
+    } as LlmAdapterContentPart;
   }
-  return Object.freeze({
+  return {
     type: ref.kind,
-    bytes: value.bytes.slice(),
+    bytes: (ref.value as Uint8Array).slice(),
     ...fields,
-  }) as LlmAdapterContentPart;
+  } as LlmAdapterContentPart;
 }
 
 /**
@@ -621,32 +609,17 @@ function attachmentPart(
   }) as LlmAdapterContentPart;
 }
 
-function isReferenceOnly(ref: ContentRef): boolean {
-  return ref.disposition === "attachment" ||
-    (ref.disposition === undefined && ref.kind === "file");
-}
-
-async function resolveMessage(
+function projectPreparedMessage(
   message: LlmMessage,
   context: LlmActionContext,
-): Promise<LlmAdapterMessage> {
-  const inline = message.content.filter((ref) => !isReferenceOnly(ref));
-  const resolved = inline.length
-    ? await context.content.resolveMany(inline)
-    : [];
-  if (resolved.length !== inline.length) {
-    throw new Error("LLM content resolution returned an incomplete sequence.");
-  }
-  for (let index = 0; index < resolved.length; index += 1) {
-    if (resolved[index].ref.assetId !== inline[index].assetId) {
-      throw new Error("LLM content resolution changed sequence order.");
-    }
-  }
-  let inlineIndex = 0;
-  const content = Object.freeze(message.content.map((ref) => {
-    if (isReferenceOnly(ref)) return attachmentPart(ref, context.namespace);
-    return resolvedPart(resolved[inlineIndex++]!);
-  }));
+): LlmAdapterMessage {
+  const content = Object.freeze(
+    (message.content as readonly PreparedEntry[]).map((ref) =>
+      ref.resolve === false
+        ? attachmentPart(ref, context.namespace)
+        : preparedPart(ref)
+    ),
+  );
   const common = {
     content,
     ...(message.name ? { name: message.name } : {}),
@@ -658,6 +631,19 @@ async function resolveMessage(
     return Object.freeze({
       role: message.role,
       ...common,
+      ...(message.reasoning?.length
+        ? {
+          reasoning: message.reasoning.map((entry) => {
+            const ref = entry as PreparedEntry;
+            if (
+              ref.kind !== "text" || typeof ref.value !== "string"
+            ) {
+              throw new TypeError("LLM reasoning must contain prepared text.");
+            }
+            return ref.value;
+          }).join("\n"),
+        }
+        : {}),
       ...(message.toolCalls
         ? { toolCalls: structuredClone(message.toolCalls) }
         : {}),
@@ -673,15 +659,15 @@ async function resolveMessage(
   return Object.freeze({ role: message.role, ...common });
 }
 
-async function resolveRequest(
+function projectPreparedRequest(
   input: LlmCallInput,
   context: LlmActionContext,
-): Promise<LlmAdapterRequest> {
+): LlmAdapterRequest {
   if (!isRecord(input.request) || !Array.isArray(input.request.messages)) {
     throw new TypeError("LLM request.messages must be an array.");
   }
-  const messages = await Promise.all(
-    input.request.messages.map((message) => resolveMessage(message, context)),
+  const messages = input.request.messages.map((message) =>
+    projectPreparedMessage(message, context)
   );
   return Object.freeze({
     messages: Object.freeze(messages),
@@ -996,13 +982,52 @@ function normalizedToolPipeline(
   });
 }
 
+function normalizedPreparedSequence(
+  value: unknown,
+  path: string,
+): readonly PreparedEntry[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${path} must be a content sequence.`);
+  }
+  return Object.freeze(value.map((value, index) => {
+    const item = plainRecord(value, `${path}[${index}]`);
+    const { value: body, resolve, ...reference } = item;
+    const ref = normalizedContentInput(reference, `${path}[${index}]`);
+    if (typeof ref === "string" || !("assetId" in ref)) {
+      throw new TypeError(`${path} requires prepared content entries.`);
+    }
+    if (resolve === false) {
+      if (Object.hasOwn(item, "value")) {
+        throw new TypeError("Descriptor content cannot contain a value.");
+      }
+      return { ...ref, resolve: false as const };
+    }
+    if (resolve !== undefined || !Object.hasOwn(item, "value")) {
+      throw new TypeError(`${path} requires runtime-prepared values.`);
+    }
+    if (
+      ref.kind === "text" && typeof body !== "string" ||
+      ref.kind !== "text" && ref.kind !== "json" &&
+        !(body instanceof Uint8Array)
+    ) {
+      throw new TypeError(`${path} has an invalid prepared value.`);
+    }
+    return {
+      ...ref,
+      value: ref.kind === "json"
+        ? canonicalJson(body, `${path}[${index}].value`)
+        : structuredClone(body),
+    };
+  }));
+}
+
 function normalizedMessage(value: unknown, index: number): LlmMessage {
   const path = `LLM request.messages[${index}]`;
   const record = plainRecord(value, path);
   const role = requiredText(record.role, `${path}.role`);
   const commonKeys = ["role", "content", "name", "metadata"];
   const allowed = role === "assistant"
-    ? new Set([...commonKeys, "toolCalls"])
+    ? new Set([...commonKeys, "toolCalls", "reasoning"])
     : role === "tool"
     ? new Set([...commonKeys, "toolCallId"])
     : new Set(commonKeys);
@@ -1013,16 +1038,7 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
   if (!Array.isArray(record.content)) {
     throw new TypeError(`${path}.content must be a ContentSequence.`);
   }
-  const content = Object.freeze(record.content.map((item, contentIndex) => {
-    const normalized = normalizedContentInput(
-      item,
-      `${path}.content[${contentIndex}]`,
-    );
-    if (typeof normalized === "string" || !("assetId" in normalized)) {
-      throw new TypeError(`${path}.content must contain only ContentRefs.`);
-    }
-    return normalized;
-  }));
+  const content = normalizedPreparedSequence(record.content, `${path}.content`);
   const name = optionalText(record.name, `${path}.name`);
   const metadata = record.metadata === undefined
     ? undefined
@@ -1040,6 +1056,14 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
       role,
       ...common,
       ...(toolCalls ? { toolCalls } : {}),
+      ...(record.reasoning !== undefined
+        ? {
+          reasoning: normalizedPreparedSequence(
+            record.reasoning,
+            `${path}.reasoning`,
+          ),
+        }
+        : {}),
     });
   }
   if (role === "tool") {
@@ -2167,65 +2191,16 @@ function invocationOf(value: unknown): Readonly<{
   return record as ReturnType<LlmAdapter["call"]>;
 }
 
-async function prepareContent(
-  input: ContentInput | readonly ContentInput[],
-  operationKey: string,
-  context: LlmActionContext,
-): Promise<PreparedContent> {
-  return await context.content.prepare(input, { operationKey });
-}
-
-function singleAsset(
-  prepared: PreparedContent,
-): Readonly<{ ref: ContentRef; asset: PreparedAsset }> | undefined {
-  if (prepared.content.length !== 1 || prepared.assets.length !== 1) {
-    return undefined;
-  }
-  const ref = prepared.content[0];
-  const asset = prepared.assets[0];
-  return ref.assetId === asset.id ? Object.freeze({ ref, asset }) : undefined;
-}
-
 function matchingSettledStream(
   lane: "content" | "reasoning",
   prepared: PreparedContent,
   streams: readonly SettledStream[],
-): SettledStream | undefined {
-  const final = singleAsset(prepared);
-  if (!final) return undefined;
+): { stream: SettledStream; prepared: PreparedContent } | undefined {
   const candidates = streams.filter((stream) => stream.lane === lane);
   if (candidates.length !== 1) return undefined;
-  const candidate = candidates[0];
-  const streamed = singleAsset(candidate.prepared);
-  if (!streamed?.asset.readyBody || !streamed.asset.location) return undefined;
-  return final.asset.mediaType === streamed.asset.mediaType &&
-      final.asset.byteLength === streamed.asset.byteLength &&
-      final.asset.digest === streamed.asset.digest
-    ? candidate
-    : undefined;
-}
-
-function adoptSettledStream(
-  prepared: PreparedContent,
-  stream: SettledStream,
-): PreparedContent {
-  const final = singleAsset(prepared);
-  const streamed = singleAsset(stream.prepared);
-  if (!final || !streamed?.asset.readyBody || !streamed.asset.location) {
-    throw new Error("A settled LLM stream could not be adopted.");
-  }
-  const asset = Object.freeze({
-    ...final.asset,
-    body: new Uint8Array(),
-    readyBody: streamed.asset.readyBody,
-    location: streamed.asset.location,
-    byteLength: streamed.asset.byteLength,
-    digest: streamed.asset.digest,
-  }) satisfies PreparedAsset;
-  return Object.freeze({
-    content: prepared.content,
-    assets: Object.freeze([asset]),
-  });
+  const stream = candidates[0];
+  const adopted = adoptPreparedBody(prepared, stream.prepared);
+  return adopted ? { stream, prepared: adopted } : undefined;
 }
 
 async function retainSettledStream(
@@ -2256,18 +2231,14 @@ async function materializeResultContent(
     reasoning?: ContentSequence;
   }>
 > {
-  const contentPrepared = await prepareContent(
-    result.content,
-    `attempt:${attemptIndex}:content`,
-    context,
-  );
+  const contentPrepared = await context.content.prepare(result.content, {
+    operationKey: `attempt:${attemptIndex}:content`,
+  });
   const reasoningPrepared = result.reasoning === undefined
     ? undefined
-    : await prepareContent(
-      result.reasoning,
-      `attempt:${attemptIndex}:reasoning`,
-      context,
-    );
+    : await context.content.prepare(result.reasoning, {
+      operationKey: `attempt:${attemptIndex}:reasoning`,
+    });
   const contentStream = matchingSettledStream(
     "content",
     contentPrepared,
@@ -2277,7 +2248,7 @@ async function materializeResultContent(
     ? matchingSettledStream("reasoning", reasoningPrepared, streams)
     : undefined;
   const adopted = new Set(
-    [contentStream, reasoningStream].filter(
+    [contentStream?.stream, reasoningStream?.stream].filter(
       (value): value is SettledStream => value !== undefined,
     ).map((value) => value.key),
   );
@@ -2294,26 +2265,22 @@ async function materializeResultContent(
     }
   }
   const content = await context.content.materialize(
-    contentStream
-      ? adoptSettledStream(contentPrepared, contentStream)
-      : contentPrepared,
+    contentStream?.prepared ?? contentPrepared,
   );
   const reasoning = reasoningPrepared === undefined
     ? undefined
     : await context.content.materialize(
-      reasoningStream
-        ? adoptSettledStream(reasoningPrepared, reasoningStream)
-        : reasoningPrepared,
+      reasoningStream?.prepared ?? reasoningPrepared,
     );
   if (contentStream && content.length === 1) {
     await retainSettledStream(
-      contentStream,
+      contentStream.stream,
       { retention: "canonical", assetId: content[0].assetId },
     );
   }
   if (reasoningStream && reasoning?.length === 1) {
     await retainSettledStream(
-      reasoningStream,
+      reasoningStream.stream,
       { retention: "canonical", assetId: reasoning[0].assetId },
     );
   }
@@ -2349,7 +2316,7 @@ async function executeLlmCall(
 ): Promise<LlmCallOutput> {
   const input = normalizedCallInput(rawInput);
   const plan = modelPlan(input.models, input.mode, input.options, context);
-  const request = await resolveRequest(input, context);
+  const request = projectPreparedRequest(input, context);
   const attempts: LlmAttemptUsage[] = [];
   const credentialMemo = new Map<
     string,
@@ -2533,6 +2500,9 @@ export const callLlmAction: ActionDefinition<
   undefined
 > = defineAction({
   id: LLM_CALL_ACTION_ID,
+  content: {
+    input: ["request.messages[].content", "request.messages[].reasoning"],
+  },
   execute: executeLlmCall,
 });
 

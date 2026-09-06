@@ -298,6 +298,11 @@ export function createProcessorContext(
   });
 
   const content: ProcessorContext["content"] = Object.freeze({
+    authorize: (ref) =>
+      options.resolver.authorize(ref, {
+        namespace,
+        signal: options.base.signal,
+      }),
     prepare(input, prepareOptions) {
       const preparedIdentity = mutation(
         `content.prepare:${prepareOptions.operationKey}`,
@@ -423,6 +428,16 @@ export function createProcessorContext(
   let rootActionIndex = 0;
   const actions = createActionCallers(options.registry.actions, {
     actionLifecycle: options.actionLifecycle,
+    content: {
+      ...content,
+      // This runtime-owned key is content-addressed, not Processor-run-addressed.
+      publish: (input, publishOptions) =>
+        options.assets.publish({
+          ...input,
+          namespace,
+          idempotencyKey: publishOptions.operationKey,
+        }),
+    },
     signal: options.base.signal,
     createInvocationKey: (actionId) =>
       `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,

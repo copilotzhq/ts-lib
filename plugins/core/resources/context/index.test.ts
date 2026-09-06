@@ -8,6 +8,7 @@ import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import {
   collectContextContributions,
   defineContextResource,
+  prepareContextContributions,
   renderContextContent,
 } from "./index.ts";
 
@@ -56,17 +57,12 @@ function context(
     collections: { workspace: {} },
     signal: new AbortController().signal,
     content: {
-      resolve: () =>
-        Promise.resolve({
+      resolveMany: (refs: readonly { assetId: string }[]) =>
+        Promise.resolve(refs.map((ref) => ({
           text: "resolved asset text",
           bytes: new Uint8Array(),
-          ref: {
-            assetId: "asset-a",
-            kind: "text",
-            role: "context",
-            mediaType: "text/plain",
-          },
-        }),
+          ref,
+        }))),
     },
     now: () => new Date("2026-08-14T00:00:00.000Z"),
     transaction: () => Promise.reject(new Error("Not used by this fixture.")),
@@ -204,25 +200,40 @@ Deno.test("context contribution contracts reject ambiguity and unproven evidence
   );
 });
 
-Deno.test("context rendering resolves text, JSON, and canonical content refs", async () => {
-  const processor = context([]);
-  assertEquals(await renderContextContent(processor, "plain"), "plain");
-  assertEquals(
-    await renderContextContent(processor, {
-      type: "json",
-      value: { state: "active" },
-    }),
-    '{\n  "state": "active"\n}',
-  );
-  assertEquals(
-    await renderContextContent(processor, {
-      assetId: "asset-a",
-      kind: "text",
+Deno.test("context preparation resolves references before pure rendering", async () => {
+  const prepared = await prepareContextContributions(context([]), [
+    {
+      id: "text",
+      resourceId: "test",
+      title: "Text",
       role: "context",
-      mediaType: "text/plain",
-    }),
+      content: "plain",
+    },
+    {
+      id: "json",
+      resourceId: "test",
+      title: "JSON",
+      role: "context",
+      content: { type: "json", value: { state: "active" } },
+    },
+    {
+      id: "ref",
+      resourceId: "test",
+      title: "Reference",
+      role: "context",
+      content: {
+        assetId: "asset-a",
+        kind: "text",
+        role: "context",
+        mediaType: "text/plain",
+      },
+    },
+  ]);
+  assertEquals(prepared.map((entry) => renderContextContent(entry.content)), [
+    "plain",
+    '{\n  "state": "active"\n}',
     "resolved asset text",
-  );
+  ]);
 });
 
 Deno.test("context modules remain factory-first and runtime-neutral", async () => {

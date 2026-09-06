@@ -1,9 +1,11 @@
+import {
+  type BoundCollection,
+  createCollectionKernel as createCollectionRuntime,
+} from "./kernel.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import {
-  type BoundCollection,
   type CollectionRecord,
-  createCollectionRuntime,
   defineCollection,
   isCollectionNoop,
   relation,

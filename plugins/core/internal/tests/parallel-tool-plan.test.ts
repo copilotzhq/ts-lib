@@ -114,32 +114,32 @@ async function startRun(
     if (!item) throw new Error(`Missing Collection ${name}`);
     return item;
   };
-  await collection("participant").create({
+  await collection("participant").create({ namespace: NAMESPACE }, {
     id: "user",
     externalId: "user",
     participantType: "human",
     metadata: {},
-  }, { namespace: NAMESPACE });
+  }, {});
   for (const resource of agents) {
-    await collection("participant").create({
+    await collection("participant").create({ namespace: NAMESPACE }, {
       id: `agent-${resource.id}`,
       externalId: resource.id,
       participantType: "agent",
       agentId: resource.id,
       name: resource.name,
       metadata: {},
-    }, { namespace: NAMESPACE });
+    }, {});
   }
-  await collection("thread").create({
+  await collection("thread").create({ namespace: NAMESPACE }, {
     id: "thread",
     participantIds: ["user", ...agents.map((item) => `agent-${item.id}`)],
     metadata: {},
-  }, { namespace: NAMESPACE, identity: { deduplicationId: "thread" } });
+  }, { identity: { deduplicationId: "thread" } });
   const content = await engine.content.preparer.prepare(
     "run parallel pipelines",
     { namespace: NAMESPACE, idempotencyKey: "user-content" },
   );
-  const created = await collection("message").create({
+  const created = await collection("message").create({ namespace: NAMESPACE }, {
     id: "user-message",
     threadId: "thread",
     senderId: "user",
@@ -147,7 +147,6 @@ async function startRun(
     content,
     metadata: {},
   }, {
-    namespace: NAMESPACE,
     threadId: "thread",
     routing: { senderId: "user", recipientIds: ["agent-a"] },
     identity: {
@@ -155,7 +154,15 @@ async function startRun(
       deduplicationId: "user-message",
     },
   });
-  return created.event.id;
+  const events = await engine.events.list({
+    namespace: NAMESPACE,
+    limit: 1000,
+  });
+  const event = events.find((event) =>
+    event.type === "message.created" && event.subject?.id === created.id
+  );
+  if (!event) throw new Error("Created message event was not found.");
+  return event.id;
 }
 
 function pipeline(

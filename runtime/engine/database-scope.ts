@@ -1,3 +1,5 @@
+import { retainActionInputContent } from "../actions/content-retention.ts";
+import type { ActionEventData } from "../actions/types.ts";
 import {
   assetBodySchemaPrefix,
   type BodyStore,
@@ -193,25 +195,35 @@ export function createDatabaseScope(
     session: engine.session,
     eventStore: store,
     assets: collectionAssetAdopterFor(assets),
+    contentResolver: resolver,
     createId: engine.createId,
     now: options.now,
-    ...(protectedValues
-      ? {
-        runtimeProjections: Object.freeze({
-          nodeTypes: Object.freeze([PROTECTED_VALUE_NODE_TYPE]),
-          async projectBody(context, namespace, body) {
-            for (
-              const ref of [
-                ...protectedActionLifecycleRefs(body),
-                ...protectedEventRefs(body),
-              ]
-            ) {
-              await protectedValues.project(context, namespace, ref);
-            }
-          },
-        }),
-      }
-      : {}),
+    runtimeProjections: Object.freeze({
+      nodeTypes: Object.freeze([
+        "@copilotz/action-content",
+        ...(protectedValues ? [PROTECTED_VALUE_NODE_TYPE] : []),
+      ]),
+      async projectBody(context, namespace, body, event) {
+        if (protectedValues) {
+          for (
+            const ref of [
+              ...protectedActionLifecycleRefs(body),
+              ...protectedEventRefs(body),
+            ]
+          ) {
+            await protectedValues.project(context, namespace, ref);
+          }
+        }
+        const data = body as ActionEventData;
+        if (data?.status !== "invoked") return;
+        const action = Object.values(options.registry.actions).find((action) =>
+          action.id === data.actionId
+        );
+        if (action?.content && event.type === `${action.id}.invoked`) {
+          await retainActionInputContent(context, namespace, action, data);
+        }
+      },
+    }),
   });
   for (const resource of Object.values(options.registry.collections)) {
     if (isKernelCollection(resource)) collections.bind(resource);

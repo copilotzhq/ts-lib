@@ -1,3 +1,7 @@
+export type {
+  ActionContentDeclaration,
+  ActionContentEntry,
+} from "./content.ts";
 export { defineAction, isActionDefinition } from "./define.ts";
 export { secret } from "./secret.ts";
 export { createSecretAdapter } from "./secret-adapter.ts";

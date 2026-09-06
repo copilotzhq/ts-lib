@@ -1,5 +1,6 @@
 import type { ContentInput, ContentSequence } from "@copilotz/copilotz/content";
 import type {
+  ActionContentEntry,
   ActionInvocationMetadata,
   RuntimeCollections,
   RuntimeIdentity,
@@ -195,7 +196,7 @@ export type LlmToolCall = Readonly<{
 }>;
 
 type LlmMessageBase = Readonly<{
-  content: ContentSequence;
+  content: readonly (ContentSequence[number] | ActionContentEntry)[];
   name?: string;
   metadata?: LlmJsonObject;
 }>;
@@ -207,6 +208,7 @@ export type LlmMessage =
     & LlmMessageBase
     & Readonly<{
       role: "assistant";
+      reasoning?: readonly (ContentSequence[number] | ActionContentEntry)[];
       toolCalls?: readonly LlmToolCall[];
     }>
   )
@@ -312,6 +314,7 @@ export type LlmAdapterMessage =
     & LlmAdapterMessageBase
     & Readonly<{
       role: "assistant";
+      reasoning?: string;
       toolCalls?: readonly LlmToolCall[];
     }>
   )

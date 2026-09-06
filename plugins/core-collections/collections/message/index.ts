@@ -1,15 +1,14 @@
 /** Defines the canonical Core Message Collection. @module */
 
+import { contentSequenceSchema } from "@copilotz/copilotz/content";
 import {
+  type CollectionContentOptions,
   type CollectionDefinition,
+  type CollectionPredicate,
   defineCollection,
   relation,
 } from "@copilotz/copilotz/collections";
-import {
-  contentSequenceSchema,
-  metadataSchema,
-  timestampsSchema,
-} from "../internal/schema.ts";
+import { metadataSchema, timestampsSchema } from "../internal/schema.ts";
 import type {
   MessageBranch,
   MessageRevision,
@@ -47,28 +46,65 @@ function compareMessageOrder(
   return createdAt || left.id.localeCompare(right.id);
 }
 
-function isPublicHistoryMessage(
-  record: HistoryMessageRecord,
-  viewerParticipantIds?: readonly string[],
-): boolean {
-  const scope = typeof record.historyScopeId === "string"
-    ? record.historyScopeId.trim()
-    : "";
-  const visibility = record.visibility && typeof record.visibility === "object"
-    ? record.visibility as Record<string, unknown>
-    : {};
-  return !scope && visibility.kind !== "internal" &&
-    (viewerParticipantIds === undefined || visibility.kind === undefined ||
-      visibility.kind === "public" ||
-      visibility.kind === "tool" &&
-        (visibility.policy === "public" ||
-          visibility.policy === "public_status" ||
-          viewerParticipantIds.includes(String(visibility.requesterId))) ||
-      visibility.kind === "participants" &&
-        Array.isArray(visibility.participantIds) &&
-        visibility.participantIds.some((id) =>
-          viewerParticipantIds.includes(id)
-        ));
+/** Selection runs in storage, before pagination and optional content reads. */
+function publicHistoryFilter(viewers?: readonly string[]): CollectionPredicate {
+  return {
+    and: [
+      {
+        or: [
+          { field: "historyScopeId", exists: false },
+          { field: "historyScopeId", isNull: true },
+          { field: "historyScopeId", isBlank: true },
+        ],
+      },
+      { field: "visibility.kind", ne: "internal" },
+      ...(viewers === undefined ? [] : [
+        {
+          or: [
+            { field: "visibility.kind", exists: false },
+            { field: "visibility.kind", eq: "public" },
+            {
+              and: [
+                { field: "visibility.kind", eq: "tool" },
+                {
+                  or: [
+                    {
+                      field: "visibility.policy",
+                      in: ["public", "public_status"],
+                    },
+                    { field: "visibility.requesterId", in: viewers },
+                  ],
+                },
+              ],
+            },
+            {
+              and: [
+                { field: "visibility.kind", eq: "participants" },
+                { field: "visibility.participantIds", overlaps: viewers },
+              ],
+            },
+          ],
+        } satisfies CollectionPredicate,
+      ]),
+    ],
+  };
+}
+
+function orderBoundary(
+  key: MessageOrderKey,
+  direction: "lt" | "gt",
+): CollectionPredicate {
+  return {
+    or: [
+      { field: "createdAt", [direction]: key.createdAt } as CollectionPredicate,
+      {
+        and: [
+          { field: "createdAt", eq: key.createdAt },
+          { field: "id", [direction]: key.id } as CollectionPredicate,
+        ],
+      },
+    ],
+  };
 }
 
 /** Public tool status never grants access to a result body or execution metadata. */
@@ -141,17 +177,6 @@ async function activeBranchWindow(
   });
 }
 
-function belongsToActiveBranch(
-  record: HistoryMessageRecord,
-  branch: ActiveBranchWindow | undefined,
-): boolean {
-  if (!branch) return true;
-  const key = messageOrderKey(record);
-  return compareMessageOrder(key, branch.root) < 0 ||
-    record.id === branch.headMessageId ||
-    compareMessageOrder(key, branch.head) > 0;
-}
-
 /** Builds revision fields for a new `message.created` row. */
 export function messageRevisionFrom(
   previous: MessageRecord,
@@ -218,7 +243,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
     content: [],
     metadata: {},
   },
-  content: { fields: ["content"] },
+  content: { fields: ["content", "metadata.llmReasoning"] },
   relations: {
     thread: relation.belongsTo("thread", "threadId", "has_message"),
     sender: relation.belongsTo("participant", "senderId", "sent_by"),
@@ -237,6 +262,24 @@ export const messageCollection: CollectionDefinition = defineCollection({
       },
     },
     history: {
+      inputSchema: {
+        type: "object",
+        properties: {
+          content: {
+            anyOf: [
+              { type: "boolean" },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  fields: { type: "array", items: { type: "string" } },
+                  byteLimit: { type: "integer", minimum: 0 },
+                },
+              },
+            ],
+          },
+        },
+      },
       async select({ input, read }) {
         const threadId = String(input.threadId ?? "").trim();
         if (!threadId) throw new TypeError("Thread ID must be non-empty.");
@@ -266,33 +309,34 @@ export const messageCollection: CollectionDefinition = defineCollection({
             typeof id === "string"
           )
           : undefined;
-        const visible = (record: HistoryMessageRecord) =>
-          isPublicHistoryMessage(record, viewers) &&
-          belongsToActiveBranch(record, branch);
-        // Exact content reads share history visibility without scanning or pagination.
+        const filter: CollectionPredicate = {
+          and: [
+            publicHistoryFilter(viewers),
+            ...(branch
+              ? [
+                {
+                  or: [
+                    orderBoundary(branch.root, "lt"),
+                    { field: "id", eq: branch.headMessageId },
+                    orderBoundary(branch.head, "gt"),
+                  ],
+                } satisfies CollectionPredicate,
+              ]
+              : []),
+          ],
+        };
+        // Runtime callers can opt into declared content; the HTTP wire stays reference-based.
+        const options = {
+          content: input.content as CollectionContentOptions | undefined,
+        };
+        // Exact reads use the same database predicate as pages and cursor validation.
         if (typeof input.messageId === "string") {
-          const message = await read.get("message", input.messageId) as
-            | HistoryMessageRecord
-            | null;
-          return message && message.threadId === threadId && visible(message)
-            ? [projectHistoryRecord(message, viewers)]
-            : [];
-        }
-        const cursorId = after ?? before;
-        if (cursorId) {
-          const cursor = await read.get("message", cursorId) as
-            | HistoryMessageRecord
-            | null;
-          if (
-            !cursor || cursor.threadId !== threadId ||
-            !visible(cursor)
-          ) {
-            throw new Error(
-              `Message cursor '${cursorId}' was not found in the ${
-                input.view === "all" ? "all" : "active"
-              } history for thread '${threadId}'.`,
-            );
-          }
+          const records = await read.list("message", {
+            where: { threadId, id: input.messageId },
+            filter,
+            limit: 1,
+          }, options) as readonly HistoryMessageRecord[];
+          return records.map((record) => projectHistoryRecord(record, viewers));
         }
         const limit = Number(input.limit ?? 100);
         if (!Number.isSafeInteger(limit) || limit <= 0) {
@@ -303,25 +347,22 @@ export const messageCollection: CollectionDefinition = defineCollection({
         // Event-native overfetches one record for exact pageInfo.hasMore.
         const selectedLimit = Math.min(limit, 1_001);
         const selected: HistoryMessageRecord[] = [];
-        const batchLimit = 1_000;
+
         // Collection cursors already follow the requested sort direction.
         let scanAfter = after;
         while (selected.length < selectedLimit) {
+          const batchLimit = Math.min(1_000, selectedLimit - selected.length);
           const page = await read.list("message", {
             where: { threadId },
+            filter,
             order: { field: "createdAt", direction: order },
             ...(scanAfter ? { after: scanAfter } : {}),
             ...(before ? { before } : {}),
             limit: batchLimit,
-          }) as readonly HistoryMessageRecord[];
-          for (const record of page) {
-            if (
-              visible(record)
-            ) {
-              selected.push(projectHistoryRecord(record, viewers));
-              if (selected.length === selectedLimit) break;
-            }
-          }
+          }, options) as readonly HistoryMessageRecord[];
+          selected.push(
+            ...page.map((record) => projectHistoryRecord(record, viewers)),
+          );
           if (page.length < batchLimit) break;
           const next = page.at(-1)?.id;
           if (!next || next === scanAfter) break;

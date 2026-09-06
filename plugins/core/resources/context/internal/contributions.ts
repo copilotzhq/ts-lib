@@ -1,7 +1,10 @@
 /** Collects and renders typed Context contributions for Core prompts. @module */
 
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
-import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
+import {
+  type ContentValue,
+  resolveContentInputs,
+} from "@copilotz/copilotz/content";
 import type { ContextContribution, ContextPurpose } from "./types.ts";
 import { isContextResource } from "../index.ts";
 import type { AgentResource } from "../../agent/index.ts";
@@ -96,24 +99,31 @@ export async function collectContextContributions(
   return Object.freeze(collected);
 }
 
-function isContentRef(value: ContentInput | ContentRef): value is ContentRef {
-  return Boolean(
-    value && typeof value === "object" && "assetId" in value &&
-      typeof value.assetId === "string",
+/** Prepare a complete contribution batch before prompt rendering. */
+export async function prepareContextContributions(
+  context: ProcessorContext,
+  contributions: readonly CollectedContextContribution[],
+): Promise<
+  readonly (Omit<CollectedContextContribution, "content"> & {
+    content: ContentValue;
+  })[]
+> {
+  context.signal.throwIfAborted();
+  const values = await resolveContentInputs(
+    contributions.map((entry) => entry.content),
+    context.content,
+  );
+  context.signal.throwIfAborted();
+  return Object.freeze(
+    contributions.map((entry, index) =>
+      Object.freeze({ ...entry, content: values[index] })
+    ),
   );
 }
 
-export async function renderContextContent(
-  context: ProcessorContext,
-  content: ContentInput | ContentRef,
-): Promise<string> {
+/** Pure prompt projection: all content is prepared before reaching the renderer. */
+export function renderContextContent(content: ContentValue): string {
   if (typeof content === "string") return content;
-  if (isContentRef(content)) {
-    const resolved = await context.content.resolve(content);
-    if (resolved.text !== undefined) return resolved.text;
-    if (resolved.value !== undefined) return JSON.stringify(resolved.value);
-    return `[${content.kind}:${content.name ?? content.mediaType}]`;
-  }
   if (content.type === "text") return content.text;
   if (content.type === "json") return JSON.stringify(content.value, null, 2);
   return `[${content.type}:${

@@ -11,7 +11,7 @@ import {
   ensureParticipantInTransaction,
   findParticipant,
 } from "../create-thread-message/index.ts";
-import { asRecord } from "../internal/content-policy.ts";
+import { asRecord } from "../internal/validation.ts";
 
 export const CREATE_THREAD_ACTION_ID = "copilotz.core.thread.create";
 

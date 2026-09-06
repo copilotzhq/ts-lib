@@ -17,7 +17,8 @@ import {
   type ActionTransactionContext,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import { prepareActionContent } from "../internal/content-policy.ts";
+import { decodeContent } from "@copilotz/copilotz/content";
+import { asRecord, requiredText } from "../internal/validation.ts";
 
 export const CREATE_THREAD_MESSAGE_ACTION_ID =
   "copilotz.core.thread-message.create";
@@ -31,20 +32,8 @@ const PARTICIPANT_TYPES = new Set<ParticipantType>([
   "job",
 ]);
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
-
 function optionalText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function requireText(value: unknown, name: string): string {
-  const normalized = optionalText(value);
-  if (!normalized) throw new TypeError(`${name} must be non-empty.`);
-  return normalized;
 }
 
 function stringArray(value: unknown): readonly string[] {
@@ -90,7 +79,7 @@ function visibility(value: unknown): EventVisibility | undefined {
     return {
       kind: "tool",
       policy,
-      requesterId: requireText(
+      requesterId: requiredText(
         record.requesterId,
         "Tool visibility requesterId",
       ),
@@ -205,8 +194,8 @@ export async function createThreadMessage(
   context: Pick<ActionContext, "collections" | "content" | "transaction">,
 ): Promise<CollectionRecord> {
   const data = asRecord(input);
-  const id = requireText(data.id, "Message ID");
-  const threadId = requireText(data.threadId, "Thread ID");
+  const id = requiredText(data.id, "Message ID");
+  const threadId = requiredText(data.threadId, "Thread ID");
   const sender = asSender(data.sender);
   const recipientIds = stringArray(data.recipientIds);
   const eventVisibility = visibility(data.visibility);
@@ -226,11 +215,7 @@ export async function createThreadMessage(
   ]);
   if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
   const existingParticipantIds = stringArray(thread.participantIds);
-  const content = await prepareActionContent(
-    data.content ?? [],
-    context,
-    `message-content:${id}`,
-  );
+  const content = decodeContent(data.content ?? []);
   await context.transaction(async (tx) => {
     const collections = tx.collections;
     if (!collections.message) {

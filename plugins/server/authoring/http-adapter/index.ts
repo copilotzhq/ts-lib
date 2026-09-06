@@ -2,6 +2,7 @@
 import type {
   CollectionQuery,
   CollectionRecord,
+  ScopedCollectionReadOptions,
 } from "@copilotz/copilotz/collections";
 import type {
   ServerAuthorizedScope,
@@ -11,10 +12,15 @@ import type {
 } from "../../internal/contracts.ts";
 
 export type HttpReadServices = Readonly<{
-  get(collection: string, id: string): Promise<CollectionRecord | null>;
+  get(
+    collection: string,
+    id: string,
+    options?: ScopedCollectionReadOptions,
+  ): Promise<CollectionRecord | null>;
   list(
     collection: string,
     query?: CollectionQuery,
+    options?: ScopedCollectionReadOptions,
   ): Promise<readonly CollectionRecord[]>;
   query(
     collection: string,

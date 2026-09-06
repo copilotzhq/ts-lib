@@ -52,7 +52,8 @@ Deno.test("run_command surfaces Action cancellation and terminates its child", a
   const controller = new AbortController();
   const execution = runCommandAction.execute({
     command: Deno.execPath(),
-    args: ["eval", "await new Promise(() => {})"],
+    // A pending Promise alone lets Deno exit before cancellation is exercised.
+    args: ["eval", "setInterval(() => {}, 1000)"],
   }, {
     signal: controller.signal,
   } as ActionContext);

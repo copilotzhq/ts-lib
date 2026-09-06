@@ -39,3 +39,33 @@ export function mergePreparedContent(
     assets: Object.freeze(assets),
   });
 }
+
+/** Reuse a sealed body's storage only when it exactly matches the target content. */
+export function adoptPreparedBody(
+  target: PreparedContent,
+  source: PreparedContent,
+): PreparedContent | undefined {
+  if (
+    target.content.length !== 1 || target.assets.length !== 1 ||
+    source.content.length !== 1 || source.assets.length !== 1
+  ) return undefined;
+  const final = target.assets[0];
+  const ready = source.assets[0];
+  if (
+    target.content[0].assetId !== final.id ||
+    source.content[0].assetId !== ready.id ||
+    !ready.readyBody || !ready.location ||
+    final.namespace !== ready.namespace ||
+    final.mediaType !== ready.mediaType ||
+    final.byteLength !== ready.byteLength || final.digest !== ready.digest
+  ) return undefined;
+  return Object.freeze({
+    content: target.content,
+    assets: Object.freeze([Object.freeze({
+      ...final,
+      body: new Uint8Array(),
+      readyBody: ready.readyBody,
+      location: ready.location,
+    })]),
+  });
+}

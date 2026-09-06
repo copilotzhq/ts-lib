@@ -41,10 +41,11 @@ export async function createHttpReads(
     return { collection: collections[entry[1].name], schema: entry[1], policy };
   };
   const read: HttpReadServices = Object.freeze({
-    async get(name, id) {
-      return (await read.list(name, { where: { id }, limit: 1 }))[0] ?? null;
+    async get(name, id, options) {
+      return (await read.list(name, { where: { id }, limit: 1 }, options))[0] ??
+        null;
     },
-    async list(name, query = {}) {
+    async list(name, query = {}, options) {
       const { collection, policy } = definition(name);
       if (query.include?.length) {
         throw Object.assign(
@@ -68,6 +69,7 @@ export async function createHttpReads(
           limit: query.limit ?? 100,
           all: [...(query.all ?? []), ...(policy ? [policy] : [])],
         } as CollectionQuery,
+        options,
       );
     },
     async query(name, queryName, input) {

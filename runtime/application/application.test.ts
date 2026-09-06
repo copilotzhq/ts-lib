@@ -272,6 +272,17 @@ Deno.test("application factory composes plugins and supplies the default tenant 
       { namespace: NAMESPACE },
     );
     assertEquals(reply[0].text, "application reply");
+    const resolved = await application.collections.withScope({
+      namespace: NAMESPACE,
+    })
+      .message.get({ id: messages[1].id }, { content: true });
+    assertEquals(
+      resolved?.content,
+      messages[1].content.map((ref) => ({
+        ...ref,
+        value: "application reply",
+      })),
+    );
 
     await application.shutdown();
     await db.query("SELECT 1");

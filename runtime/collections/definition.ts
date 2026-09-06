@@ -1,3 +1,4 @@
+import type { ScopedCollectionReadOptions } from "./read-options.ts";
 import type { JsonSchema } from "../../dependencies/ominipg.ts";
 import type { FromSchema } from "../../dependencies/json-schema-to-ts.ts";
 import type { CollectionQuery } from "./types.ts";
@@ -47,10 +48,15 @@ export type CollectionCommandDefinition<TRecord = Record<string, unknown>> =
   }>;
 
 export type CollectionNamedQueryRead = Readonly<{
-  get(collection: string, id: string): Promise<Record<string, unknown> | null>;
+  get(
+    collection: string,
+    id: string,
+    options?: ScopedCollectionReadOptions,
+  ): Promise<Record<string, unknown> | null>;
   list(
     collection: string,
     query?: CollectionQuery,
+    options?: ScopedCollectionReadOptions,
   ): Promise<readonly Record<string, unknown>[]>;
 }>;
 

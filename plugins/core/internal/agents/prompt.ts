@@ -19,11 +19,12 @@ import {
 } from "../capabilities/index.ts";
 import {
   collectContextContributions,
+  prepareContextContributions,
   renderContextContent,
 } from "../../resources/context/index.ts";
 import { collectPromptInstructions } from "../../resources/prompt-instructions/internal/collection.ts";
 import { getPublicThreadMetadata } from "../thread-metadata.ts";
-import { buildLlmTranscript } from "./transcript.ts";
+import { prepareLlmTranscript } from "./prepared-transcript.ts";
 
 type RenderedContext = Readonly<{
   title: string;
@@ -278,17 +279,18 @@ export async function buildCoreLlmRequest(
     participant,
     thread,
   });
+  const prepared = await prepareContextContributions(context, contributions);
   const rendered: readonly RenderedContext[] = Object.freeze(
-    await Promise.all(contributions.map(async (contribution) =>
+    prepared.map((contribution) =>
       Object.freeze({
         title: contribution.title,
         role: contribution.role,
-        text: await renderContextContent(context, contribution.content),
+        text: renderContextContent(contribution.content),
         ...(contribution.historyAfterMessageId
           ? { historyAfterMessageId: contribution.historyAfterMessageId }
           : {}),
       })
-    )),
+    ),
   );
   const promptInstructions = collectPromptInstructions(
     context.resources.promptInstructions,
@@ -298,7 +300,7 @@ export async function buildCoreLlmRequest(
     rawHistory,
     rendered,
   );
-  const messages = buildLlmTranscript({
+  const messages = await prepareLlmTranscript(context, {
     threadId: thread.id,
     history: rawHistory,
     messageIds,

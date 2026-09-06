@@ -57,7 +57,7 @@ function toolCallId(message: ConversationMessage): string | undefined {
 }
 
 /** Maps one canonical Message into the provider-neutral LLM history contract. */
-function toLlmMessage(
+function projectMessage(
   message: ConversationMessage,
   targetParticipantId?: string,
 ): LlmMessage | null {
@@ -143,6 +143,23 @@ function toLlmMessage(
   return Object.freeze({ role: "user", content, ...(name ? { name } : {}) });
 }
 
+function toLlmMessage(
+  message: ConversationMessage,
+  targetParticipantId?: string,
+): LlmMessage | null {
+  const projected = projectMessage(message, targetParticipantId);
+  if (
+    projected?.role !== "assistant" ||
+    message.sender.id !== targetParticipantId ||
+    !Array.isArray(message.metadata.llmReasoning)
+  ) return projected;
+  return {
+    ...projected,
+    reasoning: message.metadata
+      .llmReasoning as import("@copilotz/copilotz/content").ContentSequence,
+  };
+}
+
 function receiptAnswer(
   receipt: ConversationMessage,
   answer: ConversationMessage | undefined,
@@ -176,9 +193,10 @@ export function buildLlmTranscript(
     messageIds?: readonly string[];
     participantId?: string;
   }>,
+  onSelectedSource?: (messageId: string) => void,
 ): readonly LlmMessage[] {
   const history = input.history;
-  const selected = input.messageIds?.length
+  const selected = input.messageIds !== undefined
     ? (() => {
       const byId = new Map(history.map((message) => [message.id, message]));
       return input.messageIds.map((id) => {
@@ -194,14 +212,20 @@ export function buildLlmTranscript(
     : history;
   const byId = new Map(history.map((message) => [message.id, message]));
   const output: LlmMessage[] = [];
+  const sources = new WeakMap<LlmMessage, string>();
+  const project = (message: ConversationMessage) => {
+    const result = toLlmMessage(message, input.participantId);
+    if (result) sources.set(result, message.id);
+    return result;
+  };
 
   const appendNormal = (message: ConversationMessage) => {
-    const projected = toLlmMessage(message, input.participantId);
+    const projected = project(message);
     if (projected) output.push(projected);
   };
   for (let index = 0; index < selected.length;) {
     const plan = selected[index];
-    const planProjection = plan && toLlmMessage(plan, input.participantId);
+    const planProjection = plan && project(plan);
     const toolIds = planProjection?.role === "assistant"
       ? new Set((planProjection.toolCalls ?? []).map((call) => call.id))
       : new Set<string>();
@@ -217,7 +241,7 @@ export function buildLlmTranscript(
     index++;
     while (index < selected.length && seen.size < toolIds.size) {
       const candidate = selected[index++]!;
-      const projected = toLlmMessage(candidate, input.participantId);
+      const projected = project(candidate);
       if (
         projected?.role === "tool" && projected.toolCallId &&
         toolIds.has(projected.toolCallId)
@@ -245,8 +269,12 @@ export function buildLlmTranscript(
     }
     for (const [id, receipt] of receiptsByAnswerId) {
       const answer = receiptAnswer(receipt, byId.get(id), input.participantId);
-      if (answer) output.push(answer);
+      if (answer) {
+        sources.set(answer, id);
+        output.push(answer);
+      }
     }
   }
+  for (const message of output) onSelectedSource?.(sources.get(message)!);
   return Object.freeze(output);
 }

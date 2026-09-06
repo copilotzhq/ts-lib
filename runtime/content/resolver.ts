@@ -1,3 +1,4 @@
+import { createContentBodyDecoder } from "./decode.ts";
 import { digestContent } from "./digest.ts";
 import { createContentError } from "./errors.ts";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "./types.ts";
 
 export type ContentResolver = {
+  authorize(ref: ContentRef, options: ResolveContentOptions): Promise<void>;
   get(
     ref: ContentRef,
     options: ResolveContentOptions,
@@ -44,90 +46,70 @@ async function requireAuthorization(
   }
 }
 
-async function resolveBody(
-  ref: ContentRef,
+async function prepareBody(
+  assetId: string,
   body: AssetBody,
   namespace: string,
   digest: (bytes: Uint8Array) => Promise<`sha256:${string}`>,
-): Promise<ResolvedContent> {
+): Promise<(ref: ContentRef) => ResolvedContent> {
   const { asset } = body;
-  if (asset.id !== ref.assetId || asset.namespace !== namespace) {
+  if (asset.id !== assetId || asset.namespace !== namespace) {
     throw createContentError(
       "asset_corrupted",
-      `Asset repository returned the wrong body for: ${ref.assetId}`,
-      { namespace, assetId: ref.assetId },
+      `Asset repository returned the wrong body for: ${assetId}`,
+      { namespace, assetId },
     );
   }
   if (asset.state === "deleted") {
     throw createContentError(
       "asset_deleted",
-      `Asset has been deleted: ${ref.assetId}`,
-      { namespace, assetId: ref.assetId },
+      `Asset has been deleted: ${assetId}`,
+      { namespace, assetId },
     );
   }
   if (asset.state !== "ready") {
     throw createContentError(
       "asset_not_ready",
-      `Asset is not ready: ${ref.assetId}`,
-      { namespace, assetId: ref.assetId },
-    );
-  }
-  if (asset.mediaType !== ref.mediaType) {
-    throw createContentError(
-      "asset_corrupted",
-      `Asset media type does not match its content reference: ${ref.assetId}`,
-      { namespace, assetId: ref.assetId },
+      `Asset is not ready: ${assetId}`,
+      { namespace, assetId },
     );
   }
   if (asset.byteLength !== body.bytes.byteLength) {
     throw createContentError(
       "asset_corrupted",
-      `Asset byte length does not match its body: ${ref.assetId}`,
-      { namespace, assetId: ref.assetId },
+      `Asset byte length does not match its body: ${assetId}`,
+      { namespace, assetId },
     );
   }
   if (await digest(body.bytes) !== asset.digest) {
     throw createContentError(
       "asset_corrupted",
-      `Asset digest does not match its body: ${ref.assetId}`,
-      { namespace, assetId: ref.assetId },
+      `Asset digest does not match its body: ${assetId}`,
+      { namespace, assetId },
     );
   }
 
-  const resolved: ResolvedContent = {
-    ref: {
-      ...ref,
-      metadata: ref.metadata === undefined
-        ? undefined
-        : structuredClone(ref.metadata),
-    },
-    asset: {
-      ...asset,
-      location: { ...asset.location },
-      metadata: asset.metadata === undefined
-        ? undefined
-        : structuredClone(asset.metadata),
-    },
-    bytes: body.bytes.slice(),
-  };
-
-  if (ref.kind === "text") {
-    resolved.text = new TextDecoder().decode(body.bytes);
-  } else if (ref.kind === "json") {
-    const text = new TextDecoder().decode(body.bytes);
-    resolved.text = text;
-    try {
-      resolved.value = JSON.parse(text);
-    } catch (cause) {
+  const decode = createContentBodyDecoder(body.bytes, { namespace, assetId });
+  return (ref) => {
+    if (asset.mediaType !== ref.mediaType) {
       throw createContentError(
         "asset_corrupted",
-        `JSON asset body cannot be decoded: ${ref.assetId}`,
-        { namespace, assetId: ref.assetId, cause },
+        `Asset media type does not match its content reference: ${ref.assetId}`,
+        { namespace, assetId: ref.assetId },
       );
     }
-  }
-
-  return resolved;
+    const resolved: ResolvedContent = {
+      ref: structuredClone(ref),
+      asset: structuredClone(asset),
+      bytes: body.bytes.slice(),
+    };
+    if (ref.kind === "text" || ref.kind === "json") {
+      const value = decode(ref.kind);
+      resolved.text = value.text;
+      if (ref.kind === "json") resolved.value = value.value;
+    }
+    return resolved;
+  };
 }
 
 /** Creates an authorization-aware, integrity-checking content resolver. */
@@ -138,37 +120,96 @@ export function createContentResolver(dependencies: {
 }): ContentResolver {
   const digest = dependencies.digest ?? digestContent;
 
-  const get: ContentResolver["get"] = async (ref, options) => {
-    await requireAuthorization(dependencies.authorize, ref, options);
-    const body = await dependencies.assets.read(
-      options.namespace,
-      ref.assetId,
-    );
-    return await resolveBody(ref, body, options.namespace, digest);
-  };
-
   const getMany: ContentResolver["getMany"] = async (refs, options) => {
-    await Promise.all(
-      refs.map((ref) =>
-        requireAuthorization(dependencies.authorize, ref, options)
-      ),
-    );
-    const bodies = await dependencies.assets.readMany(
-      options.namespace,
-      refs.map((ref) => ref.assetId),
-    );
-    if (bodies.length !== refs.length) {
+    options.signal?.throwIfAborted();
+    if (
+      options.maxBytes !== undefined &&
+      (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < 0)
+    ) {
+      throw new TypeError("maxBytes must be a non-negative safe integer.");
+    }
+    for (const ref of refs) {
+      options.signal?.throwIfAborted();
+      await requireAuthorization(dependencies.authorize, ref, options);
+    }
+    options.signal?.throwIfAborted();
+    const ids = [...new Set(refs.map((ref) => ref.assetId))];
+    if (!ids.length) return Object.freeze([]);
+    if (options.maxBytes !== undefined) {
+      const metadata = await dependencies.assets.getMany(
+        options.namespace,
+        ids,
+      );
+      options.signal?.throwIfAborted();
+      if (
+        metadata.length !== ids.length ||
+        metadata.some((asset, index) =>
+          asset.id !== ids[index] || asset.namespace !== options.namespace ||
+          !Number.isSafeInteger(asset.byteLength) || asset.byteLength < 0
+        )
+      ) {
+        throw createContentError(
+          "asset_corrupted",
+          "Asset repository returned an invalid metadata batch.",
+          { namespace: options.namespace },
+        );
+      }
+      const bytes = metadata.reduce((sum, asset) => sum + asset.byteLength, 0);
+      if (bytes > options.maxBytes) {
+        throw new RangeError(
+          `Resolved content exceeds the ${options.maxBytes} byte budget.`,
+        );
+      }
+    }
+    const bodies = await dependencies.assets.readMany(options.namespace, ids);
+    options.signal?.throwIfAborted();
+    if (bodies.length !== ids.length) {
       throw createContentError(
         "asset_corrupted",
         "Asset repository returned an incomplete content batch.",
         { namespace: options.namespace },
       );
     }
-    return await Promise.all(
-      refs.map((ref, index) =>
-        resolveBody(ref, bodies[index], options.namespace, digest)
-      ),
+    const readers = new Map(
+      await Promise.all(ids.map(async (id, index) => {
+        // Identity and integrity are checked once for each unique body.
+        return [
+          id,
+          await prepareBody(id, bodies[index], options.namespace, digest),
+        ] as const;
+      })),
     );
+    const resolved = refs.map((ref) => readers.get(ref.assetId)!(ref));
+    options.signal?.throwIfAborted();
+    if (
+      options.maxBytes !== undefined &&
+      bodies.reduce((sum, body) => sum + body.bytes.byteLength, 0) >
+        options.maxBytes
+    ) {
+      throw new RangeError(
+        `Resolved content exceeds the ${options.maxBytes} byte budget.`,
+      );
+    }
+    return Object.freeze(resolved);
+  };
+
+  const get: ContentResolver["get"] = async (ref, options) => {
+    if (options.maxBytes !== undefined) {
+      return (await getMany([ref], options))[0];
+    }
+    options.signal?.throwIfAborted();
+    await requireAuthorization(dependencies.authorize, ref, options);
+    options.signal?.throwIfAborted();
+    const body = await dependencies.assets.read(options.namespace, ref.assetId);
+    const resolve = await prepareBody(
+      ref.assetId,
+      body,
+      options.namespace,
+      digest,
+    );
+    const resolved = resolve(ref);
+    options.signal?.throwIfAborted();
+    return resolved;
   };
 
   const open: ContentResolver["open"] = async (ref, options) => {
@@ -181,5 +222,10 @@ export function createContentResolver(dependencies: {
     });
   };
 
-  return { get, getMany, open };
+  const authorize: ContentResolver["authorize"] = async (ref, options) => {
+    options.signal?.throwIfAborted();
+    await requireAuthorization(dependencies.authorize, ref, options);
+    options.signal?.throwIfAborted();
+  };
+  return { get, getMany, open, authorize };
 }

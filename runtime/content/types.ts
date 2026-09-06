@@ -256,6 +256,9 @@ export interface ResolvedContent {
 
 export type ResolveContentOptions = {
   namespace: string;
+  signal?: AbortSignal;
+  /** Maximum aggregate unique body bytes, checked against metadata before reads. */
+  maxBytes?: number;
 };
 
 export type ContentAuthorizationAction = "metadata" | "read";
@@ -281,3 +284,14 @@ export type ContentError = Error & {
   assetId?: string;
   namespace?: string;
 };
+
+/** JSON values carried by resolved content bodies. */
+export type ContentJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ContentJsonValue[]
+  | { [key: string]: ContentJsonValue };
+/** Decoded body value shared by Actions and Collections. */
+export type ContentBodyValue = ContentJsonValue | Uint8Array;

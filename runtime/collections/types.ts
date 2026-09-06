@@ -1,3 +1,4 @@
+import type { CollectionPredicate } from "./predicate.ts";
 import type {
   EventBodyRef,
   EventDelivery,
@@ -128,12 +129,14 @@ export type CollectionQueryOrder = Readonly<{
 }>;
 
 export type CollectionFilter = Readonly<{
+  filter?: CollectionPredicate;
   where?: Readonly<Record<string, unknown>>;
   contains?: Readonly<Record<string, unknown>>;
   containsAny?: Readonly<Record<string, readonly unknown[]>>;
 }>;
 
 export type CollectionQuery = Readonly<{
+  filter?: CollectionPredicate;
   /** Additional conjunctive predicates applied before cursor selection. */
   all?: readonly CollectionFilter[];
   contains?: Readonly<Record<string, unknown>>;

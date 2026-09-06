@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals, assertExists, assertThrows } from "@std/assert";
 import { createWebChannelAdapter } from "./index.ts";
 
 Deno.test("Web Channel Adapter accepts one occurrence", async () => {
@@ -58,4 +58,41 @@ Deno.test("Web Channel Adapter rejects non-array declared thread participants", 
     TypeError,
     "participants must be an array",
   );
+});
+
+Deno.test("Core message wire content passes through Web ingress and the shared decoder", async () => {
+  const { message } = await import(
+    "../../../core-collections/authoring/message-input/index.ts"
+  );
+  const input = message({
+    thread: "thread",
+    participant: "human",
+    content: [
+      "hello",
+      {
+        type: "image",
+        bytes: new Uint8Array([0, 255, 128]),
+        mediaType: "image/png",
+        name: "picture",
+      },
+    ],
+  });
+  assertExists(input.payload);
+  const adapter = createWebChannelAdapter();
+  const accepted = await adapter.accept({
+    method: "POST",
+    headers: { "idempotency-key": "media" },
+    context: { actor: { id: "human" } },
+    body: { externalThreadId: "thread", content: input.payload.content },
+  }, {} as never);
+  const received = await adapter.receive(
+    accepted.occurrences[0].input,
+    {} as never,
+  );
+  assertEquals(received.content, ["hello", {
+    type: "image",
+    bytes: new Uint8Array([0, 255, 128]),
+    mediaType: "image/png",
+    name: "picture",
+  }]);
 });

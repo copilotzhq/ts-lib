@@ -1,3 +1,4 @@
+import { getPath } from "./content-path.ts";
 import type { EventMutationContext, SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import type { CollectionEventBody, CollectionRecord } from "./types.ts";
@@ -255,20 +256,6 @@ function declaredContentRefs(
     }
   }
   return refs;
-}
-
-function getPath(
-  value: Record<string, unknown>,
-  path: string,
-): unknown {
-  let current: unknown = value;
-  for (const part of path.split(".").filter(Boolean)) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
 }
 
 async function synchronizeContentAssetEdges(

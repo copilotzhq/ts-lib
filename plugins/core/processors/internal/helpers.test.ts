@@ -30,7 +30,12 @@ function message(index: number): CollectionRecord {
     threadId: THREAD_ID,
     senderId: "human",
     recipientIds: ["agent"],
-    content: [{ type: "text", text: `Message ${index}` }],
+    content: [{
+      assetId: `asset-${index}`,
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+    }],
     metadata: {},
     visibility: { kind: "public" },
     createdAt,

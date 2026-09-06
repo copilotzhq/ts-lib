@@ -358,3 +358,77 @@ Deno.test("A55 canonical content core has no Deno, Node, Bun, filesystem, or ser
     assert(!/\bclass\s+\w+/.test(source), `${module} introduces a class`);
   }
 });
+
+Deno.test("batch resolution reuses body verification and decoding but authorizes every reference", async () => {
+  const { assets, normalize } = createFixture();
+  const [base] = await normalize.normalize({
+    type: "json",
+    value: { answer: 42 },
+  }, { namespace: "tenant-a" });
+  const refs: ContentRef[] = [
+    { ...base, kind: "text", role: "text" },
+    { ...base, role: "first", metadata: { source: "original" } },
+    { ...base, role: "second" },
+  ];
+  const authorized: string[] = [];
+  let reads = 0;
+  let hashes = 0;
+  let parses = 0;
+  let decodes = 0;
+  let deniedRole: string | undefined;
+  const resolver = createContentResolver({
+    assets: {
+      ...assets,
+      readMany(namespace, ids) {
+        reads++;
+        return assets.readMany(namespace, ids);
+      },
+    },
+    authorize: ({ ref }) => {
+      authorized.push(ref.role);
+      return ref.role !== deniedRole;
+    },
+    digest: (bytes) => {
+      hashes++;
+      return digestContent(bytes);
+    },
+  });
+  const parse = JSON.parse;
+  const decode = TextDecoder.prototype.decode;
+  JSON.parse = (...args) => {
+    parses++;
+    return parse(...args);
+  };
+  TextDecoder.prototype.decode = function (...args) {
+    decodes++;
+    return decode.apply(this, args);
+  };
+  let result;
+  try {
+    result = await resolver.getMany(refs, { namespace: "tenant-a" });
+  } finally {
+    JSON.parse = parse;
+    TextDecoder.prototype.decode = decode;
+  }
+  assertEquals([reads, hashes, parses, decodes], [1, 1, 1, 1]);
+  assertEquals(authorized, ["text", "first", "second"]);
+  assertEquals(result[0].text, '{"answer":42}');
+  (result[1].value as { answer: number }).answer = 0;
+  result[1].bytes[0] = 0;
+  result[1].ref.metadata!.source = "changed";
+  assertEquals(result[2].value, { answer: 42 });
+  assertEquals(result[2].bytes[0], 123);
+  assertEquals(refs[1].metadata!.source, "original");
+  deniedRole = "second";
+  await assertRejects(() => resolver.getMany(refs, { namespace: "tenant-a" }));
+  assertEquals(reads, 1);
+  deniedRole = undefined;
+  await assertRejects(
+    () =>
+      resolver.getMany([base, { ...base, mediaType: "wrong" }], {
+        namespace: "tenant-a",
+      }),
+    Error,
+    "media type",
+  );
+});

@@ -291,6 +291,7 @@ function adapterMessageToChatMessage(
     return {
       role: "assistant",
       ...common,
+      ...(message.reasoning ? { reasoning: message.reasoning } : {}),
       ...(message.toolCalls
         ? { toolCalls: message.toolCalls.map(toolInvocation) }
         : {}),

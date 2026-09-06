@@ -1,3 +1,4 @@
+import { createCollectionKernel as createCollectionRuntime } from "./kernel.ts";
 import { assert, assertEquals } from "@std/assert";
 
 import { createTestDatabase } from "../testing/ominipg.ts";
@@ -18,7 +19,7 @@ import type {
   ContentSequence,
   DurableContentInput,
 } from "../content/index.ts";
-import { createCollectionRuntime } from "./kernel.ts";
+
 import { defineCollection } from "./definition.ts";
 
 function canonicalContent(input: DurableContentInput): ContentSequence {
@@ -70,7 +71,7 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
       plan: AssetMaterializationPlan,
     ): Promise<void>;
   }> = {
-    async prepareMaterialization(input: AssetMutationInput) {
+    prepareMaterialization(input: AssetMutationInput) {
       assertEquals(sqlOpen, false);
       phases.push("prepare");
       const plan: AssetMaterializationPlan = Object.freeze({
@@ -79,7 +80,7 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
         assets: Object.freeze([]),
         adoptions: Object.freeze([]),
       });
-      return plan;
+      return Promise.resolve(plan);
     },
     async adoptMaterialization(
       context: EventMutationContext,

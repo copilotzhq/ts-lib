@@ -202,32 +202,33 @@ function collection(engine: CopilotzEngine, name: string) {
 
 async function startRun(fixture: Fixture): Promise<string> {
   await collection(fixture.engine, "participant").create({
+    namespace: NAMESPACE,
+  }, {
     id: "user-a",
     externalId: "user-a",
     participantType: "human",
     metadata: {},
-  }, { namespace: NAMESPACE });
+  }, {});
   for (const resource of fixture.agents) {
     await collection(fixture.engine, "participant").create({
+      namespace: NAMESPACE,
+    }, {
       id: `agent-${resource.id}`,
       externalId: resource.id,
       participantType: "agent",
       agentId: resource.id,
       name: resource.name,
       metadata: {},
-    }, { namespace: NAMESPACE });
+    }, {});
   }
-  await collection(fixture.engine, "thread").create({
+  await collection(fixture.engine, "thread").create({ namespace: NAMESPACE }, {
     id: "thread-a",
     participantIds: [
       "user-a",
       ...fixture.agents.map((resource) => `agent-${resource.id}`),
     ],
     metadata: {},
-  }, {
-    namespace: NAMESPACE,
-    identity: { deduplicationId: "thread-a:create" },
-  });
+  }, { identity: { deduplicationId: "thread-a:create" } });
   const content = await fixture.engine.content.preparer.prepare(
     "Start the ask workflow",
     {
@@ -236,6 +237,8 @@ async function startRun(fixture: Fixture): Promise<string> {
     },
   );
   const created = await collection(fixture.engine, "message").create({
+    namespace: NAMESPACE,
+  }, {
     id: "message:user",
     threadId: "thread-a",
     senderId: "user-a",
@@ -243,7 +246,6 @@ async function startRun(fixture: Fixture): Promise<string> {
     content,
     metadata: {},
   }, {
-    namespace: NAMESPACE,
     threadId: "thread-a",
     routing: { senderId: "user-a", recipientIds: ["agent-a"] },
     identity: {
@@ -251,7 +253,15 @@ async function startRun(fixture: Fixture): Promise<string> {
       deduplicationId: "ask-root:message",
     },
   });
-  return created.event.id;
+  const events = await fixture.engine.events.list({
+    namespace: NAMESPACE,
+    limit: 1000,
+  });
+  const event = events.find((event) =>
+    event.type === "message.created" && event.subject?.id === created.id
+  );
+  if (!event) throw new Error("Created message event was not found.");
+  return event.id;
 }
 
 async function waitForRun(

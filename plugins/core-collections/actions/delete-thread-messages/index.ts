@@ -5,7 +5,7 @@ import {
   type ActionDefinition,
   defineAction,
 } from "@copilotz/copilotz/actions";
-import { asRecord, requiredText } from "../internal/content-policy.ts";
+import { asRecord, requiredText } from "../internal/validation.ts";
 
 export const DELETE_THREAD_MESSAGES_ACTION_ID =
   "copilotz.core.thread.deleteMessages";

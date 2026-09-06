@@ -1,3 +1,17 @@
+import { assertJsonValue } from "../json.ts";
+import {
+  bindCollectionScope,
+  type CollectionOperations,
+  createCollectionOperations,
+} from "./operations.ts";
+import { getPath, setPath } from "./content-path.ts";
+import type { ContentResolver } from "../content/resolver.ts";
+import type {
+  ResolvedCollectionContent,
+  ResolvedCollectionFields,
+  ScopedCollectionReadOptions,
+} from "./read-options.ts";
+export type { ScopedCollectionReadOptions } from "./read-options.ts";
 import { ulid } from "../../dependencies/ulid.ts";
 import { AsyncLocalStorage } from "../../dependencies/async-hooks.ts";
 import {
@@ -15,8 +29,10 @@ import {
   type AssetManifestEntry,
   type AssetMaterializationPlan,
   type AssetOrigin,
+  type ContentInput,
   type ContentRef,
   type ContentSequence,
+  createContentPreparer,
   digestContent,
   type DurableContentInput,
   type PreparedAsset,
@@ -68,6 +84,7 @@ export type CreateCollectionRuntimeOptions = Readonly<{
   session: SqlSession;
   eventStore: EventStore;
   assets?: CollectionAssetAdopter;
+  contentResolver?: ContentResolver;
   createId?: () => string;
   now?: () => Date;
   runtimeProjections?: Readonly<{
@@ -76,6 +93,7 @@ export type CreateCollectionRuntimeOptions = Readonly<{
       context: EventMutationContext,
       namespace: string,
       body: unknown,
+      event: import("../events/types.ts").DurableEvent,
     ): Promise<void>;
   }>;
 }>;
@@ -106,6 +124,8 @@ export type BoundCollectionQuery<TSelect extends object> =
       (
         namespace: string,
         input?: Record<string, unknown>,
+        scope?: CollectionScope,
+        options?: Pick<ScopedCollectionReadOptions, "signal">,
       ) => Promise<readonly TSelect[]>
     >
   >;
@@ -150,10 +170,7 @@ export type ScopedCollectionCallOptions = Readonly<
   }
 >;
 
-/** Runtime-neutral controls shared by every scoped Collection read. */
-export type ScopedCollectionReadOptions = Readonly<{
-  signal?: AbortSignal;
-}>;
+type UnresolvedReadOptions = Pick<ScopedCollectionReadOptions, "signal">;
 
 export type ScopedCollectionUpdateInput<
   TRecord extends CollectionRecord = CollectionRecord,
@@ -176,7 +193,7 @@ export type ScopedCollectionNamedQuery<
   TRecord extends CollectionRecord = CollectionRecord,
 > = (
   input?: Readonly<Record<string, unknown>>,
-  options?: ScopedCollectionReadOptions,
+  options?: UnresolvedReadOptions,
 ) => Promise<readonly TRecord[]>;
 
 export type ScopedCollection<
@@ -196,22 +213,52 @@ export type ScopedCollection<
     input: ScopedCollectionDeleteInput,
     options?: ScopedCollectionCallOptions,
   ): Promise<Readonly<{ id: string; deleted: true }>>;
+  get<const Fields extends readonly string[]>(
+    input: Readonly<{ id: string }>,
+    options: ScopedCollectionReadOptions & {
+      content: { fields: Fields; byteLimit?: number };
+    },
+  ): Promise<ResolvedCollectionFields<TSelect | null, Fields[number]>>;
+  get(
+    input: Readonly<{ id: string }>,
+    options?: ScopedCollectionReadOptions<false>,
+  ): Promise<TSelect | null>;
   get(
     input: Readonly<{ id: string }>,
     options?: ScopedCollectionReadOptions,
-  ): Promise<TSelect | null>;
+  ): Promise<ResolvedCollectionContent<TSelect | null>>;
+  list<const Fields extends readonly string[]>(
+    query: CollectionQuery | undefined,
+    options: ScopedCollectionReadOptions & {
+      content: { fields: Fields; byteLimit?: number };
+    },
+  ): Promise<ResolvedCollectionFields<readonly TSelect[], Fields[number]>>;
   list(
     query?: CollectionQuery,
+    options?: ScopedCollectionReadOptions<false>,
+  ): Promise<readonly TSelect[]>;
+  list(
+    query: CollectionQuery | undefined,
     options?: ScopedCollectionReadOptions,
+  ): Promise<ResolvedCollectionContent<readonly TSelect[]>>;
+  search<const Fields extends readonly string[]>(
+    query: CollectionQuery,
+    options: ScopedCollectionReadOptions & {
+      content: { fields: Fields; byteLimit?: number };
+    },
+  ): Promise<ResolvedCollectionFields<readonly TSelect[], Fields[number]>>;
+  search(
+    query: CollectionQuery,
+    options?: ScopedCollectionReadOptions<false>,
   ): Promise<readonly TSelect[]>;
   search(
     query: CollectionQuery,
     options?: ScopedCollectionReadOptions,
-  ): Promise<readonly TSelect[]>;
+  ): Promise<ResolvedCollectionContent<readonly TSelect[]>>;
   relations: Readonly<{
     list(
       query?: CollectionRelationQuery,
-      options?: ScopedCollectionReadOptions,
+      options?: UnresolvedReadOptions,
     ): Promise<readonly CollectionGraphRelation[]>;
   }>;
   commands: Readonly<Record<string, ScopedCollectionCommand<TSelect>>>;
@@ -288,7 +335,7 @@ export type CollectionTransactionResult<T> = Readonly<{
   dispatch: EventDispatchReport;
 }>;
 
-export type CollectionRuntime = Readonly<{
+export type CollectionKernel = Readonly<{
   bind<
     TSelect extends CollectionRecord = CollectionRecord,
     TInsert extends object = Record<string, unknown>,
@@ -301,6 +348,7 @@ export type CollectionRuntime = Readonly<{
   >(
     name: string,
   ): BoundCollection<TSelect, TInsert> | undefined;
+  operations(name: string): CollectionOperations | undefined;
   transaction<T>(
     options: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>>;
@@ -358,57 +406,8 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function assertLosslessJson(
-  value: unknown,
-  label: string,
-  ancestors = new WeakSet<object>(),
-): void {
-  if (
-    value === null || typeof value === "string" ||
-    typeof value === "boolean"
-  ) return;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value) || Object.is(value, -0)) {
-      throw new TypeError(`${label} must contain lossless JSON numbers.`);
-    }
-    return;
-  }
-  if (!value || typeof value !== "object") {
-    throw new TypeError(`${label} must contain lossless JSON values.`);
-  }
-  if (ancestors.has(value)) {
-    throw new TypeError(`${label} cannot be cyclic.`);
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index += 1) {
-        if (!(index in value)) {
-          throw new TypeError(`${label} arrays cannot be sparse.`);
-        }
-        assertLosslessJson(value[index], label, ancestors);
-      }
-      return;
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new TypeError(`${label} must contain plain JSON objects.`);
-    }
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== "string") {
-        throw new TypeError(`${label} cannot contain symbol keys.`);
-      }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) {
-        throw new TypeError(
-          `${label} must contain enumerable data properties only.`,
-        );
-      }
-      assertLosslessJson(descriptor.value, label, ancestors);
-    }
-  } finally {
-    ancestors.delete(value);
-  }
+function assertLosslessJson(value: unknown, label: string): void {
+  assertJsonValue(value, { label, rejectNegativeZero: true });
 }
 
 async function canonicalIntentValue(
@@ -601,38 +600,6 @@ async function canonicalIntentValue(
   }
 }
 
-function getPath(
-  value: Record<string, unknown>,
-  path: string,
-): unknown {
-  let current: unknown = value;
-  for (const part of path.split(".").filter(Boolean)) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
-function setPath(
-  value: Record<string, unknown>,
-  path: string,
-  replacement: unknown,
-): void {
-  const parts = path.split(".").filter(Boolean);
-  if (parts.length === 0) return;
-  let current = value;
-  for (const part of parts.slice(0, -1)) {
-    const child = current[part];
-    if (!child || typeof child !== "object" || Array.isArray(child)) {
-      current[part] = {};
-    }
-    current = current[part] as Record<string, unknown>;
-  }
-  current[parts[parts.length - 1]] = replacement;
-}
-
 function applyPatch(
   current: Record<string, unknown>,
   patch: CollectionUpdatePatch<Record<string, unknown>>,
@@ -737,13 +704,14 @@ function mutationResult<TSelect extends object>(
 }
 
 /** Binds canonical collection commands to the existing event coordinator. */
-export function createCollectionRuntime(
+export function createCollectionKernel(
   options: CreateCollectionRuntimeOptions,
-): CollectionRuntime {
+): CollectionKernel {
   const createId = options.createId ?? ulid;
   const now = options.now ?? (() => new Date());
   const tables = options.eventStore.tables;
   const bound = new Map<string, BoundCollection>();
+  const operations = new Map<string, CollectionOperations>();
   type TransactionBinding = Readonly<{
     definition: CollectionDefinition;
     create(
@@ -1066,10 +1034,10 @@ export function createCollectionRuntime(
       const content: AssetMaterializationPlan[] = [];
       let changed = false;
       for (const field of fields) {
-        const value = getPath(record, field);
+        let value = getPath(record, field);
         if (value === undefined) continue;
         const scope = activeScope();
-        const preparedValue = Array.isArray(value) && value.every((item) =>
+        let preparedValue = Array.isArray(value) && value.every((item) =>
             item && typeof item === "object" &&
             typeof (item as Record<string, unknown>).assetId === "string"
           )
@@ -1087,6 +1055,30 @@ export function createCollectionRuntime(
             sequenceOnly: false,
           }
           : undefined;
+        if (!preparedValue) {
+          const source = await createContentPreparer().prepare(
+            value as ContentInput | readonly ContentInput[],
+            { namespace, origin: { type: name, id: write.record.id } },
+          );
+          // Content identity survives retries without coupling it to an Action or
+          // generating a new Asset each time the collection plan is rebuilt.
+          const candidates = source.assets.map((asset) =>
+            Object.freeze({
+              ...asset,
+              idempotencyKey: JSON.stringify([
+                "collection-content",
+                asset.mediaType,
+                asset.digest,
+              ]),
+            })
+          );
+          value = { content: source.content, assets: candidates };
+          preparedValue = {
+            content: source.content,
+            assets: candidates,
+            sequenceOnly: false,
+          };
+        }
         if (preparedValue && scope) {
           const remappedCandidates = new Map<string, StagedAsset>();
           const pendingAssets: PreparedAsset[] = [];
@@ -2028,7 +2020,13 @@ export function createCollectionRuntime(
     const namedQueries = Object.fromEntries(
       Object.entries(definition.queries ?? {}).map(([queryName, spec]) => [
         queryName,
-        async (namespace: string, input: Record<string, unknown> = {}) => {
+        async (
+          namespace: string,
+          input: Record<string, unknown> = {},
+          scope: CollectionScope = { namespace },
+          readOptions?: Pick<ScopedCollectionReadOptions, "signal">,
+        ) => {
+          scope = Object.freeze({ ...scope, namespace });
           const queryInput = asRecord(input);
           if (spec.inputSchema) {
             validateAgainstJsonSchema(
@@ -2039,25 +2037,30 @@ export function createCollectionRuntime(
           }
           let output: readonly TSelect[];
           if (spec.select) {
+            const target = (name: string) => {
+              const collection = operations.get(name);
+              if (!collection) {
+                throw new Error(`Collection '${name}' is not bound.`);
+              }
+              return collection;
+            };
+            const controls = (input?: ScopedCollectionReadOptions) => ({
+              ...input,
+              signal: readOptions?.signal && input?.signal
+                ? AbortSignal.any([readOptions.signal, input.signal])
+                : readOptions?.signal ?? input?.signal,
+            });
             const read = Object.freeze({
-              get: (collectionName: string, id: string) => {
-                const target = bound.get(collectionName);
-                if (!target) {
-                  throw new Error(
-                    `Collection '${collectionName}' is not bound.`,
-                  );
-                }
-                return target.get(id, namespace);
-              },
-              list: (collectionName: string, query?: CollectionQuery) => {
-                const target = bound.get(collectionName);
-                if (!target) {
-                  throw new Error(
-                    `Collection '${collectionName}' is not bound.`,
-                  );
-                }
-                return target.list(namespace, query);
-              },
+              get: (
+                name: string,
+                id: string,
+                options?: ScopedCollectionReadOptions,
+              ) => target(name).get(scope, { id }, controls(options)),
+              list: (
+                name: string,
+                query?: CollectionQuery,
+                options?: ScopedCollectionReadOptions,
+              ) => target(name).list(scope, query, controls(options)),
             });
             output = await spec.select({
               input: queryInput,
@@ -2203,6 +2206,15 @@ export function createCollectionRuntime(
       }),
     );
     bound.set(definition.name, collection as BoundCollection);
+    operations.set(
+      name,
+      createCollectionOperations(collection as BoundCollection, {
+        activeTransaction: () => Boolean(activeScope()),
+        contentResolver: options.contentResolver,
+        relations: (namespace, query) =>
+          queryCollectionRelations(executor(), tables, namespace, name, query),
+      }),
+    );
     return collection;
   };
 
@@ -2710,7 +2722,10 @@ export function createCollectionRuntime(
                   relation,
                 });
               }
-              assertLosslessJson(body, "relation.upserted Event Body");
+              assertJsonValue(body, {
+                label: "relation.upserted Event Body",
+                rejectNegativeZero: true,
+              });
               scope.relations.set(relationId, body.relation);
               scope.plans.push(Object.freeze({
                 id: relationId,
@@ -2842,200 +2857,25 @@ export function createCollectionRuntime(
     });
   };
 
-  const withScope = (scopeInput: CollectionScope): ScopedCollections => {
-    const namespace = requireText(scopeInput.namespace, "Namespace");
-    const scoped: Record<string, ScopedCollection> = {};
-
-    const readWithSignal = async <T>(
-      operation: () => Promise<T>,
-      options?: ScopedCollectionReadOptions,
-    ): Promise<T> => {
-      options?.signal?.throwIfAborted();
-      const result = await operation();
-      options?.signal?.throwIfAborted();
-      return result;
-    };
-
-    const writeOptions = (
-      collection: string,
-      operation: string,
-      recordId: string | undefined,
-      input: ScopedCollectionCallOptions | undefined,
-    ): CollectionWriteOptions => {
-      const { operationKey, identity: explicit, ...options } = input ?? {};
-      const key = operationKey?.trim() ||
-        (recordId ? `${collection}.${operation}:${recordId}` : undefined);
-      if (scopeInput.createMutationIdentity && !key && !activeScope()) {
-        throw new TypeError(
-          `Collection '${collection}' ${operation} requires an id or operationKey in a delivery context.`,
-        );
-      }
-      const inherited = key
-        ? scopeInput.createMutationIdentity?.(key, {
-          collection,
-          operation,
-          ...(recordId ? { recordId } : {}),
-          ...explicit?.metadata,
-        })
-        : undefined;
-      const identity = inherited || explicit
-        ? {
-          causationId: explicit?.causationId ?? inherited?.causationId,
-          correlationId: explicit?.correlationId ?? inherited?.correlationId,
-          deduplicationId: explicit?.deduplicationId ??
-            inherited?.deduplicationId,
-          settlementScopeId: explicit?.settlementScopeId ??
-            inherited?.settlementScopeId,
-          metadata: { ...inherited?.metadata, ...explicit?.metadata },
-        }
-        : undefined;
-      return {
-        namespace,
-        ...options,
-        ...(identity ? { identity } : {}),
-      };
-    };
-
-    for (const [name, collection] of bound.entries()) {
-      const commands = Object.freeze(Object.fromEntries(
-        Object.keys(collection.definition.commands ?? {}).map((command) => [
-          command,
-          async (
-            input: Readonly<Record<string, unknown> & { id: string }>,
-            options?: ScopedCollectionCallOptions,
-          ) => {
-            const id = requireText(input.id, `${name} id`);
-            const { id: _id, ...commandInput } = input;
-            if (activeScope()) {
-              throw new Error(
-                `Use transaction.collections.${name}.commands.${command}() inside context.transaction().`,
-              );
-            }
-            const result = await collection.mutate(
-              id,
-              command,
-              commandInput,
-              writeOptions(name, `command:${command}`, id, options),
-            );
-            return result.record;
-          },
-        ]),
-      ));
-      const queries = Object.freeze(Object.fromEntries(
-        Object.keys(collection.definition.queries ?? {}).map((queryName) => [
-          queryName,
-          (
-            input: Readonly<Record<string, unknown>> = {},
-            options?: ScopedCollectionReadOptions,
-          ) => {
-            const query = collection.query[queryName];
-            if (!query) {
-              throw new Error(`Unknown ${name} query '${queryName}'.`);
-            }
-            return readWithSignal(
-              () => query(namespace, { ...input }),
-              options,
-            );
-          },
-        ]),
-      ));
-      scoped[name] = Object.freeze({
-        definition: collection.definition,
-        async create(input, options) {
-          const rawId = (input as Record<string, unknown>).id;
-          const id = typeof rawId === "string" && rawId.trim()
-            ? rawId.trim()
-            : undefined;
-          const mutationOptions = writeOptions(name, "create", id, options);
-          if (activeScope()) {
-            throw new Error(
-              `Use transaction.collections.${name}.create() inside context.transaction().`,
-            );
-          }
-          return (await collection.create(
-            input,
-            mutationOptions,
-          )).record;
-        },
-        async update(input, options) {
-          const id = requireText(input.id, `${name} id`);
-          const mutationOptions = writeOptions(name, "update", id, options);
-          if (activeScope()) {
-            throw new Error(
-              `Use transaction.collections.${name}.update() inside context.transaction().`,
-            );
-          }
-          return (await collection.update(
-            id,
-            { set: input.set, unset: input.unset },
-            mutationOptions,
-          )).record;
-        },
-        async delete(input, options) {
-          const id = requireText(input.id, `${name} id`);
-          const mutationOptions = writeOptions(name, "delete", id, options);
-          if (activeScope()) {
-            throw new Error(
-              `Use transaction.collections.${name}.delete() inside context.transaction().`,
-            );
-          }
-          await collection.delete(
-            id,
-            mutationOptions,
-          );
-          return Object.freeze({ id, deleted: true as const });
-        },
-        get(input, options) {
-          return readWithSignal(
-            () =>
-              collection.get(requireText(input.id, `${name} id`), namespace),
-            options,
-          );
-        },
-        list(query, options) {
-          return readWithSignal(
-            () => collection.list(namespace, query),
-            options,
-          );
-        },
-        search(query, options) {
-          return readWithSignal(
-            () => collection.search(namespace, query),
-            options,
-          );
-        },
-        relations: Object.freeze({
-          list(
-            query?: CollectionRelationQuery,
-            options?: ScopedCollectionReadOptions,
-          ) {
-            return readWithSignal(
-              () =>
-                queryCollectionRelations(
-                  executor(),
-                  tables,
-                  namespace,
-                  name,
-                  query,
-                ),
-              options,
-            );
-          },
-        }),
-        commands,
-        queries,
-      });
-    }
-    return Object.freeze(scoped);
+  const withScope = (scope: CollectionScope): ScopedCollections => {
+    requireText(scope.namespace, "Namespace");
+    return Object.freeze(
+      Object.fromEntries(
+        [...operations].map((
+          [name, collection],
+        ) => [name, bindCollectionScope(collection, scope)]),
+      ),
+    );
   };
 
-  const runtime: CollectionRuntime = Object.freeze({
+  const runtime: CollectionKernel = Object.freeze({
     bind,
     get: <
       TSelect extends CollectionRecord = CollectionRecord,
       TInsert extends object = Record<string, unknown>,
     >(name: string) =>
       bound.get(name) as BoundCollection<TSelect, TInsert> | undefined,
+    operations: (name: string) => operations.get(name),
     transaction,
     withScope,
     verify: (definition, namespace) =>
@@ -3077,4 +2917,34 @@ export async function resolveCollectionEventBody<
     event.namespace,
     event.dataRef,
   );
+}
+
+/** Public Collections use one explicit-context implementation; kernel reports stay internal. */
+export type CollectionRuntime =
+  & Omit<CollectionKernel, "bind" | "get" | "operations">
+  & {
+    bind<
+      TSelect extends CollectionRecord = CollectionRecord,
+      TInsert extends object = Record<string, unknown>,
+    >(definition: CollectionDefinition): CollectionOperations<TSelect, TInsert>;
+    get<
+      TSelect extends CollectionRecord = CollectionRecord,
+      TInsert extends object = Record<string, unknown>,
+    >(name: string): CollectionOperations<TSelect, TInsert> | undefined;
+  };
+export function createCollectionRuntime(
+  options: CreateCollectionRuntimeOptions,
+): CollectionRuntime {
+  const kernel = createCollectionKernel(options);
+  return Object.freeze({
+    bind(definition: CollectionDefinition) {
+      kernel.bind(definition);
+      return kernel.operations(definition.name)!;
+    },
+    get: (name: string) => kernel.operations(name),
+    withScope: kernel.withScope,
+    transaction: kernel.transaction,
+    verify: kernel.verify,
+    rebuild: kernel.rebuild,
+  }) as CollectionRuntime;
 }

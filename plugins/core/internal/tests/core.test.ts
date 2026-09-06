@@ -1,9 +1,7 @@
+import { createCollectionKernel as createCollectionRuntime } from "../../../../runtime/collections/kernel.ts";
 import { assertEquals, assertRejects } from "@std/assert";
 
-import {
-  type CollectionRecord,
-  createCollectionRuntime,
-} from "@copilotz/copilotz/collections";
+import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import {
   CORE_COLLECTION_NAMES,
   messageCollection,

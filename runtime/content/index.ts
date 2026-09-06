@@ -97,7 +97,7 @@ export {
   createContentPreparer,
   type CreateContentPreparerOptions,
 } from "./preparer.ts";
-export { mergePreparedContent } from "./prepared.ts";
+export { adoptPreparedBody, mergePreparedContent } from "./prepared.ts";
 export {
   composeRoleContent,
   contentSequence,
@@ -123,9 +123,11 @@ export type {
   AssetState,
   AuthorizeContent,
   ContentAuthorizationAction,
+  ContentBodyValue,
   ContentError,
   ContentErrorCode,
   ContentInput,
+  ContentJsonValue,
   ContentKind,
   ContentRef,
   ContentRole,
@@ -138,3 +140,17 @@ export type {
   ResolveContentOptions,
   ResolvedContent,
 } from "./types.ts";
+
+export { type ContentValue, resolveContentInputs } from "./values.ts";
+
+export {
+  contentRefSchema,
+  contentSequenceSchema,
+  isContentRef,
+} from "./schema.ts";
+
+export {
+  type ContentWireInput,
+  decodeContent,
+  encodeContent,
+} from "./codec.ts";

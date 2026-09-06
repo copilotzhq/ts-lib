@@ -12,7 +12,7 @@ import {
   ensureParticipantInTransaction,
   findParticipant,
 } from "../create-thread-message/index.ts";
-import { asRecord, requiredText } from "../internal/content-policy.ts";
+import { asRecord, requiredText } from "../internal/validation.ts";
 
 export const ADD_THREAD_PARTICIPANT_ACTION_ID =
   "copilotz.core.thread.addParticipant";

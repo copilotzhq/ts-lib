@@ -510,6 +510,7 @@ Deno.test("resolved credentials never enter durable Action lifecycle data", asyn
   });
   const actions = createActionCallers({ callLlm: callLlmAction }, {
     actionLifecycle: lifecycle,
+    content: test.context.content,
     signal: test.context.signal,
     createInvocationKey: () => "credential-lifecycle",
     createContext(input) {
@@ -915,7 +916,7 @@ Deno.test("llm.call rejects invalid durable input before Adapter use", async () 
         request: { messages: [{ role: "user", content: ["inline"] }] },
       } as unknown as LlmCallInput, test.context),
     TypeError,
-    "ContentRefs",
+    "plain object",
   );
   await assertRejects(
     async () =>
@@ -1261,7 +1262,7 @@ Deno.test("llm.call omits mixed-currency aggregate cost and preserves attempt co
   );
 });
 
-Deno.test("llm.call resolves request content and overlays call options", async () => {
+Deno.test("llm.call consumes prepared content without asset reads and overlays call options", async () => {
   const textRef = ref("text-a");
   const jsonRef = ref("json-a", "json", "application/json");
   const imageRef = Object.freeze({
@@ -1319,7 +1320,10 @@ Deno.test("llm.call resolves request content and overlays call options", async (
       instructions: "",
       messages: [{
         role: "user",
-        content: [textRef, jsonRef, imageRef],
+        content: [{ ...textRef, value: "hello" }, {
+          ...jsonRef,
+          value: { a: 1 },
+        }, { ...imageRef, value: new Uint8Array([1, 2, 3]) }],
         metadata: { source: "message" },
       }],
     },
@@ -1418,14 +1422,19 @@ Deno.test("llm.call keeps attachments reference-only while preserving mixed cont
     request: {
       messages: [{
         role: "user",
-        content: [textRef, exportedAttachment, defaultFile, inlineFile],
+        content: [
+          { ...textRef, value: "before attachment" },
+          { ...exportedAttachment, resolve: false },
+          { ...defaultFile, resolve: false },
+          { ...inlineFile, value: new Uint8Array([1, 2, 3]) },
+        ],
       }],
     },
   }, test.context);
 
   assertEquals(
     test.resolvedRequests().map((refs) => refs.map((item) => item.assetId)),
-    [["text-a", "file-inline-a"]],
+    [],
   );
   assertEquals(seen?.request.messages[0].content, [
     {
@@ -1490,7 +1499,12 @@ Deno.test("llm.call does not resolve an attachment-only request", async () => {
 
   await callLlmAction.execute({
     ...emptyInput,
-    request: { messages: [{ role: "user", content: [attachment] }] },
+    request: {
+      messages: [{
+        role: "user",
+        content: [{ ...attachment, resolve: false }],
+      }],
+    },
   }, test.context);
 
   assertEquals(test.resolvedRequests(), []);

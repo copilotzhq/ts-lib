@@ -1,4 +1,9 @@
 import {
+  actionContentDeclaration,
+  prepareActionContentInput,
+} from "./content.ts";
+import type { RuntimeContent } from "./types.ts";
+import {
   isJsonSchemaValidationError,
   validateAgainstJsonSchema,
 } from "../collections/validate.ts";
@@ -90,6 +95,7 @@ export type ActionInvocationFrame = Readonly<{
 
 export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
+  content?: RuntimeContent;
   createInvocationKey?: (actionId: string) => string;
   identity?: RuntimeIdentity;
   signal: AbortSignal;
@@ -428,12 +434,29 @@ function actionCaller(
 
     // Execution receives the canonical value; lifecycle persistence applies
     // the schema-owned protected projection inside its storage boundary.
-    const durableInput = durableActionValue(input);
-    if (action.inputSchema) {
+    if (
+      action.content && (!invoker.content || actionDefinitionHasSecrets(action))
+    ) {
+      throw new TypeError(
+        "Action content requires runtime content services and non-secret schemas.",
+      );
+    }
+    const preparedContent = action.content
+      ? await prepareActionContentInput(
+        input,
+        actionContentDeclaration(action.content),
+        invoker.content!,
+        frame.signal,
+      )
+      : undefined;
+    const durableInput = preparedContent?.durableInput ??
+      durableActionValue(input);
+    const validateInput = (value: unknown) => {
+      if (!action.inputSchema) return;
       try {
         validateAgainstJsonSchema(
           action.inputSchema,
-          durableInput,
+          value,
           `Action '${action.id}' input`,
         );
       } catch (error) {
@@ -442,7 +465,8 @@ function actionCaller(
         }
         throw error;
       }
-    }
+    };
+    if (!preparedContent) validateInput(durableInput);
     const inputSecrets = protectedStrings(action.inputSchema, durableInput);
     assertMetadataIsSecretFree(frame.metadata, inputSecrets);
     const existing = await loadTerminal(
@@ -457,6 +481,11 @@ function actionCaller(
       frame,
       durableInput,
     );
+    const executionInput = preparedContent
+      ? await preparedContent.hydrate()
+      : durableInput;
+    if (preparedContent) validateInput(executionInput);
+    throwIfAborted(frame.signal);
     if (!invoked) {
       await invoker.actionLifecycle.emit({
         ...lifecycleCommon(frame, durableInput),
@@ -507,7 +536,7 @@ function actionCaller(
     try {
       throwIfAborted(frame.signal);
       const output = await action.execute(
-        durableInput as never,
+        executionInput as never,
         context as never,
       );
       await progressTail;

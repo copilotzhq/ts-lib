@@ -1,3 +1,8 @@
+import {
+  type ActionContentDeclaration,
+  actionContentDeclaration,
+} from "./content.ts";
+import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
 import type {
   ActionContext,
   ActionDefinition,
@@ -8,6 +13,7 @@ import { snapshotActionSchema } from "./secret.ts";
 
 const ACTION_KEYS = new Set([
   "id",
+  "content",
   "inputSchema",
   "outputSchema",
   "execute",
@@ -48,6 +54,11 @@ export function isActionDefinition(
     !/^[a-z][a-z0-9_.-]*$/i.test(value.id.trim()) ||
     typeof value.execute !== "function"
   ) return false;
+  try {
+    if (value.content !== undefined) actionContentDeclaration(value.content);
+  } catch {
+    return false;
+  }
   return (value.inputSchema === undefined || isRecord(value.inputSchema)) &&
     (value.outputSchema === undefined || isRecord(value.outputSchema));
 }
@@ -62,6 +73,7 @@ export function defineAction<
 >(
   definition: Readonly<{
     id: string;
+    content?: ActionContentDeclaration;
     inputSchema?: TInputSchema;
     outputSchema?: TOutputSchema;
     execute(
@@ -97,8 +109,25 @@ export function defineAction<
     "outputSchema",
     definition.outputSchema,
   );
+  const content = definition.content === undefined
+    ? undefined
+    : actionContentDeclaration(definition.content);
+  if (
+    content &&
+    actionDefinitionHasSecrets({
+      id,
+      inputSchema,
+      outputSchema,
+      execute: definition.execute as never,
+    })
+  ) {
+    throw new TypeError(
+      "Action content cannot yet be combined with secret schemas.",
+    );
+  }
   return Object.freeze({
     id,
+    ...(content ? { content } : {}),
     ...(inputSchema ? { inputSchema } : {}),
     ...(outputSchema ? { outputSchema } : {}),
     execute: definition.execute,

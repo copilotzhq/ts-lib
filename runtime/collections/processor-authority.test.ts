@@ -1,8 +1,8 @@
+import { createCollectionKernel as createCollectionRuntime } from "./kernel.ts";
 import { assert, assertEquals } from "@std/assert";
 
 import {
   type CollectionRecord,
-  createCollectionRuntime,
   defineCollection,
   isCollectionNoop,
   relation,
@@ -73,7 +73,6 @@ Deno.test("static processor uses frozen event body and captures input in a child
   const store = createEventStore({ session, schema });
   const seen: Array<Readonly<{ title: string; fetched: boolean }>> = [];
   const sideEffects: string[] = [];
-  let runtime: ReturnType<typeof createCollectionRuntime> | undefined;
   const processor = defineProcessor({
     id: "job.capture-external",
     on: [{
@@ -162,7 +161,7 @@ Deno.test("static processor uses frozen event body and captures input in a child
   });
   const coordinator = createEventCoordinator({ store, registry, executor });
   let nextId = 0;
-  runtime = createCollectionRuntime({
+  const runtime = createCollectionRuntime({
     coordinator,
     session,
     eventStore: store,

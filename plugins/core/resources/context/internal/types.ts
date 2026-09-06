@@ -43,7 +43,7 @@ export type ContextContribution = Readonly<{
   id: string;
   title: string;
   role: "context" | "evidence";
-  content: ContentInput | ContentRef;
+  content: ContentInput;
   source?: ContextSourceRef;
   capturedAt?: string;
 }>;

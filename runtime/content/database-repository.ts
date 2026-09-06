@@ -1300,7 +1300,7 @@ export function createDatabaseAssetRepository(
           if (owners.rows[0]) {
             throw createContentError(
               "asset_conflict",
-              `Asset is still referenced by declared Collection content: ${assetId}`,
+              `Asset is still referenced by durable content: ${assetId}`,
               { namespace, assetId },
             );
           }

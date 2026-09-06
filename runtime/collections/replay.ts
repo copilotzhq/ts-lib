@@ -322,6 +322,7 @@ export async function rebuildNamespaceProjections(
       context: EventMutationContext,
       namespace: string,
       body: unknown,
+      event: DurableEvent,
     ): Promise<void>;
   }>,
 ): Promise<void> {
@@ -420,7 +421,7 @@ export async function rebuildNamespaceProjections(
   await eachEvent(async (event) => {
     let rawBody = runtime ? await bodyFor(event) : undefined;
     if (rawBody !== undefined) {
-      await runtime?.projectBody(context, namespace, rawBody);
+      await runtime?.projectBody(context, namespace, rawBody, event);
     }
     if (isRelationLifecycleEvent(event)) {
       rawBody ??= await bodyFor(event);

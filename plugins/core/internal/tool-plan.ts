@@ -5,10 +5,10 @@ import {
   parseActionLifecycleEvent,
 } from "@copilotz/copilotz/actions";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
-import type {
-  ContentInput,
-  ContentRef,
-  ContentSequence,
+import {
+  type ContentInput,
+  type ContentSequence,
+  isContentRef,
 } from "@copilotz/copilotz/content";
 import {
   deriveWorkflowId,
@@ -381,15 +381,12 @@ async function stageResult(
   );
   const operationKey =
     `tool-plan:${planId}:${branchIndex}:${stageIndex}:result`;
-  const prepared = await context.content.prepare(terminalContent(terminal), {
-    operationKey,
-  });
   await collection.create({
     id,
     planId,
     branchIndex,
     stageIndex,
-    content: prepared as never,
+    content: terminalContent(terminal),
     metadata: {},
   }, { operationKey });
   // A deterministic id makes post-create/pre-settle recovery idempotent. It
@@ -425,7 +422,9 @@ async function readTerminal(
     stageIndex?: number;
   }>,
 ): Promise<{ terminal: ToolTerminal; stageIndex: number }> {
-  const item = await context.collections.toolPlanStageResult?.get({ id });
+  const item = await context.collections.toolPlanStageResult?.get({ id }, {
+    content: true,
+  });
   if (!item) throw new Error(`Tool stage result '${id}' was not found.`);
   if (
     expected &&
@@ -438,14 +437,17 @@ async function readTerminal(
       "Tool stage result does not match its expected plan cursor.",
     );
   }
-  const content = item.content as ContentSequence;
-  if (content.length !== 1) {
+  const content = item.content;
+  if (!Array.isArray(content) || content.length !== 1) {
     throw new Error(
       "Tool stage result must have exactly one content envelope.",
     );
   }
-  const resolved = await context.content.resolve(content[0] as ContentRef);
-  const value = record(resolved.value);
+  const entry: unknown = content[0];
+  if (!isContentRef(entry) || entry.kind !== "json" || !("value" in entry)) {
+    throw new Error("Tool stage result must contain resolved JSON content.");
+  }
+  const value = record(entry.value);
   if (
     Object.keys(value).some((key) =>
       ![
@@ -804,12 +806,8 @@ export async function projectAndAdvanceToolPlan(
   );
   const resultKey =
     `tool-plan:${metadata.planId}:${metadata.planIndex}:${metadata.stageIndex}:result`;
-  // Content preparation is durable and idempotent but cannot be part of the
-  // collection transaction. The result record and cursor settlement must be:
-  // otherwise a crash could leave an existing terminal behind a running lease.
-  const prepared = await context.content.prepare(terminalContent(terminal), {
-    operationKey: resultKey,
-  });
+  // Collection planning prepares content before the atomic commit of the result
+  // record and cursor settlement, so a crash cannot leave a running lease behind.
   // Parallel roots may settle against the same plan revision. Retry only the
   // optimistic collection revision conflict; all semantic failures still
   // surface to the durable delivery.
@@ -826,7 +824,7 @@ export async function projectAndAdvanceToolPlan(
           planId: metadata.planId,
           branchIndex: metadata.planIndex,
           stageIndex: metadata.stageIndex,
-          content: prepared as never,
+          content: terminalContent(terminal),
           metadata: {},
         }, { operationKey: resultKey });
         await plans.commands.settleStage({
@@ -995,21 +993,16 @@ function intersectVisibility(
     requesterId: requester,
   };
 }
-function isRef(value: unknown): value is ContentRef {
-  const item = record(value);
-  return typeof item.assetId === "string" && typeof item.kind === "string" &&
-    typeof item.role === "string" && typeof item.mediaType === "string";
-}
 function resultContent(
   terminal: ToolTerminal,
   contentSequenceOutput = false,
 ): ContentInput | ContentSequence {
   if (terminal.status === "completed") {
-    if (isRef(terminal.output)) return terminal.output;
+    if (isContentRef(terminal.output)) return terminal.output;
     if (
       Array.isArray(terminal.output) &&
       (contentSequenceOutput || terminal.output.length > 0) &&
-      terminal.output.every(isRef)
+      terminal.output.every(isContentRef)
     ) return terminal.output as ContentSequence;
     return typeof terminal.output === "string"
       ? { type: "text", role: "tool.output", text: terminal.output }

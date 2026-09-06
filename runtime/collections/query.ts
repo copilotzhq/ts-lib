@@ -1,3 +1,4 @@
+import { compileCollectionPredicate } from "./predicate.ts";
 import type { SqlExecutor } from "../events/index.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import { loadCollectionRecord, mapNode, type NodeRow } from "./reducer.ts";
@@ -237,6 +238,9 @@ export async function queryCollectionRecords(
   const params: unknown[] = [namespace, definition.name];
   const filters = [`namespace = $1`, `type = $2`];
   for (const predicate of [query, ...(query.all ?? [])]) {
+    if (predicate.filter !== undefined) {
+      filters.push(compileCollectionPredicate(predicate.filter, params));
+    }
     for (const [field, values] of Object.entries(predicate.containsAny ?? {})) {
       const path = field.split(".").map(sqlLiteral).join(",");
       filters.push(

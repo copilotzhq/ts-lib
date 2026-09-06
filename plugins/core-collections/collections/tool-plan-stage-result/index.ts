@@ -1,14 +1,11 @@
 /** Defines asset-backed terminal results for Core Tool-plan stages. @module */
 
+import { contentSequenceSchema } from "@copilotz/copilotz/content";
 import {
   type CollectionDefinition,
   defineCollection,
 } from "@copilotz/copilotz/collections";
-import {
-  contentSequenceSchema,
-  metadataSchema,
-  timestampsSchema,
-} from "../internal/schema.ts";
+import { metadataSchema, timestampsSchema } from "../internal/schema.ts";
 
 export const toolPlanStageResultCollection: CollectionDefinition =
   defineCollection({
