@@ -79,6 +79,13 @@ function buildRecoveryCue(reason: string | null): string {
       return `<recovery_cue>
 The previous assistant message is already present in the conversation and is correct up to the attempted tool call. Do not repeat it.
 If you intended to call a tool, emit only the corrected <tool_calls> block.
+Inside it, write one complete JSON object per line, each with exactly "name" and "arguments".
+Do not wrap calls in an array or separate objects with commas. Remove any surrounding array brackets and replace commas between calls with newlines; preserve arrays inside arguments.
+Parallel format (substitute tools and arguments from your catalog):
+<tool_calls>
+{"name":"tool_name","arguments":{"key":"first"}}
+{"name":"tool_name","arguments":{"key":"second"}}
+</tool_calls>
 If you did not intend to call a tool, continue from the previous assistant message without any tool or result protocol.
 </recovery_cue>`;
     case "orphaned_tool_result":

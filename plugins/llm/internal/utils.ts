@@ -2083,6 +2083,7 @@ Rules:
 - Each object must have exactly "name" and "arguments".
 - "arguments" must be a JSON object.
 - New lines run in parallel; stages joined by | run sequentially.
+- For parallel calls, write each complete JSON object on its own line. Do not wrap calls in an array or put commas between objects. Array-valued arguments inside an object are allowed.
 - Use { "jq": "filter" } to reshape a prior stage's JSON before the next tool.
 - Use only tool names from the catalog.
 - Do not use provider-native tool syntax or any non-Copilotz tool format.
@@ -2095,6 +2096,13 @@ Sure — checking that now.
 <tool_calls>
 { "name": "tool_name", "arguments": { "key": "value" } }
 </tool_calls>
+
+Parallel example (use only tools and arguments from your actual catalog):
+<tool_calls>
+{"name":"tool_name","arguments":{"key":"first"}}
+{"name":"tool_name","arguments":{"key":"second"}}
+</tool_calls>
+These are two independent calls. There is no surrounding array and no comma between the lines.
 
 === TOOL CATALOG (read-only) ===
 

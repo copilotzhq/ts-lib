@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.66.4 — 2026-09-05
+
+- Clarify parallel tool-call framing and malformed-call repair instructions.
+- Permit Model fallback after reasoning and speculative tool drafts while
+  preserving distinct stream identities and failed outcomes. Published answer
+  and media output still prevent fallback.
+
 ## 0.66.3 — 2026-09-05
 
 Authorize conversation Asset reads through their owning thread and message,

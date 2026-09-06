@@ -2220,6 +2220,101 @@ Deno.test("llm.call falls back after malformed speculative tool drafts without a
   );
 });
 
+Deno.test("llm.call falls back after reasoning and malformed speculative tool drafts without accepting a Tool", async () => {
+  let releaseResult!: () => void;
+  const resultReady = new Promise<void>((resolve) => {
+    releaseResult = resolve;
+  });
+  let backupCalls = 0;
+  const primary: LlmAdapter = {
+    call() {
+      return invocation(
+        resultReady.then(() => ({
+          content: "discarded",
+          toolCalls: [{ id: "", action: "search", input: {} }],
+          attempts: [{ status: "completed" as const }],
+        } as unknown as LlmAdapterResult)),
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              lane: "reasoning",
+              mediaType: "text/plain",
+              bytes: encoder.encode("thinking"),
+            });
+            controller.enqueue({
+              lane: "tool-calls",
+              mediaType: "application/x-ndjson",
+              bytes: encoder.encode('{"draft":true}\n'),
+            });
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const backup: LlmAdapter = {
+    call() {
+      backupCalls += 1;
+      return invocation(
+        {
+          content: "recovered",
+          attempts: [{ status: "completed" }],
+        },
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              lane: "content",
+              mediaType: "text/plain",
+              bytes: encoder.encode("recovered"),
+            });
+            controller.close();
+          },
+        }),
+      );
+    },
+  };
+  const test = fixture({
+    models: {
+      primary: model("primary", "primary-model"),
+      backup: model("backup", "backup-model"),
+    },
+    adapters: { primary, backup },
+  });
+
+  const executing = callLlmAction.execute({
+    ...emptyInput,
+    models: ["primary", "backup"],
+    stream: { id: "tool-draft" },
+  }, test.context);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEquals(test.opened.length, 2);
+  assertEquals(test.opened[0]?.input.role, "reasoning");
+  releaseResult();
+  const output = await executing;
+
+  assertEquals(output.model, "backup");
+  assertEquals(backupCalls, 1);
+  assertEquals(output.toolCalls, undefined);
+  assertEquals(test.opened[0]?.aborted, true);
+  assertEquals(test.opened.map((stream) => stream.input.id), [
+    "tool-draft:provider-attempt:0:reasoning:text%2Fplain",
+    "tool-draft:provider-attempt:0:tool-calls:application%2Fx-ndjson",
+    "tool-draft:provider-attempt:1:content:text%2Fplain",
+  ]);
+  assertEquals(
+    test.opened.map((stream) => stream.input.metadata?.llmAttemptId),
+    [
+      "run-a",
+      "run-a",
+      "run-a",
+    ],
+  );
+  assertEquals(
+    test.prepared.some((entry) => entry.operationKey.includes("discarded")),
+    false,
+  );
+});
+
 Deno.test("llm.call carries bounded Adapter rejected-attempt evidence through Action progress", async () => {
   const adapter: LlmAdapter = {
     call() {

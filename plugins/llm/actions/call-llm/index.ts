@@ -1296,8 +1296,11 @@ async function writerFor(
   if (!opening) {
     // `streams.open` itself may establish the durable publication boundary
     // before its Promise rejects (for example, if a later live observer fails).
-    // Conservatively block Model fallback before opening non-speculative lanes.
-    if (!isSpeculativeToolDraftLane(lane)) state.visible = true;
+    // Answer/media publication commits this candidate. Reasoning and tool
+    // drafts may be replaced by a later candidate without executing a Tool.
+    if (lane !== "reasoning" && !isSpeculativeToolDraftLane(lane)) {
+      state.visible = true;
+    }
     const base = input.stream.id?.trim() || context.action.runId;
     // Provider attempts are distinct physical evidence lanes. Reusing the
     // previous semantic id would either splice retry bytes or conflict with

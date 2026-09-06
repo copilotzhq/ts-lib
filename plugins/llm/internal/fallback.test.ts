@@ -2444,6 +2444,97 @@ Deno.test("chat retries on a malformed tool call then recovers the canonical for
   }
 });
 
+Deno.test("chat repairs comma-separated parallel calls into independent JSON lines", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const warnings: unknown[][] = [];
+  let calls = 0;
+
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  globalThis.fetch = (_url, init) => {
+    const requestBody = String(init?.body ?? "");
+    if (calls === 1) {
+      assertEquals(
+        requestBody.includes(
+          "Do not wrap calls in an array or separate objects with commas",
+        ),
+        true,
+      );
+    }
+    calls += 1;
+    if (calls === 1) {
+      // Production failure: several tool objects on one line with array syntax.
+      return Promise.resolve(
+        sse([
+          {
+            choices: [{
+              delta: {
+                content:
+                  '<tool_calls>\n[{"name":"search","arguments":{"q":"first"}},{"name":"search","arguments":{"q":"second"}}]\n</tool_calls>',
+              },
+            }],
+          },
+          { choices: [{ delta: {}, finish_reason: "stop" }] },
+        ]),
+      );
+    }
+    return Promise.resolve(
+      sse([
+        {
+          choices: [{
+            delta: {
+              content:
+                '<tool_calls>\n{"name":"search","arguments":{"q":"first"}}\n{"name":"search","arguments":{"q":"second"}}\n</tool_calls>',
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ]),
+    );
+  };
+
+  try {
+    const response = await chat(
+      { messages: [{ role: "user", content: "hi" }], tools: [searchTool] },
+      {
+        provider: "anthropic",
+        model: "primary",
+        apiKey: "test",
+        estimateCost: false,
+      },
+      {},
+      undefined,
+      {
+        ...registry,
+        anthropic: (config) => ({
+          ...registry.anthropic!(config),
+          body: (messages) => ({ messages }),
+        }),
+      },
+    );
+
+    assertEquals(calls, 2);
+    assertEquals(response.toolCalls?.length, 2);
+    assertEquals(
+      response.toolCalls?.map((call) => JSON.parse(call.args as string)),
+      [{ q: "first" }, { q: "second" }],
+    );
+    assertEquals(response.toolCalls?.[0].tool.id, "search");
+    assertEquals(
+      warnings.some((w) =>
+        (w[1] as Record<string, unknown>)?.reason === "malformed_tool_call"
+      ),
+      true,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("chat does NOT retry when empty response has tool calls", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
