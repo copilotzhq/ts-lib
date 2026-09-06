@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.67.0 — 2026-09-06
+
+- Unify scoped Collection execution and runtime-owned content preparation,
+  resolution, strict decoding, and durable Action inputs.
+- Resolve authorized Core history in the runtime and return metadata plus typed
+  values; exclude private tool bodies and pagination lookahead from resolution.
+- Add a browser-safe content codec export and resolved Core client message
+  types.
+- Integrate prepared content throughout Core and LLM consumers without changing
+  persisted conversation or Asset formats.
+- Coordinate with the frontend adapter that consumes inline history values.
+
 ## 0.66.7 — 2026-09-06
 
 - Synchronize with the frontend release that scopes preparation activity to each
