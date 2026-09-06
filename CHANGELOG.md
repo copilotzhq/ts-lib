@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.66.7 — 2026-09-06
+
+- Synchronize with the frontend release that scopes preparation activity to each
+  Agent's model invocation. No server protocol or persistence changes.
+
 ## 0.66.6 — 2026-09-06
 
 - Restore history-aware stream checkpoints and bounded snapshot catch-up over
