@@ -265,6 +265,7 @@ export const messageCollection: CollectionDefinition = defineCollection({
       inputSchema: {
         type: "object",
         properties: {
+          overfetch: { type: "boolean" },
           content: {
             anyOf: [
               { type: "boolean" },
@@ -325,9 +326,68 @@ export const messageCollection: CollectionDefinition = defineCollection({
               : []),
           ],
         };
-        // Runtime callers can opt into declared content; the HTTP wire stays reference-based.
-        const options = {
-          content: input.content as CollectionContentOptions | undefined,
+        // Select and redact first. Only unchanged, fully visible records may be
+        // re-read with content; status-only records never enter that read.
+        const finish = async (
+          records: readonly HistoryMessageRecord[],
+          contentLimit = records.length,
+        ) => {
+          const projected = records.map((record) =>
+            projectHistoryRecord(record, viewers)
+          );
+          if (!input.content) return projected;
+          const visible = records.filter((record, index) =>
+            index < contentLimit && projected[index] === record
+          );
+          const resolved = new Map<string, HistoryMessageRecord>();
+          for (let offset = 0; offset < visible.length; offset += 512) {
+            const batch = visible.slice(offset, offset + 512);
+            const values = await read.list("message", {
+              where: { threadId },
+              filter: {
+                and: [
+                  filter,
+                  ...(viewers
+                    ? [{
+                      not: {
+                        and: [
+                          { field: "visibility.kind", eq: "tool" },
+                          { field: "visibility.policy", eq: "public_status" },
+                          {
+                            not: {
+                              field: "visibility.requesterId",
+                              in: viewers,
+                            },
+                          },
+                        ],
+                      },
+                    }]
+                    : []),
+                  { field: "id", in: batch.map((record) => record.id) },
+                ],
+              },
+              limit: batch.length,
+            }, {
+              content: input.content as CollectionContentOptions,
+            }) as readonly HistoryMessageRecord[];
+            const versions = new Map(
+              batch.map((record) => [record.id, record.updatedAt]),
+            );
+            for (const value of values) {
+              if (versions.get(value.id) !== value.updatedAt) {
+                throw new Error(
+                  "Message history changed during content preparation.",
+                );
+              }
+              resolved.set(value.id, value);
+            }
+            if (values.length !== batch.length) {
+              throw new Error(
+                "Message history changed during content preparation.",
+              );
+            }
+          }
+          return projected.map((record) => resolved.get(record.id) ?? record);
         };
         // Exact reads use the same database predicate as pages and cursor validation.
         if (typeof input.messageId === "string") {
@@ -335,8 +395,8 @@ export const messageCollection: CollectionDefinition = defineCollection({
             where: { threadId, id: input.messageId },
             filter,
             limit: 1,
-          }, options) as readonly HistoryMessageRecord[];
-          return records.map((record) => projectHistoryRecord(record, viewers));
+          }) as readonly HistoryMessageRecord[];
+          return await finish(records);
         }
         const limit = Number(input.limit ?? 100);
         if (!Number.isSafeInteger(limit) || limit <= 0) {
@@ -345,7 +405,10 @@ export const messageCollection: CollectionDefinition = defineCollection({
           );
         }
         // Event-native overfetches one record for exact pageInfo.hasMore.
-        const selectedLimit = Math.min(limit, 1_001);
+        const selectedLimit = Math.min(
+          limit + (input.overfetch === true ? 1 : 0),
+          1_001,
+        );
         const selected: HistoryMessageRecord[] = [];
 
         // Collection cursors already follow the requested sort direction.
@@ -359,16 +422,14 @@ export const messageCollection: CollectionDefinition = defineCollection({
             ...(scanAfter ? { after: scanAfter } : {}),
             ...(before ? { before } : {}),
             limit: batchLimit,
-          }, options) as readonly HistoryMessageRecord[];
-          selected.push(
-            ...page.map((record) => projectHistoryRecord(record, viewers)),
-          );
+          }) as readonly HistoryMessageRecord[];
+          selected.push(...page);
           if (page.length < batchLimit) break;
           const next = page.at(-1)?.id;
           if (!next || next === scanAfter) break;
           scanAfter = next;
         }
-        return Object.freeze(selected);
+        return Object.freeze(await finish(selected, limit));
       },
     },
   },

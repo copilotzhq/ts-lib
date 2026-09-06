@@ -63,17 +63,28 @@ async function fixture(
     "tenant",
     resolver,
   );
+  let beforeResolve: (() => Promise<void>) | undefined;
   const read: CollectionNamedQueryRead = {
     async get(collection, id) {
       if (collection === "thread") return { id, activeMessageBranch: branch };
       return (await list({ where: { id }, limit: 1 }))[0] ?? null;
     },
-    list(_collection, query = {}, options) {
+    async list(_collection, query = {}, options) {
+      if (options?.content) await beforeResolve?.();
       return list(query, options);
     },
   };
   return {
     assets,
+    beforeResolve(callback: () => Promise<void>) {
+      beforeResolve = callback;
+    },
+    async patch(id: string, patch: Record<string, unknown>) {
+      await session.query(
+        "UPDATE history_nodes SET data = data || $1::jsonb WHERE id = $2",
+        [JSON.stringify(patch), id],
+      );
+    },
     assetReads,
     pages,
     select: (input: Record<string, unknown> = {}) =>
@@ -236,6 +247,7 @@ Deno.test("history retains the 1001 overfetch bound without scanning discarded r
   );
   assertEquals((await f.select({ limit: 1001 })).length, 1001);
   assertEquals(f.pages.map((p) => p.limit), [1000, 1]);
+  assertEquals((await f.select({ limit: 1001, content: true })).length, 1001);
 });
 
 Deno.test("history resolves only the selected page through runtime content options", async () => {
@@ -276,6 +288,13 @@ Deno.test("history resolves only the selected page through runtime content optio
     }))[0].content,
     [{ ...ref, value: "Hello" }],
   );
+  const lookahead = await f.select({
+    limit: 1,
+    overfetch: true,
+    content: true,
+  });
+  assertEquals(lookahead.map((record) => record.id), ["visible", "later"]);
+  assertEquals(lookahead[1].content, [{ ...ref, assetId: "missing-later" }]);
   assertEquals(await f.select({ messageId: "hidden", content: true }), []);
   await assertRejects(
     () =>
@@ -285,4 +304,62 @@ Deno.test("history resolves only the selected page through runtime content optio
     TypeError,
     "Undeclared content field",
   );
+});
+
+Deno.test("resolved history never reads public-status result or reasoning assets", async () => {
+  const ref = {
+    assetId: "missing-private",
+    kind: "text",
+    role: "body",
+    mediaType: "text/plain",
+  };
+  await using f = await fixture([
+    {
+      id: "status",
+      content: [ref],
+      metadata: { llmReasoning: [ref], toolStatus: "completed" },
+      visibility: {
+        kind: "tool",
+        policy: "public_status",
+        requesterId: "other",
+      },
+    },
+  ]);
+  for (const input of [{ limit: 1 }, { messageId: "status" }]) {
+    const result = await f.select({ ...input, content: true });
+    assertEquals(result.length, 1);
+    assertEquals(result[0].content, []);
+    assertEquals(
+      (result[0].metadata as Record<string, unknown>).llmReasoning,
+      undefined,
+    );
+  }
+  assertEquals(f.assetReads, []);
+});
+
+Deno.test("history repeats visibility checks before resolving a concurrently restricted message", async () => {
+  await using f = await fixture([{
+    id: "changing",
+    content: [{
+      assetId: "never-read",
+      kind: "text",
+      role: "body",
+      mediaType: "text/plain",
+    }],
+  }]);
+  f.beforeResolve(() =>
+    f.patch("changing", {
+      visibility: {
+        kind: "tool",
+        policy: "public_status",
+        requesterId: "other",
+      },
+    })
+  );
+  await assertRejects(
+    () => Promise.resolve(f.select({ content: true })),
+    Error,
+    "changed during content preparation",
+  );
+  assertEquals(f.assetReads, []);
 });

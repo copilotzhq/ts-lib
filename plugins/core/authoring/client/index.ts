@@ -1,4 +1,13 @@
 /** Typed conversation API over the browser-safe generic client. @module */
+import {
+  mapHistoryContent,
+  type ResolvedConversationMessage,
+} from "./history-content.ts";
+export type {
+  ResolvedConversationMessage,
+  ResolvedMessageContent,
+} from "./history-content.ts";
+
 import type {
   CopilotzClient,
   ObserveOptions,
@@ -62,17 +71,23 @@ export function createCoreClient(client: CopilotzClient): CoreClient {
           data: ConversationThread;
         }).data;
       },
-      messages: (
+      messages: async (
         id: string,
         input: HistoryQuery = {},
         options: ReadOptions = {},
-      ) =>
-        client.http.json(
+      ): Promise<Page<ResolvedConversationMessage>> => {
+        const page = await client.http.json(
           `${path(id)}/messages${query(input)}`,
           options,
-        ) as Promise<
-          Page<ConversationMessage>
-        >,
+        ) as Page<ConversationMessage>;
+        return {
+          ...page,
+          data: page.data.map((message) =>
+            mapHistoryContent(message, "decode") as ResolvedConversationMessage
+          ),
+        };
+      },
+
       send: (input: SendInput, options: SubmitOptions) =>
         client.actions.submit(
           "copilotz.core.conversation.send",
@@ -144,7 +159,7 @@ export type CoreClient = Readonly<{
       id: string,
       input?: HistoryQuery,
       options?: ReadOptions,
-    ): Promise<Page<ConversationMessage>>;
+    ): Promise<Page<ResolvedConversationMessage>>;
     send(input: SendInput, options: SubmitOptions): Promise<OperationReceipt>;
     observe(id: string, options: ObserveOptions): Promise<string | undefined>;
     update(

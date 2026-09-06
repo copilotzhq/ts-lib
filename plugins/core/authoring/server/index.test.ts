@@ -209,12 +209,15 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       externalId: "test-tool",
       participantType: "tool",
     });
+    const retainedContent =
+      (await records.message.get({ id: page.data[1].id }))!.content;
+    assertEquals(page.data[1].content[0].value, "Hello 🌎");
     await records.message.create({
       id: "status-result",
       threadId: result.threadId,
       senderId: "test-tool",
       recipientIds: [],
-      content: page.data[1].content,
+      content: retainedContent,
       visibility: {
         kind: "tool",
         policy: "public_status",
@@ -296,7 +299,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       await records.message.create({
         threadId: result.threadId,
         senderId: "person",
-        content: answer.content,
+        content: retainedContent,
         ...extra,
       });
       await assertRejects(
@@ -309,7 +312,7 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       threadId: result.threadId,
       senderId: "person",
       content: [binary.data.content],
-      metadata: { llmReasoning: answer.content },
+      metadata: { llmReasoning: retainedContent },
     });
     assertEquals([
       ...new Uint8Array(
@@ -330,6 +333,10 @@ Deno.test("Core round trip keeps stored history, actor identity, and multipart b
       order: "desc",
     });
     assertEquals(visible.data[0].id, "attachment");
+    assertEquals(
+      visible.data[0].content[0].value,
+      new Uint8Array([0, 255, 128]),
+    );
     await records.message.delete({ id: "attachment" });
     await assertRejects(
       () => core.messages.asset(result.threadId, "attachment", assetId),

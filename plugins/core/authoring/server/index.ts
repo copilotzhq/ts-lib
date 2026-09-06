@@ -1,4 +1,6 @@
 /** Reusable conversation HTTP endpoints; application policy remains in Server. @module */
+import { mapHistoryContent } from "../client/history-content.ts";
+
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import {
   createHttpAdapter,
@@ -151,8 +153,10 @@ export function createCoreServerPlugin(): CopilotzPlugin {
           const records = await context.read.query("message", "history", {
             ...input,
             threadId: context.params.id,
+            content: true,
             viewerParticipantIds: [context.scope.actor!.id],
-            limit: limit + 1,
+            limit,
+            overfetch: true,
           });
           const messages = await Promise.all(
             records.slice(0, limit).map(async (record) => {
@@ -188,7 +192,9 @@ export function createCoreServerPlugin(): CopilotzPlugin {
             { checkpoint, actionRunIds },
           );
           return Response.json({
-            data: messages,
+            data: messages.map((message) =>
+              mapHistoryContent(message, "encode")
+            ),
             pageInfo: {
               checkpoint: coveredCheckpoint,
               hasMore: records.length > limit,

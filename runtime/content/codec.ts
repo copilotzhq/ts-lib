@@ -1,3 +1,4 @@
+/** Browser-safe content serialization and reference validation. @module */
 import { assertJsonValue } from "../json.ts";
 import { base64ToBytes, bytesToBase64, parseDataUrl } from "./encoding.ts";
 import { isContentRef } from "./schema.ts";
@@ -136,3 +137,6 @@ export function encodeContent(
     ? Object.freeze(input.map(encode))
     : encode(input);
 }
+
+export { isContentRef } from "./schema.ts";
+export type { ContentJsonValue, ContentRef } from "./types.ts";

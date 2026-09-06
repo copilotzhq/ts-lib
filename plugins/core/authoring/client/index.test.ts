@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   CopilotzHttpError,
   createCopilotzClient,
@@ -58,4 +58,43 @@ Deno.test("Core reads preserve structured authorization errors", async () => {
   );
   assertEquals(error.status, 403);
   assertEquals(error.code, "forbidden");
+});
+
+Deno.test("resolved history preserves text, JSON, binary and reasoning through JSON HTTP", async () => {
+  const { mapHistoryContent } = await import("./history-content.ts");
+  const ref = {
+    assetId: "asset",
+    role: "body",
+    mediaType: "application/octet-stream",
+  };
+  const original = {
+    id: "message",
+    metadata: { llmReasoning: [{ ...ref, kind: "text", value: "Reason 🌎" }] },
+    content: [
+      { ...ref, kind: "text", value: "Hello 🌎" },
+      { ...ref, kind: "json", value: { answer: 42, nested: [null, true] } },
+      { ...ref, kind: "file", value: new Uint8Array([0, 255, 128, 1]) },
+    ],
+  };
+  const core = createCoreClient(createCopilotzClient({
+    baseUrl: "https://test/api",
+    fetch: (() =>
+      Promise.resolve(Response.json({
+        data: [mapHistoryContent(original, "encode")],
+        pageInfo: { hasMore: false },
+      }))) as typeof fetch,
+  }));
+  assertEquals<unknown>(
+    (await core.threads.messages("thread")).data[0],
+    original,
+  );
+  assertThrows(() =>
+    mapHistoryContent({
+      ...original,
+      content: [{
+        ...ref,
+        kind: "file",
+        value: { type: "file", dataBase64: "!" },
+      }],
+    }, "decode"), TypeError);
 });

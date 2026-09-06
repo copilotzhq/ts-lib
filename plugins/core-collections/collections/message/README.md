@@ -30,17 +30,22 @@ metadata removed by Core's projection.
 
 Runtime callers can supply `content: true` or
 `content: { fields: ["content"], byteLimit: 1048576 }` in the query input. This
-uses the runtime Collection reader to resolve only the selected page's declared
-content into reference metadata plus `value`. Resolution occurs before status
-redaction, so an opted-in read can fetch a status-only message's body even
-though that body is removed from the returned record. The byte budget applies to
-each Collection read (at most 1,000 records); the legacy 1,001-record history
-bound requires a second read.
+uses the runtime Collection reader to resolve the selected page's declared
+content into reference metadata plus `value`. Core first selects and redacts the
+page, then re-reads only fully visible records with content enabled. That
+bounded read repeats visibility constraints and checks `updatedAt`, so private
+status-only bodies are never loaded and concurrent changes fail explicitly. The
+byte budget applies to each batch of at most 512 records.
 
-Default reads and the HTTP history response still contain references. Binary
-values require an explicit HTTP representation before resolved history can be
-enabled there. The private Agent window keeps its separate visibility policy,
-now compiled into database predicates before pagination. Core expands tool/ask
+HTTP uses `overfetch: true` with the actual page limit. The query returns one
+extra visible record for `hasMore`, but resolves content only inside the
+requested page; the facade discards that lookahead record. Missing lookahead
+assets cannot fail the returned page.
+
+Default Collection reads still contain references. HTTP history opts into
+resolved content; the Core browser client decodes binary values with the shared
+media codec. The private Agent window keeps its separate visibility policy, now
+compiled into database predicates before pagination. Core expands tool/ask
 dependencies and projects the participant-specific transcript before resolving
 the final selected messages. Attachment descriptors stay unloaded; only the
 target Agent's own assistant turns include resolved reasoning. The live
