@@ -40,6 +40,46 @@ Deno.test("OpenAI auto-selects Responses for current model families", () => {
   assertEquals("prompt_cache_key" in body, false);
 });
 
+for (const reasoningEffort of ["low", "high"] as const) {
+  Deno.test(`OpenAI auto-selects Responses and reasoning for GPT-6 Astra (${reasoningEffort})`, () => {
+    const config: ProviderConfig = {
+      provider: "openai",
+      model: "gpt-6-astra",
+      apiKey: "test",
+      reasoningEffort,
+    };
+    const provider = openaiProvider(config);
+    const body = provider.body(messages, config) as Record<string, unknown>;
+
+    assertEquals(provider.endpoint, "https://api.openai.com/v1/responses");
+    assertEquals(body.model, "gpt-6-astra");
+    assertEquals(body.reasoning, { effort: reasoningEffort, summary: "auto" });
+  });
+}
+
+Deno.test("OpenAI routes normalized GPT-6 Astra names to Responses through a custom base URL", () => {
+  const config: ProviderConfig = {
+    provider: "openai",
+    model: "openai/GPT-6-ASTRA",
+    apiKey: "test",
+    baseUrl: "https://gateway.example/v1/",
+  };
+
+  assertEquals(
+    openaiProvider(config).endpoint,
+    "https://gateway.example/v1/responses",
+  );
+});
+
+Deno.test("OpenAI keeps audio models on Chat Completions in auto mode", () => {
+  const config = keyedConfig({ model: "gpt-6-audio" });
+
+  assertEquals(
+    openaiProvider(config).endpoint,
+    "https://api.openai.com/v1/chat/completions",
+  );
+});
+
 Deno.test("OpenAI builds Responses bodies with Responses field names", () => {
   const config = keyedConfig({
     model: "gpt-5.4",
@@ -135,7 +175,7 @@ Deno.test("OpenAI keeps Chat Completions for older models in auto mode", () => {
 
 Deno.test("OpenAI allows forcing Chat Completions", () => {
   const config = keyedConfig({
-    model: "gpt-5-mini",
+    model: "gpt-6-astra",
     openaiApi: "chat_completions",
   });
   assertEquals(

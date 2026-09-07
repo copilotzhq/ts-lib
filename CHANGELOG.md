@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.67.2 — 2026-09-06
+
+- Automatically route GPT-6 Astra through the Responses API and forward its
+  configured reasoning effort, including low and high.
+
 ## 0.67.1 — 2026-09-06
 
 - Reconcile concurrent Collection content adoption before committing records and

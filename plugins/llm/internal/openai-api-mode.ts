@@ -13,6 +13,7 @@ export function isOpenAIResponsesAutoModel(model: string | undefined): boolean {
   if (normalized.includes("audio")) return false;
 
   return normalized.startsWith("gpt-5") ||
+    normalized.startsWith("gpt-6") ||
     normalized.startsWith("gpt-4.1") ||
     normalized.startsWith("gpt-4o") ||
     /^o\d(?:[-.]|$)/.test(normalized);
@@ -20,7 +21,9 @@ export function isOpenAIResponsesAutoModel(model: string | undefined): boolean {
 
 export function isOpenAIReasoningModel(model: string | undefined): boolean {
   const normalized = normalizedOpenAIModelName(model);
-  return normalized.startsWith("gpt-5") || /^o\d(?:[-.]|$)/.test(normalized);
+  return normalized.startsWith("gpt-5") ||
+    normalized.startsWith("gpt-6") ||
+    /^o\d(?:[-.]|$)/.test(normalized);
 }
 
 export function resolveOpenAIApiMode(
