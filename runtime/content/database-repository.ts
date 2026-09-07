@@ -104,6 +104,11 @@ export type DatabaseAssetRepository =
   }>;
 
 type CollectionAssetAdopter = Readonly<{
+  reconcileMaterializations(
+    transaction: SqlExecutor,
+    plans: readonly AssetMaterializationPlan[],
+  ): Promise<ReadonlyMap<string, AssetManifestEntry>>;
+
   prepareMaterialization(
     input: AssetMutationInput,
   ): Promise<AssetMaterializationPlan>;
@@ -760,6 +765,51 @@ export function createDatabaseAssetRepository(
     });
   };
 
+  const lockMaterializationKeys = async (
+    transaction: SqlExecutor,
+    candidates: readonly { namespace: string; key?: string }[],
+  ): Promise<void> => {
+    const keys = [
+      ...new Set(
+        candidates.flatMap(({ namespace, key }) =>
+          key ? [JSON.stringify([namespace, key])] : []
+        ),
+      ),
+    ].sort();
+    for (const key of keys) {
+      await transaction.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+        [options.databaseSchema + ":asset-materialization", key],
+      );
+    }
+  };
+
+  // Resolve races before Collection event matching, reference projection, or writes.
+  const reconcileMaterializations = async (
+    transaction: SqlExecutor,
+    plans: readonly AssetMaterializationPlan[],
+  ): Promise<ReadonlyMap<string, AssetManifestEntry>> => {
+    const adoptions = plans.flatMap((plan) => plan.adoptions);
+    await lockMaterializationKeys(
+      transaction,
+      adoptions.map(({ asset, candidate }) => ({
+        namespace: asset.namespace,
+        key: candidate.idempotencyKey?.trim(),
+      })),
+    );
+    const replacements = new Map<string, AssetManifestEntry>();
+    for (const { asset, candidate } of adoptions) {
+      const key = candidate.idempotencyKey?.trim();
+      if (!key) continue;
+      const row = await findByIdempotency(transaction, asset.namespace, key);
+      if (!row) continue;
+      const current = mapAsset(row);
+      assertRecordMatches(current, candidate, key);
+      replacements.set(asset.id, assetManifestEntry(current, key));
+    }
+    return replacements;
+  };
+
   const adoptCandidate = async (
     context: EventMutationContext,
     plan: AssetAdoptionPlan,
@@ -768,6 +818,7 @@ export function createDatabaseAssetRepository(
     const namespace = asset.namespace;
     const key = candidate.idempotencyKey?.trim() || undefined;
     if (key) {
+      await lockMaterializationKeys(context.transaction, [{ namespace, key }]);
       const existing = await findByIdempotency(
         context.transaction,
         namespace,
@@ -942,6 +993,20 @@ export function createDatabaseAssetRepository(
     adoption: AssetAdoptionPlan,
     execution?: Readonly<{ transaction: SqlExecutor; dispatch: false }>,
   ): Promise<CoordinatedMutationResult<AssetRecord>> => {
+    if (!execution) {
+      const result = await options.session.transaction(async (transaction) => {
+        await lockMaterializationKeys(transaction, [{
+          namespace: adoption.asset.namespace,
+          key: adoption.candidate.idempotencyKey?.trim(),
+        }]);
+        return await commitAssetCreation(adoption, {
+          transaction,
+          dispatch: false,
+        });
+      });
+      await options.coordinator.flushCommitted(result);
+      return result;
+    }
     const { asset, candidate } = adoption;
     const namespace = asset.namespace;
     const key = candidate.idempotencyKey?.trim() || undefined;
@@ -1016,6 +1081,13 @@ export function createDatabaseAssetRepository(
   ): Promise<void> => {
     const pending: CoordinatedMutationResult<AssetRecord>[] = [];
     await options.session.transaction(async (transaction) => {
+      await lockMaterializationKeys(
+        transaction,
+        plan.adoptions.map(({ asset, candidate }) => ({
+          namespace: asset.namespace,
+          key: candidate.idempotencyKey?.trim(),
+        })),
+      );
       for (const adoption of plan.adoptions) {
         pending.push(
           await commitAssetCreation(adoption, {
@@ -1629,6 +1701,7 @@ export function createDatabaseAssetRepository(
       prepareMaterialization: (input) =>
         prepareMaterializationOn(options.session, input),
       adoptMaterialization,
+      reconcileMaterializations,
     }),
   );
   return frozenRepository;

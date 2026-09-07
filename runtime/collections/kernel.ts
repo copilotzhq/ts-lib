@@ -1,3 +1,4 @@
+import { reconcileCollectionContent } from "./content-reconciliation.ts";
 import { assertJsonValue } from "../json.ts";
 import {
   bindCollectionScope,
@@ -100,6 +101,11 @@ export type CreateCollectionRuntimeOptions = Readonly<{
 
 /** Internal content-adoption seam used only by the Collection kernel. */
 type CollectionAssetAdopter = Readonly<{
+  reconcileMaterializations(
+    transaction: SqlExecutor,
+    plans: readonly AssetMaterializationPlan[],
+  ): Promise<ReadonlyMap<string, AssetManifestEntry>>;
+
   prepareMaterialization(
     input: Readonly<{
       namespace: string;
@@ -746,6 +752,7 @@ export function createCollectionKernel(
     commit(
       transaction: SqlExecutor,
       pending: CoordinatedMutationResult<unknown>[],
+      replacements: ReadonlyMap<string, AssetManifestEntry>,
     ): Promise<CollectionWrite<CollectionRecord> | undefined>;
   }>;
   type StagedAsset = Readonly<{
@@ -1265,6 +1272,47 @@ export function createCollectionKernel(
         pending: CoordinatedMutationResult<unknown>[];
       }>,
     ): Promise<CollectionMutation<TSelect>> => {
+      if (
+        !execution && options.assets &&
+        plan.content.some((item) => item.adoptions.length)
+      ) {
+        const pending: CoordinatedMutationResult<unknown>[] = [];
+        const result = await options.session.transaction(
+          async (transaction) => {
+            const replacements = await options.assets!
+              .reconcileMaterializations(transaction, plan.content);
+            const resolved = reconcileCollectionContent(
+              plan,
+              definition.content?.fields ?? [],
+              replacements,
+            );
+            return await commit(
+              eventType,
+              subjectId,
+              operation,
+              writeOptions,
+              resolved,
+              matchData === undefined ? undefined : resolved.write.body,
+              { transaction, pending },
+            );
+          },
+        );
+        const reports = [];
+        for (const item of pending) {
+          reports.push(await options.coordinator.flushCommitted(item));
+        }
+        return Object.freeze({
+          ...result,
+          dispatch: Object.freeze({
+            handles: Object.freeze(
+              reports.flatMap((report) => [...report.handles]),
+            ),
+            failures: Object.freeze(
+              reports.flatMap((report) => [...report.failures]),
+            ),
+          }),
+        });
+      }
       const scoped = scopedWriteOptions(
         writeOptions,
         name,
@@ -1499,10 +1547,22 @@ export function createCollectionKernel(
         ...(deadlines.length
           ? { protectionDeadline: Math.min(...deadlines) }
           : {}),
-        commit: (transaction, pending) =>
-          commitOperation(planned, { transaction, pending }) as Promise<
+        commit: (transaction, pending, replacements) => {
+          const plan = reconcileCollectionContent(
+            planned.plan,
+            definition.content?.fields ?? [],
+            replacements,
+          );
+          return commitOperation({
+            ...planned,
+            plan,
+            matchData: planned.matchData === undefined
+              ? undefined
+              : plan.write.body,
+          }, { transaction, pending }) as Promise<
             CollectionWrite<CollectionRecord>
-          >,
+          >;
+        },
       }));
       scope.records.set(
         recordKey(planned.id),
@@ -2829,9 +2889,14 @@ export function createCollectionKernel(
     for (const plan of orderedPlans) assertProtection(plan);
     try {
       await options.session.transaction(async (transaction) => {
+        const replacements = options.assets
+          ? await options.assets.reconcileMaterializations(transaction, [
+            ...new Set([...scope.assets.values()].map((asset) => asset.plan)),
+          ])
+          : new Map<string, AssetManifestEntry>();
         for (const plan of orderedPlans) {
           assertProtection(plan);
-          const write = await plan.commit(transaction, pending);
+          const write = await plan.commit(transaction, pending, replacements);
           if (write) writes.push(write);
         }
       });

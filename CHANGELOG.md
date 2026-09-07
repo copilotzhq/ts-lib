@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.67.1 — 2026-09-06
+
+- Reconcile concurrent Collection content adoption before committing records and
+  Events, so identical parallel questions share the winning Asset safely.
+- Coordinate Collection and standalone Asset writers using ordered transactional
+  locks without rerunning Action handlers or transaction callbacks.
+- Preserve canonical references, manifests, replay, and genuine conflict
+  rollback.
+
 ## 0.67.0 — 2026-09-06
 
 - Unify scoped Collection execution and runtime-owned content preparation,

@@ -63,6 +63,7 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
   const coordinator = createEventCoordinator({ store, registry, executor });
   const phases: string[] = [];
   const assets: Readonly<{
+    reconcileMaterializations(): Promise<ReadonlyMap<string, never>>;
     prepareMaterialization(
       input: AssetMutationInput,
     ): Promise<AssetMaterializationPlan>;
@@ -71,6 +72,10 @@ Deno.test("collection mutations prepare once before SQL and only adopt inside co
       plan: AssetMaterializationPlan,
     ): Promise<void>;
   }> = {
+    reconcileMaterializations() {
+      assert(sqlOpen);
+      return Promise.resolve(new Map<string, never>());
+    },
     prepareMaterialization(input: AssetMutationInput) {
       assertEquals(sqlOpen, false);
       phases.push("prepare");
