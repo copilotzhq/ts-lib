@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.67.3 — 2026-09-07
+
+- Synchronize with the frontend streaming recovery and tool-output release.
+  Runtime behavior and stored data are unchanged.
+
 ## 0.67.2 — 2026-09-06
 
 - Automatically route GPT-6 Astra through the Responses API and forward its
