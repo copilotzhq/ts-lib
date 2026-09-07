@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.67.4 — 2026-09-07
+
+- Synchronize with the Admin facade integration and authenticated tenant scope
+  release. Runtime behavior and stored data are unchanged.
+
 ## 0.67.3 — 2026-09-07
 
 - Synchronize with the frontend streaming recovery and tool-output release.
