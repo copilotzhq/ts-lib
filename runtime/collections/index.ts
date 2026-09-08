@@ -41,6 +41,10 @@ export {
 } from "./replay.ts";
 export { isCollectionNoop } from "./types.ts";
 export type {
+  CollectionAggregateGroup,
+  CollectionAggregateMetric,
+  CollectionAggregateQuery,
+  CollectionAggregateRow,
   CollectionCreated,
   CollectionDeleted,
   CollectionDurableEvent,

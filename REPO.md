@@ -22,6 +22,7 @@ entrypoints:
   - runtime/events/index.ts
   - plugins/core/index.ts
   - plugins/llm/index.ts
+  - plugins/usage/index.ts
   - server/index.ts
 status: active
 ---
@@ -71,7 +72,8 @@ This map describes the current implementation.
 - Generic progressive stream output: `runtime/streams/`
 - Admin, knowledge, and skills: `plugins/admin/`, `plugins/knowledge/`,
   `plugins/skills/`
-- Schedules and usage: corresponding `plugins/` modules
+- Schedules: `plugins/schedules/` and `plugins/schedule-core/`; Usage ledger,
+  aggregate analytics, HTTP adapter, and browser-safe client: `plugins/usage/`
 - Minimal Goal authoring loop: `plugins/core/authoring/goals/`
 - Channel family barrel: `plugins/channels/`; concrete Channel plugins and
   transports: `plugins/channel-*/`

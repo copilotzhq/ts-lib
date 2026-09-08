@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.69.0 — 2026-09-07
+
+- Add durable Usage ledger aggregation, authorized analytics and bounded attempt
+  drill-down, plus the `/usage/client` browser-safe client export.
+- Record the selected safe LLM connection alias and cache-creation input tokens
+  when providers report them.
+
 ## 0.68.0 — Explicit LLM connections
 
 - Replace Model resources and credential registries with explicit connection,

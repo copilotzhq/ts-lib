@@ -174,9 +174,9 @@ Deno.test("admin plugin projects Collection state without raw storage access", a
     assertEquals(object(participants[0]).externalId, "external-user-a");
     assertEquals(object(participants[0]).messageCount, 1);
 
-    const usage = array((await request("usage", { kind: "llm" })).data);
-    assertEquals(usage.length, 1);
-    assertEquals(object(usage[0]).id, "usage-a");
+    const usage = object((await request("usage", { kind: "llm" })).data);
+    assertEquals(object(usage.summary).attempts, 1);
+    assertEquals(object(usage.summary).inputTokens, 10);
 
     assertEquals("adminEvents" in admin, false);
     assertEquals("adminBrain" in admin, false);

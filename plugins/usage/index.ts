@@ -19,3 +19,7 @@ export type {
   UsageResolveCost,
   UsageResolveCostContext,
 } from "./internal/contracts.ts";
+export {
+  createUsageClient,
+  createUsageHttpAdapter,
+} from "./authoring/index.ts";

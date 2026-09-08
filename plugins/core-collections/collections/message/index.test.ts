@@ -73,6 +73,9 @@ async function fixture(
       if (options?.content) await beforeResolve?.();
       return list(query, options);
     },
+    async aggregate() {
+      throw new Error("Message history fixture does not support aggregation.");
+    },
   };
   return {
     assets,

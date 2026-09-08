@@ -150,6 +150,31 @@ export type CollectionQuery = Readonly<{
   text?: string;
 }>;
 
+export type CollectionAggregateMetric = Readonly<{
+  op: "count" | "sum" | "avg";
+  /** count(field), sum, and avg consider only reported JSON numeric values. */
+  field?: string;
+  filter?: CollectionPredicate;
+}>;
+export type CollectionAggregateGroup =
+  | string
+  | Readonly<{
+    field: string;
+    interval: "hour" | "day" | "week";
+  }>;
+export type CollectionAggregateQuery = Readonly<{
+  filter?: CollectionPredicate;
+  /** Additional conjunctive filters, matching CollectionQuery.all semantics. */
+  all?: readonly CollectionFilter[];
+  where?: Readonly<Record<string, unknown>>;
+  groupBy?: readonly CollectionAggregateGroup[];
+  metrics: Readonly<Record<string, CollectionAggregateMetric>>;
+  limit?: number;
+}>;
+export type CollectionAggregateRow = Readonly<
+  Record<string, string | number | boolean | null>
+>;
+
 /** One graph edge connected to a record in a scoped Collection. */
 export type CollectionGraphRelation = Readonly<{
   id: string;

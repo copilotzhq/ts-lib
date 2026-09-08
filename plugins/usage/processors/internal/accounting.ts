@@ -15,6 +15,7 @@ const TOKEN_METRICS = [
   "outputTokens",
   "reasoningTokens",
   "cachedInputTokens",
+  "cacheCreationInputTokens",
   "totalTokens",
 ] as const;
 
@@ -172,6 +173,7 @@ function usageData(value: UsageRecord): Record<string, unknown> {
     kind: value.kind,
     resource: value.resource,
     provider: value.provider ?? null,
+    connection: value.connection ?? null,
     adapter: value.adapter ?? null,
     providerModel: value.providerModel ?? null,
     operation: value.operation ?? null,
@@ -188,6 +190,7 @@ function usageData(value: UsageRecord): Record<string, unknown> {
     outputTokens: metrics.outputTokens ?? null,
     reasoningTokens: metrics.reasoningTokens ?? null,
     cachedInputTokens: metrics.cachedInputTokens ?? null,
+    cacheCreationInputTokens: metrics.cacheCreationInputTokens ?? null,
     totalTokens: metrics.totalTokens ?? null,
     ...costFields(value.cost),
     source: optionalText(raw.source) ?? null,
@@ -270,6 +273,8 @@ export function llmAttemptUsageRecords(
     if (attempt.providerRequest !== true) continue;
     const usage = record(attempt.usage);
     const model = optionalText(attempt.model) ?? "unknown";
+    const provider = optionalText(attempt.provider) ?? null;
+    const connection = optionalText(attempt.connection) ?? null;
     const adapter = optionalText(attempt.adapter) ?? null;
     const providerModel = optionalText(attempt.providerModel) ?? null;
     const attemptIndex = Number.isSafeInteger(attempt.index) &&
@@ -287,7 +292,8 @@ export function llmAttemptUsageRecords(
       kind: "llm",
       resource: model,
       model,
-      provider: null,
+      provider,
+      connection,
       adapter,
       providerModel,
       operation: "llm.call",
@@ -326,13 +332,18 @@ export function toolUsageRecord(
     (event.durable ? event.id : event.correlationId);
   const id = `usage:tool:${actionRunId}`;
   const action = optionalText(metadata.action) ?? "unknown";
+  const output = record(lifecycle.output);
+  const deferred = lifecycle.status === "completed" &&
+    output.status === "deferred";
   return {
     id,
     kind: "tool",
     resource: action,
     operation: action,
-    status: optionalText(lifecycle.status) ?? null,
-    statusReason: optionalText(error.name) ?? null,
+    // A completed Ask only records that its Action deferred; the answer is
+    // completed later by the Tool-plan workflow, without a second Action run.
+    status: deferred ? "deferred" : optionalText(lifecycle.status) ?? null,
+    statusReason: deferred ? "deferred" : optionalText(error.name) ?? null,
     threadId: optionalText(metadata.threadId) ?? null,
     eventId: event.durable ? event.id : null,
     messageId: optionalText(metadata.triggerMessageId) ?? null,

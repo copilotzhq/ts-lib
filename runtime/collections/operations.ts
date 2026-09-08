@@ -10,6 +10,8 @@ import type {
 } from "./kernel.ts";
 import type { CollectionDefinition } from "./definition.ts";
 import type {
+  CollectionAggregateQuery,
+  CollectionAggregateRow,
   CollectionGraphRelation,
   CollectionQuery,
   CollectionRecord,
@@ -56,6 +58,11 @@ export type CollectionOperations<
   definition: CollectionDefinition;
   get: CollectionRead<Readonly<{ id: string }>, T | null>;
   list: CollectionRead<CollectionQuery | undefined, readonly T[]>;
+  aggregate: (
+    scope: CollectionScope,
+    query: CollectionAggregateQuery,
+    options?: Pick<ScopedCollectionReadOptions, "signal">,
+  ) => Promise<readonly CollectionAggregateRow[]>;
   search: CollectionRead<CollectionQuery, readonly T[]>;
   create: ContextCall<ScopedCollection<T, Insert>["create"]>;
   update: ContextCall<ScopedCollection<T, Insert>["update"]>;
@@ -169,6 +176,11 @@ export function createCollectionOperations(
     list: read((ns, query: CollectionQuery | undefined) =>
       collection.list(ns, query)
     ),
+    aggregate: (scope, query, options) =>
+      readWithSignal(
+        () => collection.aggregate(namespace(scope), query),
+        options,
+      ),
     search: read((ns, query: CollectionQuery) => collection.search(ns, query)),
     async create(
       scope: CollectionScope,
@@ -286,6 +298,7 @@ export function bindCollectionScope(
     definition: base.definition,
     get: base.get.bind(null, scope),
     list: base.list.bind(null, scope),
+    aggregate: base.aggregate.bind(null, scope),
     search: base.search.bind(null, scope),
     create: base.create.bind(null, scope),
     update: base.update.bind(null, scope),

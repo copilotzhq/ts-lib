@@ -72,6 +72,13 @@ export async function createHttpReads(
         options,
       );
     },
+    async aggregate(name, query, options) {
+      const { collection, policy } = definition(name);
+      return await collection.aggregate({
+        ...query,
+        all: [...(query.all ?? []), ...(policy ? [policy] : [])],
+      }, options);
+    },
     async query(name, queryName, input) {
       const spec = definition(name).schema.queries?.[queryName];
       if (!spec) {

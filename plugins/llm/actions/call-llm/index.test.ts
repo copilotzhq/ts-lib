@@ -439,6 +439,8 @@ Deno.test("llm.call runs a built-in Model without adapters and never returns its
     assertEquals(authorization, "Bearer built-in-secret");
     assertEquals(output.model, "provider-model");
     assertEquals(output.adapter, "openai");
+    assertEquals(output.attempts?.[0]?.connection, "primary");
+    assertEquals(output.attempts?.[0]?.provider, "openai");
     assertEquals(output.attempts?.[0]?.model, "provider-model");
     assertEquals(
       JSON.stringify({ input: emptyInput, output }).includes("built-in-secret"),
@@ -1210,6 +1212,7 @@ Deno.test("llm.call propagates Model fallback availability and aggregates every 
             inputTokens: 4,
             outputTokens: 1,
             cachedInputTokens: 2,
+            cacheCreationInputTokens: 4,
             totalTokens: 5,
             cost: { amount: 4, currency: "USD" },
           },
@@ -1251,6 +1254,7 @@ Deno.test("llm.call propagates Model fallback availability and aggregates every 
     outputTokens: 4,
     reasoningTokens: 3,
     cachedInputTokens: 2,
+    cacheCreationInputTokens: 4,
     totalTokens: 18,
     cost: { amount: 14, currency: "USD" },
   });

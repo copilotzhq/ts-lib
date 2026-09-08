@@ -31,7 +31,7 @@ or hidden workflow controller.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.68.0";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.69.0";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -40,8 +40,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.68.0";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.68.0/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.69.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.69.0/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -114,6 +114,8 @@ See [Goal runner](./docs/goals.md).
   options need no registry entries. Authentication resolves once per connection
   per call; secrets never enter the durable call contract. `createLlmAdapter`
   defines a genuinely custom provider implementation.
+- The Usage plugin records one durable row for each reported provider attempt
+  and provides authorized aggregate analytics and bounded attempt drill-down.
 - Tool Resources are data-only presentations of the same Action aliases that
   Core invokes. There is no second Tool execution path.
 - Progressive `stream.output` observations contain generic content metadata and
@@ -131,7 +133,7 @@ See [Goal runner](./docs/goals.md).
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Application        | root factory; `/application` types                                                                                                    |
 | Generic primitives | `/actions`, `/collections`, `/content`, `/streams`, `/events`, `/plugins`, `/persistence`                                             |
-| AI harness         | `/core`, `/llm`, `/llm/tokens`, `/tools`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`                                      |
+| AI harness         | `/core`, `/llm`, `/llm/tokens`, `/tools`, `/skills`, `/knowledge`, `/memory`, `/goals`, `/usage`, `/usage/client`                     |
 | Integrations       | `/channels`, `/schedules`, `/schedules/core`, `/admin`, `/server`                                                                     |
 | Host capabilities  | `/adapters/deno`, `/core/cli`, `/core/cli/node`, `/skills/deno`, `/tools/deno`, `/tools/mcp/stdio`, `/tools/persistent-terminal/deno` |
 | Tool factories     | `/tools/builtin`, `/tools/finance`, `/tools/mcp`, `/tools/openapi`, `/tools/persistent-terminal`, `/tools/web`                        |

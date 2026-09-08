@@ -52,12 +52,15 @@ import {
   projectGraphRelation,
 } from "./relation-reducer.ts";
 import { loadCollectionRecord, projectCollectionEvent } from "./reducer.ts";
+import { aggregateCollectionRecords } from "./aggregate.ts";
 import { queryCollectionRecords, queryCollectionRelations } from "./query.ts";
 import {
   rebuildNamespaceProjections,
   verifyCollectionProjections,
 } from "./replay.ts";
 import type {
+  CollectionAggregateQuery,
+  CollectionAggregateRow,
   CollectionDurableEvent,
   CollectionEventBody,
   CollectionGraphRelation,
@@ -162,6 +165,10 @@ export type BoundCollection<
   ): Promise<CollectionWrite<TSelect>>;
   get(id: string, namespace: string): Promise<TSelect | null>;
   list(namespace: string, query?: CollectionQuery): Promise<readonly TSelect[]>;
+  aggregate(
+    namespace: string,
+    query: CollectionAggregateQuery,
+  ): Promise<readonly CollectionAggregateRow[]>;
   query: BoundCollectionQuery<TSelect>;
   search(
     namespace: string,
@@ -247,6 +254,10 @@ export type ScopedCollection<
     query: CollectionQuery | undefined,
     options?: ScopedCollectionReadOptions,
   ): Promise<ResolvedCollectionContent<readonly TSelect[]>>;
+  aggregate(
+    query: CollectionAggregateQuery,
+    options?: UnresolvedReadOptions,
+  ): Promise<readonly CollectionAggregateRow[]>;
   search<const Fields extends readonly string[]>(
     query: CollectionQuery,
     options: ScopedCollectionReadOptions & {
@@ -2077,6 +2088,15 @@ export function createCollectionKernel(
         query,
       ) as Promise<readonly TSelect[]>;
 
+    const aggregate = (namespace: string, query: CollectionAggregateQuery) =>
+      aggregateCollectionRecords(
+        executor(),
+        tables,
+        definition,
+        requireText(namespace, "Namespace"),
+        query,
+      );
+
     const namedQueries = Object.fromEntries(
       Object.entries(definition.queries ?? {}).map(([queryName, spec]) => [
         queryName,
@@ -2121,6 +2141,11 @@ export function createCollectionKernel(
                 query?: CollectionQuery,
                 options?: ScopedCollectionReadOptions,
               ) => target(name).list(scope, query, controls(options)),
+              aggregate: (
+                name: string,
+                query: CollectionAggregateQuery,
+                options?: Pick<ScopedCollectionReadOptions, "signal">,
+              ) => target(name).aggregate(scope, query, controls(options)),
             });
             output = await spec.select({
               input: queryInput,
@@ -2157,6 +2182,7 @@ export function createCollectionKernel(
       mutate,
       get: read,
       list,
+      aggregate,
       query,
       search: (namespace: string, queryInput: CollectionQuery) =>
         list(namespace, { ...queryInput, text: queryInput.text ?? "" }),

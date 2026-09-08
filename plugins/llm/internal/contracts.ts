@@ -249,6 +249,7 @@ export type LlmUsage = Readonly<{
   outputTokens?: number;
   reasoningTokens?: number;
   cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
   totalTokens?: number;
   cost?: LlmCost;
 }>;
@@ -262,6 +263,8 @@ export type LlmAttemptUsage = Readonly<{
   providerRequest: boolean;
   /** Connection alias selected for this provider attempt. */
   connection: string;
+  /** Built-in provider name when the selected connection has one. */
+  provider?: string;
   model: string;
   /** Built-in provider name or custom Adapter alias. */
   adapter: string;

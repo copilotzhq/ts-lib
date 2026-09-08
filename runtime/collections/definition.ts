@@ -1,7 +1,7 @@
 import type { ScopedCollectionReadOptions } from "./read-options.ts";
 import type { JsonSchema } from "../../dependencies/ominipg.ts";
 import type { FromSchema } from "../../dependencies/json-schema-to-ts.ts";
-import type { CollectionQuery } from "./types.ts";
+import type { CollectionAggregateQuery, CollectionQuery } from "./types.ts";
 
 export type CollectionNamedQuerySchema = Exclude<JsonSchema, boolean>;
 
@@ -58,6 +58,11 @@ export type CollectionNamedQueryRead = Readonly<{
     query?: CollectionQuery,
     options?: ScopedCollectionReadOptions,
   ): Promise<readonly Record<string, unknown>[]>;
+  aggregate(
+    collection: string,
+    query: CollectionAggregateQuery,
+    options?: Pick<ScopedCollectionReadOptions, "signal">,
+  ): Promise<readonly Record<string, string | number | boolean | null>[]>;
 }>;
 
 export type CollectionNamedQuery = Readonly<{

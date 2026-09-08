@@ -45,6 +45,7 @@ function llmOutput(
     providerRequest: true,
     model,
     connection: "primary",
+    provider: "openai",
     adapter: "openai-primary",
     providerModel: "gpt-5-mini-test",
     status: "completed" as const,
@@ -123,7 +124,12 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           adapter: "openai-primary",
           providerModel: "gpt-5-mini-test",
           status: "failed",
-          usage: { inputTokens: 7, outputTokens: 2, totalTokens: 9 },
+          usage: {
+            inputTokens: 7,
+            outputTokens: 2,
+            cacheCreationInputTokens: 0,
+            totalTokens: 9,
+          },
           error: { code: "malformed_tool_call", message: "not copied" },
         }],
       });
@@ -231,6 +237,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
         outputTokens: 5,
         reasoningTokens: 2,
         cachedInputTokens: 3,
+        cacheCreationInputTokens: 2,
         totalTokens: 17,
         cost: Object.freeze({ amount: 0.02, currency: "USD" }),
       }),
@@ -508,7 +515,8 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     assertEquals(first.model, "primary-model");
     assertEquals(first.adapter, "openai-primary");
     assertEquals(first.providerModel, "gpt-5-mini-test");
-    assertEquals(first.provider, null);
+    assertEquals(first.provider, "openai");
+    assertEquals(first.connection, "primary");
     assertEquals(first.operation, "llm.call");
     assertEquals(first.threadId, THREAD_ID);
     assertEquals(first.messageId, "message-1");
@@ -517,6 +525,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     assertEquals(first.metrics, {
       calls: 1,
       cachedInputTokens: 3,
+      cacheCreationInputTokens: 2,
       hookObserved: 1,
       inputTokens: 10,
       outputTokens: 5,
@@ -734,6 +743,7 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
     assertEquals(reportedFailure.statusReason, "malformed_tool_call");
     assertEquals(reportedFailure.metrics, {
       calls: 1,
+      cacheCreationInputTokens: 0,
       inputTokens: 7,
       outputTokens: 2,
       totalTokens: 9,

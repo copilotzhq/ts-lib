@@ -54,6 +54,8 @@ export interface UsageEvent {
   resource: string;
   /** Vendor/provider name when applicable (e.g. "openai", "anthropic"). */
   provider?: string | null;
+  /** Safe process-local LLM connection alias selected for the request. */
+  connection?: string | null;
   /** Provider model selected for an LLM call; older stored rows may contain aliases. */
   model?: string | null;
   /** Selected LLM Adapter alias for an LLM call. */
@@ -111,6 +113,11 @@ export const METRIC_DESCRIPTORS: Record<string, MetricDescriptor> = {
   cachedInputTokens: {
     unit: "tokens",
     label: "Cached input tokens",
+    kind: "llm",
+  },
+  cacheCreationInputTokens: {
+    unit: "tokens",
+    label: "Cache creation input tokens",
     kind: "llm",
   },
   totalTokens: { unit: "tokens", label: "Total tokens", kind: "llm" },

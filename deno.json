@@ -1,7 +1,7 @@
 {
   "name": "@copilotz/copilotz",
   "description": "Copilotz Lib",
-  "version": "0.68.0",
+  "version": "0.69.0",
   "license": "MIT",
   "exports": {
     ".": "./index.ts",
@@ -44,7 +44,8 @@
     "./server": "./server/index.ts",
     "./client": "./client/index.ts",
     "./core/client": "./plugins/core/authoring/client/index.ts",
-    "./core/server": "./plugins/core/authoring/server/index.ts"
+    "./core/server": "./plugins/core/authoring/server/index.ts",
+    "./usage/client": "./plugins/usage/authoring/client/index.ts"
   },
   "publish": {
     "include": [
@@ -141,7 +142,8 @@
     "zod": "npm:zod@3.25.76",
     "@copilotz/copilotz/client": "./client/index.ts",
     "@copilotz/copilotz/core/client": "./plugins/core/authoring/client/index.ts",
-    "@copilotz/copilotz/core/server": "./plugins/core/authoring/server/index.ts"
+    "@copilotz/copilotz/core/server": "./plugins/core/authoring/server/index.ts",
+    "@copilotz/copilotz/usage/client": "./plugins/usage/authoring/client/index.ts"
   },
   "minimumDependencyAge": {
     "age": "P1D",

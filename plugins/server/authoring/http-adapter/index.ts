@@ -1,5 +1,7 @@
 /** Exact application endpoints contributed through the existing Adapter category. @module */
 import type {
+  CollectionAggregateQuery,
+  CollectionAggregateRow,
   CollectionQuery,
   CollectionRecord,
   ScopedCollectionReadOptions,
@@ -22,6 +24,11 @@ export type HttpReadServices = Readonly<{
     query?: CollectionQuery,
     options?: ScopedCollectionReadOptions,
   ): Promise<readonly CollectionRecord[]>;
+  aggregate(
+    collection: string,
+    query: CollectionAggregateQuery,
+    options?: ScopedCollectionReadOptions,
+  ): Promise<readonly CollectionAggregateRow[]>;
   query(
     collection: string,
     name: string,

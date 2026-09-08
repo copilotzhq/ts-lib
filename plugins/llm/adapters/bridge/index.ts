@@ -433,6 +433,9 @@ function normalizeUsage(
     ...(usage?.cacheReadInputTokens !== undefined
       ? { cachedInputTokens: usage.cacheReadInputTokens }
       : {}),
+    ...(usage?.cacheCreationInputTokens !== undefined
+      ? { cacheCreationInputTokens: usage.cacheCreationInputTokens }
+      : {}),
     ...(usage?.totalTokens !== undefined
       ? { totalTokens: usage.totalTokens }
       : {}),

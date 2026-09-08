@@ -1187,6 +1187,7 @@ function normalizedUsage(value: unknown, path: string): LlmUsage {
       "outputTokens",
       "reasoningTokens",
       "cachedInputTokens",
+      "cacheCreationInputTokens",
       "totalTokens",
       "cost",
     ]),
@@ -1224,6 +1225,9 @@ function normalizedUsage(value: unknown, path: string): LlmUsage {
       : {}),
     ...(token("cachedInputTokens") !== undefined
       ? { cachedInputTokens: token("cachedInputTokens") }
+      : {}),
+    ...(token("cacheCreationInputTokens") !== undefined
+      ? { cacheCreationInputTokens: token("cacheCreationInputTokens") }
       : {}),
     ...(token("totalTokens") !== undefined
       ? { totalTokens: token("totalTokens") }
@@ -1943,6 +1947,9 @@ function durableAttempt(
     index,
     providerRequest,
     connection: candidate.alias,
+    ...(candidate.connection.provider
+      ? { provider: candidate.connection.provider }
+      : {}),
     model: candidate.selection.model,
     adapter: candidate.adapterAlias,
     providerModel: candidate.selection.model,
@@ -2051,6 +2058,7 @@ const USAGE_TOKEN_FIELDS = [
   "outputTokens",
   "reasoningTokens",
   "cachedInputTokens",
+  "cacheCreationInputTokens",
 ] as const;
 
 function aggregateUsage(

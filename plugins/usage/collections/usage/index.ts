@@ -9,6 +9,9 @@ import {
   defineCollection,
 } from "@copilotz/copilotz/collections";
 
+import { analyticsQuery } from "./queries/analytics.ts";
+import { attemptsQuery } from "./queries/attempts.ts";
+
 const usageSchema = {
   type: "object",
   properties: {
@@ -16,6 +19,7 @@ const usageSchema = {
     kind: { type: ["string", "null"] },
     resource: { type: ["string", "null"] },
     provider: { type: ["string", "null"] },
+    connection: { type: ["string", "null"] },
     adapter: { type: ["string", "null"] },
     providerModel: { type: ["string", "null"] },
     operation: { type: ["string", "null"] },
@@ -32,6 +36,7 @@ const usageSchema = {
     outputTokens: { type: ["number", "null"] },
     reasoningTokens: { type: ["number", "null"] },
     cachedInputTokens: { type: ["number", "null"] },
+    cacheCreationInputTokens: { type: ["number", "null"] },
     totalTokens: { type: ["number", "null"] },
     inputCostUsd: { type: ["number", "null"] },
     outputCostUsd: { type: ["number", "null"] },
@@ -63,6 +68,7 @@ export const usageCollection: CollectionDefinition<typeof usageSchema> =
   defineCollection({
     name: "usage",
     schema: usageSchema,
+    queries: { analytics: analyticsQuery, attempts: attemptsQuery },
     timestamps: { createdAt: "createdAt", updatedAt: "updatedAt" },
     indexes: [
       "kind",
