@@ -177,6 +177,19 @@ Deno.test("collection aggregation is SQL-scoped, numeric-safe, and bounded", asy
       }),
       [{ rows: 1 }],
     );
+    assertEquals(
+      await value.scoped.aggregate({
+        // A caller selection still intersects the authorization-style `all`
+        // restrictions before aggregation.
+        filter: { field: "kind", eqIgnoreCase: "CHAT" },
+        all: [
+          { filter: { field: "status", eqIgnoreCase: "ok" } },
+          { contains: { tags: ["trusted"] } },
+        ],
+        metrics: { rows: { op: "count" } },
+      }),
+      [{ rows: 1 }],
+    );
     const scalarGroups = await value.scoped.aggregate({
       groupBy: ["scalar"],
       metrics: { rows: { op: "count" } },

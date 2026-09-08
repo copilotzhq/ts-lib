@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.69.1 — 2026-09-07
+
+- Add case-insensitive exact and set string predicates for Collection reads and
+  aggregate filters while preserving scoped authorization intersections.
+
 ## 0.69.0 — 2026-09-07
 
 - Add durable Usage ledger aggregation, authorized analytics and bounded attempt
