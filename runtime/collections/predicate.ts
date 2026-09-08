@@ -18,6 +18,8 @@ export type CollectionPredicate =
       | Readonly<{ isNull: boolean }>
       | Readonly<{ isBlank: boolean }>
       | Readonly<{ trimEq: string }>
+      | Readonly<{ eqIgnoreCase: string }>
+      | Readonly<{ inIgnoreCase: readonly string[] }>
       | Readonly<{ overlaps: readonly CollectionPredicateValue[] }>
     )
   );
@@ -122,6 +124,29 @@ export function compileCollectionPredicate(
       return `(COALESCE(jsonb_typeof(${json}) = 'string' AND btrim(${text}::text, ${
         parameter(BLANK_CHARACTERS)
       }) = ${parameter(value)}, FALSE))`;
+    }
+    if (op === "eqIgnoreCase" || op === "inIgnoreCase") {
+      if (timestamp) {
+        throw new TypeError(`${op} is not supported for timestamp fields.`);
+      }
+      const entries = op === "eqIgnoreCase" ? [value] : value;
+      if (!Array.isArray(entries) || entries.length > MAX_VALUES) {
+        throw new TypeError(`${op} requires at most ${MAX_VALUES} strings.`);
+      }
+      for (const entry of entries) {
+        if (typeof entry !== "string") {
+          throw new TypeError(`${op} requires strings.`);
+        }
+      }
+      const equality = (entry: string) =>
+        column
+          ? `lower(${column}::text) = lower(${parameter(entry)}::text)`
+          : `jsonb_typeof(${json}) = 'string' AND lower(${text}::text) = lower(${
+            parameter(entry)
+          }::text)`;
+      return `(COALESCE(${
+        entries.map(equality).join(" OR ") || "FALSE"
+      }, FALSE))`;
     }
     if (op === "eq") return `(${equality(value)})`;
     if (op === "ne") return `(NOT (${equality(value)}))`;

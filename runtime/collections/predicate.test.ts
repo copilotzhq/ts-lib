@@ -29,6 +29,9 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
         tags: ["x"],
         blank: "\t\u00a0\ufeff",
         label: "O'Reilly",
+        caseText: "MiXeD",
+        nested: { caseText: "NeStEd" },
+        literal: "%_\\' OR TRUE --",
       },
       {
         id: "b",
@@ -37,6 +40,8 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
         tags: ["y"],
         scope: null,
         blank: "",
+        caseText: "mixed",
+        nested: { caseText: "other" },
       },
       {
         id: "c",
@@ -45,6 +50,7 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
         tags: ["z"],
         scope: "",
         blank: "word",
+        caseText: 10,
       },
       {
         id: "d",
@@ -52,6 +58,7 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
         visibility: { kind: "public" },
         tags: "x",
         scope: "internal",
+        caseText: ["mixed"],
       },
       {
         id: "e",
@@ -59,6 +66,7 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
         visibility: { kind: "public" },
         scope: " \t",
         blank: null,
+        caseText: null,
       },
     ];
     for (const [i, row] of rows.entries()) {
@@ -122,6 +130,51 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
       "b",
     ]);
     assertEquals(await ids({ field: "id", in: [] }), []);
+    assertEquals(await ids({ field: "caseText", eqIgnoreCase: "MIXED" }), [
+      "a",
+      "b",
+    ]);
+    assertEquals(
+      await ids({ field: "caseText", inIgnoreCase: ["MIXED", "OTHER"] }),
+      ["a", "b"],
+    );
+    assertEquals(await ids({ field: "caseText", eqIgnoreCase: "10" }), []);
+    assertEquals(
+      await ids({ field: "caseText", eqIgnoreCase: " mixed " }),
+      [],
+    );
+    assertEquals(
+      await ids({ not: { field: "caseText", eqIgnoreCase: "mixed" } }),
+      ["c", "d", "e"],
+    );
+    assertEquals(
+      await ids({ field: "nested.caseText", inIgnoreCase: ["nested"] }),
+      ["a"],
+    );
+    assertEquals(await ids({ field: "id", eqIgnoreCase: "A" }), ["a"]);
+    assertEquals(await ids({ field: "caseText", inIgnoreCase: [] }), []);
+    assertEquals(
+      await ids({ field: "literal", eqIgnoreCase: "%_\\' OR TRUE --" }),
+      ["a"],
+    );
+    assertEquals(await ids({ field: "literal", eqIgnoreCase: "%" }), []);
+    assertEquals(await ids({ field: "literal", eqIgnoreCase: "_" }), []);
+    assertEquals(
+      await ids({
+        or: [{ field: "namespace", eqIgnoreCase: "OTHER" }, {
+          field: "id",
+          eqIgnoreCase: "A",
+        }],
+      }),
+      ["a"],
+    );
+    assertEquals(
+      await ids({ field: "caseText", eqIgnoreCase: "mixed" }, {
+        after: "a",
+        limit: 1,
+      }),
+      ["b"],
+    );
     assertEquals(await ids({ and: [] }), ["a", "b", "c", "d", "e"]);
     assertEquals(await ids({ or: [] }), []);
     assertEquals(await ids({ field: "label", eq: "O'Reilly" }), ["a"]);
@@ -240,6 +293,11 @@ Deno.test("collection predicates reject malformed, unbounded, and injectable str
     { field: "n", gt: null },
     { field: "id", exists: 1 },
     { field: "id", in: Array(1001).fill("x") },
+    { field: "id", eqIgnoreCase: 1 },
+    { field: "id", inIgnoreCase: ["x", 1] },
+    { field: "id", inIgnoreCase: Array(1001).fill("x") },
+    { field: "createdAt", eqIgnoreCase: "2026-09-06" },
+    { field: "updatedAt", inIgnoreCase: ["2026-09-06"] },
   ];
   let deep: CollectionPredicate = { and: [] };
   for (let i = 0; i < 17; i++) deep = { not: deep };

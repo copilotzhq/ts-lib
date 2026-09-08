@@ -308,7 +308,13 @@ Deno.test("authorization predicates intersect requested collection filters befor
         },
         authorize(_request, context) {
           return context.endpoint.kind === "collection"
-            ? { collections: { serverNotes: { where: { label: "allowed" } } } }
+            ? {
+              collections: {
+                serverNotes: {
+                  filter: { field: "label", eqIgnoreCase: "allowed" },
+                },
+              },
+            }
             : { input: { value: "allowed" } };
         },
         expose: {
@@ -333,11 +339,14 @@ Deno.test("authorization predicates intersect requested collection filters befor
     for (
       const [id, label] of [
         ["a", "hidden"],
-        ["b", "allowed"],
+        ["b", "AlLoWeD"],
         ["c", "hidden"],
         ["d", "allowed"],
       ]
     ) await notes.create({ id, label });
+    await application.collections.withScope({ namespace: "tenant-b" })
+      .serverNotes
+      .create({ id: "foreign", label: "ALLOWED" });
     const page = await client.collections.list("serverNotes", {
       limit: 1,
       order: "asc",
@@ -349,6 +358,21 @@ Deno.test("authorization predicates intersect requested collection filters befor
       after: "b",
     }) as { data: { id: string }[] };
     assertEquals(next.data.map((value) => value.id), ["d"]);
+    const callerFilter = await client.collections.list("serverNotes", {
+      filter: {
+        or: [
+          { field: "label", eqIgnoreCase: "hidden" },
+          { not: { field: "label", eqIgnoreCase: "denied" } },
+        ],
+      },
+      limit: 2,
+      order: "asc",
+    }) as { data: { id: string }[] };
+    assertEquals(callerFilter.data.map((value) => value.id), ["b", "d"]);
+    await assertRejects(
+      () => client.collections.list("serverNotes", { after: "a", limit: 1 }),
+      CopilotzHttpError,
+    );
     const conflict = await client.collections.list("serverNotes", {
       where: { label: "hidden" },
     }) as { data: unknown[] };

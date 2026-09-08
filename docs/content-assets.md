@@ -154,10 +154,11 @@ const page = await documents.list(scope, {
 ```
 
 Predicates support nested `and`, `or`, and `not`; scalar `eq`, `ne`, and `in`;
-ordered `lt`, `lte`, `gt`, and `gte`; array `overlaps`; and boolean `exists`,
-`isNull`, and `isBlank` tests. Each predicate object has exactly one operator;
-field predicates also require `field`. Empty `and` is true; empty `or`, `in`,
-and `overlaps` are false.
+case-insensitive string `eqIgnoreCase` and `inIgnoreCase`; ordered `lt`, `lte`,
+`gt`, and `gte`; array `overlaps`; and boolean `exists`, `isNull`, and `isBlank`
+tests. Each predicate object has exactly one operator; field predicates also
+require `field`. Empty `and` is true; empty `or`, `in`, `inIgnoreCase`, and
+`overlaps` are false.
 
 Nested fields use validated dotted paths. JSON scalar equality is
 type-sensitive: `10` differs from `"10"`. Ranges compare numbers with numbers
@@ -165,6 +166,14 @@ and strings with strings; other JSON types do not match. `id` and `namespace`
 compare native text columns, while `createdAt` and `updatedAt` compare native
 timestamp columns, preserving database precision. Compound timestamp/ID
 conditions can express the same tie-break ordering as pagination.
+
+`eqIgnoreCase` and `inIgnoreCase` accept strings only. They compare text through
+the database's `lower()` function, and match only JSON strings for document
+fields; missing values, nulls, numbers, and arrays do not match. They do not
+trim input or interpret `%`, `_`, or backslashes as patterns. Text-column and
+JSON-path comparisons use the database collation and case mapping, so they do
+not promise full JavaScript Unicode case-folding equivalence. Timestamp fields
+(`createdAt` and `updatedAt`) reject these text-only predicates.
 
 Missing fields are distinct from explicit JSON null. `exists: true` includes
 explicit null, while `isNull: true` and `eq: null` match only explicit null.
