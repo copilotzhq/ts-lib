@@ -23,26 +23,25 @@ import {
   type LlmAdapterRequest,
   type LlmAdapterResult,
   type LlmAttemptUsage,
-  type LlmBuiltinModelResource,
+  type LlmAuthResolution,
   type LlmCallInput,
   type LlmCallOutput,
-  type LlmCredentialContext,
-  type LlmCredentialResolution,
-  type LlmCredentialResource,
+  type LlmConnectionContext,
+  type LlmConnectionResource,
   type LlmJsonObject,
   type LlmJsonValue,
   type LlmMessage,
+  type LlmModelSelection,
   type LlmRejectedAttemptEvidence,
   type LlmToolCall,
   type LlmToolPipeline,
   type LlmToolPipelineStage,
   type LlmUsage,
-  type ModelResource,
+  normalizeLlmConnection,
+  normalizeLlmModelSelections,
 } from "../../internal/contracts.ts";
 import { materializeBuiltinModel } from "../../adapters/index.ts";
 import { createLlmAdapter } from "../../authoring/custom-adapter/index.ts";
-import { defineLlmCredential } from "../../resources/credentials/index.ts";
-import { defineModel } from "../../resources/model/index.ts";
 
 export const LLM_CALL_ACTION_ID = "llm.call";
 export const LLM_CALL_ACTION_ALIAS = "callLlm";
@@ -56,10 +55,53 @@ const LLM_REJECTED_ATTEMPT_EVIDENCE_SCHEMA =
   "copilotz.llm.rejected-attempt-evidence";
 const LLM_STREAM_BATCH_MAX_BYTES = 16 * 1_024;
 const LLM_STREAM_BATCH_MAX_DELAY_MS = 50;
+const llmCallInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["models", "mode", "request"],
+  properties: {
+    models: {
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["connection", "model"],
+        properties: {
+          connection: { type: "string", minLength: 1 },
+          model: { type: "string", minLength: 1 },
+          options: { $ref: "#/$defs/options" },
+        },
+      },
+    },
+    mode: { enum: ["generate", "session"] },
+    request: { type: "object" },
+    stream: { type: "object" },
+    inputStreamId: { type: "string" },
+  },
+  $defs: {
+    options: {
+      type: "object",
+      propertyNames: {
+        not: {
+          enum: [
+            "provider",
+            "adapter",
+            "baseUrl",
+            "apiKey",
+            "extraHeaders",
+            "auth",
+            "connection",
+            "model",
+          ],
+        },
+      },
+    },
+  },
+} as const;
 
 export type LlmActionResources = Readonly<{
-  models: Readonly<Record<string, ModelResource | undefined>>;
-  llmCredentials?: Readonly<Record<string, LlmCredentialResource | undefined>>;
+  llmConnections: Readonly<Record<string, LlmConnectionResource | undefined>>;
 }>;
 
 export type LlmActionAdapters = Readonly<{
@@ -72,14 +114,13 @@ export interface LlmActionContext
 
 type ResolvedModel = Readonly<{
   alias: string;
-  resource: ModelResource;
+  selection: LlmModelSelection;
+  connection: LlmConnectionResource;
   adapterAlias: string;
   adapter?: LlmAdapter;
-  credential?: LlmCredentialResource;
-  credentialAlias?: string;
 }>;
 
-type CredentialAttemptModel =
+type ConnectionAttemptModel =
   | Readonly<{ kind: "ready"; candidate: ResolvedModel }>
   | Readonly<{ kind: "unavailable" }>
   | Readonly<{ kind: "failed" }>;
@@ -308,99 +349,58 @@ function adapterFor(
 }
 
 /**
- * Validates every ordered Model and Adapter candidate before provider I/O.
+ * Validates every ordered selection and connection before provider I/O.
  */
 function modelPlan(
-  requested: readonly string[],
+  requested: LlmCallInput["models"],
   mode: LlmCallInput["mode"],
-  callOptions: LlmJsonObject | undefined,
   context: LlmActionContext,
 ): readonly ResolvedModel[] {
-  const models = context.resources.models;
+  const connections = context.resources.llmConnections;
   const adapters = context.adapters.llm;
-  if (!isRecord(models)) {
-    throw new TypeError("LLM resources.models must be an alias map.");
+  if (!isRecord(connections)) {
+    throw new TypeError("LLM resources.llmConnections must be an alias map.");
   }
-  const plan = requested.map((alias) => {
-    const candidate = models[alias];
-    if (!candidate) throw new Error(`Unknown LLM Model '${alias}'.`);
-    const resource = defineModel(candidate);
+  const plan = requested.map((selection) => {
+    const connection = connections[selection.connection];
+    if (!connection) {
+      throw new Error(`Unknown LLM connection '${selection.connection}'.`);
+    }
+    const resource = normalizeLlmConnection(connection);
     if (resource.provider !== undefined) {
-      const mergedOptions = optionsFor(resource, callOptions);
-      let credential: LlmCredentialResource | undefined;
-      if (resource.credentials !== undefined) {
-        const entries = context.resources.llmCredentials;
-        if (!isRecord(entries)) {
-          throw new TypeError(
-            "LLM resources.llmCredentials must be an alias map.",
-          );
-        }
-        const referenced = entries[resource.credentials];
-        if (!referenced) {
-          throw new Error(
-            `Unknown LLM credential '${resource.credentials}' for Model '${alias}'.`,
-          );
-        }
-        credential = defineLlmCredential(referenced);
-        if (credential.provider !== resource.provider) {
-          throw new TypeError(
-            `LLM credential '${resource.credentials}' provider must match Model '${alias}'.`,
-          );
-        }
-      }
-      // Validate every static provider candidate before the first provider I/O.
-      // Dynamic credentials are intentionally resolved only immediately before
-      // their own candidate attempt.
-      const builtinResource = resource as LlmBuiltinModelResource;
-      const preflight = credential?.resolve === undefined
-        ? modelWithCredentials(builtinResource, credential)
-        : modelWithoutCredentialAlias(builtinResource);
-      materializeBuiltinModel(preflight, mode, mergedOptions);
+      const auth = resource.auth;
+      // Validate modes/options for every candidate without resolving dynamic auth.
+      materializeBuiltinModel(
+        {
+          provider: resource.provider,
+          model: selection.model,
+          baseUrl: resource.baseUrl,
+          ...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
+          ...(auth.extraHeaders === undefined
+            ? {}
+            : { extraHeaders: auth.extraHeaders }),
+        },
+        mode,
+        selection.options ?? Object.freeze({}),
+      );
       return Object.freeze({
-        alias,
-        resource,
+        alias: selection.connection,
+        selection,
+        connection: resource,
         adapterAlias: resource.provider,
-        ...(credential
-          ? {
-            credential,
-            credentialAlias: resource.credentials,
-          }
-          : {}),
       });
     }
     return Object.freeze({
-      alias,
-      resource,
+      alias: selection.connection,
+      selection,
+      connection: resource,
       adapterAlias: resource.adapter,
       adapter: adapterFor(resource.adapter, adapters),
     });
   });
   return Object.freeze(plan);
 }
-
-function modelWithoutCredentialAlias(
-  resource: LlmBuiltinModelResource,
-): LlmBuiltinModelResource {
-  const { credentials: _credentials, ...plain } = resource;
-  return defineModel(plain) as LlmBuiltinModelResource;
-}
-
-function modelWithCredentials(
-  resource: LlmBuiltinModelResource,
-  credential: Extract<LlmCredentialResource, { resolve?: never }> | undefined,
-): LlmBuiltinModelResource {
-  const plain = modelWithoutCredentialAlias(resource);
-  if (!credential) return plain;
-  return defineModel({
-    ...plain,
-    ...(credential.apiKey === undefined ? {} : { apiKey: credential.apiKey }),
-    ...(credential.extraHeaders === undefined ? {} : {
-      extraHeaders: credential.extraHeaders,
-    }),
-  }) as LlmBuiltinModelResource;
-}
-
-function credentialContext(context: LlmActionContext): LlmCredentialContext {
+function connectionContext(context: LlmActionContext): LlmConnectionContext {
   return Object.freeze({
     namespace: context.namespace,
     operationKey: context.operationKey,
@@ -412,7 +412,7 @@ function credentialContext(context: LlmActionContext): LlmCredentialContext {
   });
 }
 
-function resolvedCredential(value: unknown): LlmCredentialResolution {
+function resolvedAuth(value: unknown): LlmAuthResolution {
   const record = plainRecord(value, "LLM credential resolution");
   exactKeys(
     record,
@@ -486,25 +486,24 @@ async function attemptModel(
   candidate: ResolvedModel,
   input: LlmCallInput,
   context: LlmActionContext,
-  credentialMemo: Map<string, Promise<LlmCredentialResolution | undefined>>,
-): Promise<CredentialAttemptModel> {
-  if (candidate.resource.provider === undefined) {
+  connectionMemo: Map<string, Promise<LlmAuthResolution | undefined>>,
+): Promise<ConnectionAttemptModel> {
+  if (candidate.connection.provider === undefined) {
     return Object.freeze({ kind: "ready", candidate });
   }
-  let credential = candidate.credential;
-  if (credential?.resolve !== undefined) {
-    const alias = candidate.credentialAlias!;
-    let resolving = credentialMemo.get(alias);
+  const auth = candidate.connection.auth;
+  let resolution: LlmAuthResolution | undefined;
+  if (typeof auth.resolve === "function") {
+    const alias = candidate.alias;
+    let resolving = connectionMemo.get(alias);
     if (!resolving) {
       resolving = Promise.resolve().then(async () => {
         try {
-          return resolvedCredential(
+          return resolvedAuth(
             await raceSignal(
-              Promise.resolve(credential!.resolve!(
-                credentialContext(context),
-                Object.freeze({
-                  credential: alias,
-                }),
+              Promise.resolve(auth.resolve!(
+                connectionContext(context),
+                Object.freeze({ connection: alias }),
               )),
               context.signal,
             ),
@@ -515,34 +514,49 @@ async function attemptModel(
           return undefined;
         }
       });
-      credentialMemo.set(alias, resolving);
+      connectionMemo.set(alias, resolving);
     }
-    const resolution = await resolving;
+    resolution = await resolving;
     if (resolution === undefined) return Object.freeze({ kind: "failed" });
     if (!resolution.available) return Object.freeze({ kind: "unavailable" });
-    credential = defineLlmCredential({
-      provider: candidate.resource.provider,
-      ...(resolution.apiKey === undefined ? {} : { apiKey: resolution.apiKey }),
-      ...(resolution.extraHeaders === undefined ? {} : {
-        extraHeaders: resolution.extraHeaders,
-      }),
-    } as LlmCredentialResource);
   }
-  const resource = modelWithCredentials(
-    candidate.resource as LlmBuiltinModelResource,
-    credential as
-      | Extract<LlmCredentialResource, { resolve?: never }>
-      | undefined,
-  );
+  const authFields = typeof auth.resolve === "function"
+    ? (() => {
+      const resolved = resolution!;
+      if (!resolved.available) return undefined;
+      return {
+        ...(resolved.apiKey === undefined ? {} : { apiKey: resolved.apiKey }),
+        ...(resolved.extraHeaders === undefined
+          ? {}
+          : { extraHeaders: resolved.extraHeaders }),
+      };
+    })()
+    : {
+      ...(auth.apiKey === undefined ? {} : { apiKey: auth.apiKey }),
+      ...(auth.extraHeaders === undefined
+        ? {}
+        : { extraHeaders: auth.extraHeaders }),
+    };
+  if (!authFields) return Object.freeze({ kind: "unavailable" });
+  const resource = {
+    provider: candidate.connection.provider,
+    model: candidate.selection.model,
+    ...(candidate.connection.baseUrl
+      ? { baseUrl: candidate.connection.baseUrl }
+      : {}),
+    ...(candidate.connection.runtimeDiagnostics
+      ? { runtimeDiagnostics: candidate.connection.runtimeDiagnostics }
+      : {}),
+    ...authFields,
+  };
   return Object.freeze({
     kind: "ready",
     candidate: Object.freeze({
       ...candidate,
-      resource,
       adapter: materializeBuiltinModel(
         resource,
         input.mode,
-        optionsFor(resource, input.options),
+        candidate.selection.options ?? Object.freeze({}),
       ),
     }),
   });
@@ -678,16 +692,6 @@ function projectPreparedRequest(
       ? { instructions: input.request.instructions }
       : {}),
   });
-}
-
-function optionsFor(
-  resource: ModelResource,
-  options: LlmJsonObject | undefined,
-): LlmJsonObject {
-  return jsonObject({
-    ...(resource.options ?? {}),
-    ...(options ?? {}),
-  }, "LLM Adapter options");
 }
 
 const CONTENT_REF_KEYS = new Set([
@@ -1136,21 +1140,13 @@ function normalizedCallInput(value: unknown): LlmCallInput {
       "request",
       "stream",
       "inputStreamId",
-      "options",
     ]),
     "LLM call input",
   );
-  if (!Array.isArray(record.models) || record.models.length === 0) {
-    throw new TypeError("LLM call input.models must be a non-empty array.");
-  }
-  const models = Object.freeze(
-    record.models.map((value, index) =>
-      requiredText(value, `LLM Model alias at index ${index}`)
-    ),
-  ) as readonly [string, ...string[]];
-  if (new Set(models).size !== models.length) {
-    throw new TypeError("LLM call input.models must not contain duplicates.");
-  }
+  const models = normalizeLlmModelSelections(
+    record.models,
+    "LLM call input.models",
+  );
   if (record.mode !== "generate" && record.mode !== "session") {
     throw new TypeError("LLM call input.mode must be 'generate' or 'session'.");
   }
@@ -1173,16 +1169,12 @@ function normalizedCallInput(value: unknown): LlmCallInput {
     record.inputStreamId,
     "LLM input stream ID",
   );
-  const options = record.options === undefined
-    ? undefined
-    : jsonObject(record.options, "LLM call options");
   return Object.freeze({
     models,
     mode,
     request,
     ...(stream ? { stream } : {}),
     ...(inputStreamId ? { inputStreamId } : {}),
-    ...(options ? { options } : {}),
   });
 }
 
@@ -1341,7 +1333,8 @@ async function writerFor(
         llmAttemptId: context.action.runId,
         providerAttemptIndex: attemptIndex,
         lane,
-        model: attempt.alias,
+        connection: attempt.alias,
+        model: attempt.selection.model,
         adapter: attempt.adapterAlias,
       },
       ...(context.identity.correlationId
@@ -1949,9 +1942,10 @@ function durableAttempt(
     id: `${context.action.runId}:attempt:${index}`,
     index,
     providerRequest,
-    model: candidate.alias,
+    connection: candidate.alias,
+    model: candidate.selection.model,
     adapter: candidate.adapterAlias,
-    providerModel: candidate.resource.model,
+    providerModel: candidate.selection.model,
     status: attempt.status,
     ...(attempt.usage ? { usage: structuredClone(attempt.usage) } : {}),
     ...(attempt.finishReason ? { finishReason: attempt.finishReason } : {}),
@@ -2296,9 +2290,10 @@ function outputFor(
 ): LlmCallOutput {
   const usage = aggregateUsage(attempts);
   return Object.freeze({
-    model: selected.alias,
     adapter: selected.adapterAlias,
-    providerModel: selected.resource.model,
+    connection: selected.alias,
+    model: selected.selection.model,
+    providerModel: selected.selection.model,
     content,
     ...(reasoning ? { reasoning } : {}),
     ...(result.toolCalls
@@ -2315,12 +2310,12 @@ async function executeLlmCall(
   context: LlmActionContext,
 ): Promise<LlmCallOutput> {
   const input = normalizedCallInput(rawInput);
-  const plan = modelPlan(input.models, input.mode, input.options, context);
+  const plan = modelPlan(input.models, input.mode, context);
   const request = projectPreparedRequest(input, context);
   const attempts: LlmAttemptUsage[] = [];
   const credentialMemo = new Map<
     string,
-    Promise<LlmCredentialResolution | undefined>
+    Promise<LlmAuthResolution | undefined>
   >();
 
   for (let index = 0; index < plan.length; index += 1) {
@@ -2388,12 +2383,12 @@ async function executeLlmCall(
         ? managedInput(inputFollower.body)
         : undefined;
       const invocation = invocationOf(candidate.adapter!.call({
-        model: candidate.alias,
+        model: candidate.selection.model,
         adapter: candidate.adapterAlias,
-        providerModel: candidate.resource.model,
+        providerModel: candidate.selection.model,
         mode: input.mode,
         fallbackAvailable: index < plan.length - 1,
-        options: optionsFor(candidate.resource, input.options),
+        options: candidate.selection.options ?? Object.freeze({}),
         request,
         signal: attemptSignal,
         ...(attemptInput ? { input: attemptInput.stream } : {}),
@@ -2486,7 +2481,7 @@ async function executeLlmCall(
   }
 
   return await failWithAttemptAccounting(
-    new Error("No LLM credential is available for the configured Models."),
+    new Error("No LLM credential is available for the configured selections."),
     attempts,
     context,
   );
@@ -2496,10 +2491,11 @@ export const callLlmAction: ActionDefinition<
   LlmCallInput,
   LlmCallOutput,
   LlmActionContext,
-  undefined,
+  typeof llmCallInputSchema,
   undefined
 > = defineAction({
   id: LLM_CALL_ACTION_ID,
+  inputSchema: llmCallInputSchema,
   content: {
     input: ["request.messages[].content", "request.messages[].reasoning"],
   },

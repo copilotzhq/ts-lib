@@ -10,7 +10,7 @@ It translates Groq’s OpenAI-compatible protocol into the LLM boundary.
 
 ## How to use it
 
-Declare a Model Resource with `provider: "groq"`.
+Declare a LLM connection with `provider: "groq"`.
 
 ## How it works
 

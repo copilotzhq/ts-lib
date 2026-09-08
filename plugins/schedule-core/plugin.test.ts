@@ -209,14 +209,16 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
           id: "scheduled-agent",
           name: "Scheduled Agent",
           role: "assistant",
-          models: { generate: ["scheduledModel"] },
+          models: {
+            generate: [{
+              connection: "scheduledModel",
+              model: "fixture-scheduled-model",
+            }],
+          },
         },
       },
-      models: {
-        scheduledModel: {
-          adapter: "fixture",
-          model: "fixture-scheduled-model",
-        },
+      llmConnections: {
+        scheduledModel: { adapter: "fixture" },
       },
     },
     adapters: { llm: { fixture: adapter } },
@@ -268,7 +270,7 @@ Deno.test("scheduled payload metadata cannot suppress Agent LLM routing", async 
     await sent.done;
 
     assertEquals(calls.length, 1);
-    assertEquals(calls[0].model, "scheduledModel");
+    assertEquals(calls[0].model, "fixture-scheduled-model");
     const [thread] = await projectThreads(application, NAMESPACE);
     assertExists(thread);
     const messages = await projectMessages(application, NAMESPACE, thread.id);

@@ -42,9 +42,9 @@ export type LlmRuntimeDiagnostics = Readonly<{
   credentialSource?: LlmCredentialSource;
 }>;
 
-/** Stable identity of the reusable credential being resolved. */
-export type LlmCredentialExecution = Readonly<{
-  credential: string;
+/** Stable identity of the connection being resolved. */
+export type LlmConnectionExecution = Readonly<{
+  connection: string;
 }>;
 
 /**
@@ -52,7 +52,7 @@ export type LlmCredentialExecution = Readonly<{
  * resolver. It permits tenant/user-scoped collection lookups without handing
  * a credential policy the ability to invoke Actions or publish content.
  */
-export type LlmCredentialContext = Readonly<{
+export type LlmConnectionContext = Readonly<{
   namespace: string;
   operationKey: string;
   identity: RuntimeIdentity;
@@ -68,7 +68,7 @@ export type LlmCredentialContext = Readonly<{
 }>;
 
 /** Runtime-only result from a credential resolver. */
-export type LlmCredentialResolution =
+export type LlmAuthResolution =
   | Readonly<{
     available: true;
     apiKey: string;
@@ -88,66 +88,63 @@ export type LlmCredentialResolution =
  * Reusable process-local credentials for one built-in provider. Static values
  * are useful for service keys; `resolve` supports connected accounts safely.
  */
-type LlmStaticCredentialResource =
+export type LlmStaticAuth =
   | Readonly<{
-    provider: LlmBuiltinProvider;
     apiKey: string;
     extraHeaders?: Readonly<Record<string, string>>;
     resolve?: never;
   }>
   | Readonly<{
-    provider: LlmBuiltinProvider;
     apiKey?: string;
     extraHeaders: Readonly<Record<string, string>>;
     resolve?: never;
   }>;
 
-export type LlmCredentialResource =
-  | LlmStaticCredentialResource
+/** Runtime-only authentication policy for a trusted Action invocation. */
+export type LlmAuthResolver = (
+  context: LlmConnectionContext,
+  execution: LlmConnectionExecution,
+) => LlmAuthResolution | Promise<LlmAuthResolution>;
+
+export type LlmConnectionResource =
   | Readonly<{
     provider: LlmBuiltinProvider;
-    resolve(
-      context: LlmCredentialContext,
-      execution: LlmCredentialExecution,
-    ): LlmCredentialResolution | Promise<LlmCredentialResolution>;
-    apiKey?: never;
-    extraHeaders?: never;
+    adapter?: never;
+    baseUrl?: string;
+    auth:
+      | LlmStaticAuth
+      | Readonly<{
+        resolve: LlmAuthResolver;
+        apiKey?: never;
+        extraHeaders?: never;
+      }>;
+    runtimeDiagnostics?: LlmRuntimeDiagnostics;
+  }>
+  | Readonly<{
+    adapter: string;
+    provider?: never;
+    baseUrl?: never;
+    auth?: never;
+    runtimeDiagnostics?: never;
   }>;
 
-/** Atomic selection and configuration of one first-party provider model. */
-export type LlmBuiltinModelResource<
-  TOptions extends LlmJsonObject = LlmJsonObject,
-> = Readonly<{
+/** One durable route choice. Transport and authentication are connection-only. */
+export type LlmModelSelection<TOptions extends LlmJsonObject = LlmJsonObject> =
+  Readonly<{ connection: string; model: string; options?: TOptions }>;
+
+export type LlmModelSelections<TOptions extends LlmJsonObject = LlmJsonObject> =
+  readonly [LlmModelSelection<TOptions>, ...LlmModelSelection<TOptions>[]];
+
+/** Resolved built-in request configuration; internal to transport materialization. */
+export type LlmBuiltinProviderConfiguration = Readonly<{
   provider: LlmBuiltinProvider;
   model: string;
-  /** Alias of one reusable `resources.llmCredentials` entry. */
-  credentials?: string;
   apiKey?: string;
   baseUrl?: string;
   extraHeaders?: Readonly<Record<string, string>>;
-  options?: TOptions;
+  options?: LlmJsonObject;
   runtimeDiagnostics?: LlmRuntimeDiagnostics;
-  adapter?: never;
 }>;
-
-/** Selection of an application-defined executable Adapter and provider model. */
-export type LlmCustomModelResource<
-  TOptions extends LlmJsonObject = LlmJsonObject,
-> = Readonly<{
-  adapter: string;
-  model: string;
-  options?: TOptions;
-  provider?: never;
-  apiKey?: never;
-  baseUrl?: never;
-  extraHeaders?: never;
-  runtimeDiagnostics?: never;
-  credentials?: never;
-}>;
-
-export type ModelResource<
-  TOptions extends LlmJsonObject = LlmJsonObject,
-> = LlmBuiltinModelResource<TOptions> | LlmCustomModelResource<TOptions>;
 
 export type LlmToolDefinition = Readonly<{
   name: string;
@@ -235,12 +232,11 @@ export type LlmStreamDescriptor = Readonly<{
 /** Durable input to the provider-neutral `llm.call` Action. */
 export type LlmCallInput = Readonly<{
   /** Non-empty provider candidate list, attempted in exact caller order. */
-  models: readonly [string, ...string[]];
+  models: LlmModelSelections;
   mode: LlmMode;
   request: LlmRequest;
   stream?: LlmStreamDescriptor;
   inputStreamId?: string;
-  options?: LlmJsonObject;
 }>;
 
 export type LlmCost = Readonly<{
@@ -264,7 +260,8 @@ export type LlmAttemptUsage = Readonly<{
   index: number;
   /** True only when the Adapter reported a provider request actually began. */
   providerRequest: boolean;
-  /** Model Resource alias selected for this provider attempt. */
+  /** Connection alias selected for this provider attempt. */
+  connection: string;
   model: string;
   /** Built-in provider name or custom Adapter alias. */
   adapter: string;
@@ -282,6 +279,7 @@ export type LlmAttemptUsage = Readonly<{
 
 /** Settled, JSON-safe output persisted by the `llm.call` Action lifecycle. */
 export type LlmCallOutput = Readonly<{
+  connection: string;
   model: string;
   /** Built-in provider name or selected custom LLM Adapter alias. */
   adapter: string;
@@ -334,11 +332,11 @@ export type LlmAdapterRequest = Readonly<{
 }>;
 
 export type LlmAdapterCallInput = Readonly<{
-  /** Selected Model Resource alias. */
+  /** Selected provider model identifier. */
   model: string;
   /** Built-in provider name or selected custom LLM Adapter alias. */
   adapter: string;
-  /** Provider-specific model identifier from the selected Model Resource. */
+  /** Provider-specific model identifier from the selected candidate. */
   providerModel: string;
   mode: LlmMode;
   /** Whether `llm.call` has another validated Model candidate after this one. */
@@ -437,7 +435,7 @@ export type LlmAdapter = Readonly<{
 
 /**
  * Validates and freezes one custom executable Adapter. First-party providers
- * are configured directly by {@link LlmBuiltinModelResource} values instead.
+ * are configured directly by {@link LlmBuiltinProviderConfiguration} values instead.
  */
 export function normalizeLlmAdapter<const TAdapter extends LlmAdapter>(
   adapter: TAdapter,
@@ -465,7 +463,7 @@ export function normalizeLlmAdapter<const TAdapter extends LlmAdapter>(
 
 function requiredText(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new TypeError(`Model ${field} must be a non-empty string.`);
+    throw new TypeError(`${field} must be a non-empty string.`);
   }
   return value.trim();
 }
@@ -602,131 +600,71 @@ function headerRecord(
   ));
 }
 
-/** Validates and freezes one reusable process-local credential Resource. */
-export function normalizeLlmCredential(
-  resource: LlmCredentialResource,
-): LlmCredentialResource {
+/** Validates and freezes one process-local connection Resource. */
+export function normalizeLlmConnection(
+  resource: LlmConnectionResource,
+): LlmConnectionResource {
   const record = Object.fromEntries(
-    plainDataEntries(resource, "LLM credential resource"),
+    plainDataEntries(resource, "LLM connection resource"),
   ) as Readonly<Record<string, unknown>>;
-  const dynamic = record.resolve !== undefined;
-  const allowed = dynamic
-    ? new Set(["provider", "resolve"])
-    : new Set(["provider", "apiKey", "extraHeaders"]);
-  const extra = Object.keys(record).find((key) => !allowed.has(key));
-  if (extra) {
-    throw new TypeError(`Unknown LLM credential resource field '${extra}'.`);
-  }
-  const provider = builtinProvider(record.provider, "LLM credential provider");
-  if (dynamic) {
-    if (typeof record.resolve !== "function") {
-      throw new TypeError("LLM credential resolve must be a function.");
-    }
-    return Object.freeze({
-      provider,
-      resolve: record.resolve as (
-        context: LlmCredentialContext,
-        execution: LlmCredentialExecution,
-      ) => LlmCredentialResolution | Promise<LlmCredentialResolution>,
-    }) as LlmCredentialResource;
-  }
-  const apiKey = optionalText(record.apiKey, "LLM credential apiKey");
-  const extraHeaders = headerRecord(
-    record.extraHeaders,
-    "LLM credential extraHeaders",
-  );
-  if (apiKey === undefined && extraHeaders === undefined) {
-    throw new TypeError(
-      "LLM credential resource requires apiKey, extraHeaders, or resolve.",
-    );
-  }
-  return Object.freeze({
-    provider,
-    ...(apiKey === undefined ? {} : { apiKey }),
-    ...(extraHeaders === undefined ? {} : { extraHeaders }),
-  }) as LlmCredentialResource;
-}
-
-/**
- * Optional convenience for dynamic Model declarations. Equivalent plain
- * objects remain canonical; this helper only validates, normalizes, and
- * freezes one value and performs no registration.
- */
-export function normalizeModel<TOptions extends LlmJsonObject = LlmJsonObject>(
-  resource: ModelResource<TOptions>,
-): ModelResource<TOptions> {
-  const record = Object.fromEntries(
-    plainDataEntries(resource, "Model resource"),
-  ) as Readonly<Record<string, unknown>>;
-  const builtin = Object.hasOwn(record, "provider");
-  const allowed = builtin
-    ? new Set([
-      "provider",
-      "model",
-      "credentials",
-      "apiKey",
-      "baseUrl",
-      "extraHeaders",
-      "options",
-      "runtimeDiagnostics",
-    ])
-    : new Set(["adapter", "model", "options"]);
-  const extra = Object.keys(record).find((key) => !allowed.has(key));
-  if (extra) throw new TypeError(`Unknown Model resource field '${extra}'.`);
-
-  const model = requiredText(record.model, "model");
-  const options = record.options === undefined
-    ? undefined
-    : canonicalJson(record.options, "Model options");
-  if (
-    options !== undefined && (Array.isArray(options) || options === null ||
-      typeof options !== "object")
-  ) {
-    throw new TypeError("Model options must be a plain JSON object.");
-  }
-  if (!builtin) {
+  if (record.adapter !== undefined) {
+    const extra = Object.keys(record).find((key) => key !== "adapter");
+    if (extra) throw new TypeError(`Unknown LLM connection field '${extra}'.`);
     const adapter = requiredText(record.adapter, "adapter");
-    return Object.freeze({
-      adapter,
-      model,
-      ...(options ? { options: options as TOptions } : {}),
-    });
+    return Object.freeze({ adapter });
   }
-
-  const provider = builtinProvider(record.provider, "Model provider");
-  const credentials = optionalText(record.credentials, "credentials");
-  const apiKey = optionalText(record.apiKey, "apiKey");
-  const baseUrl = optionalText(record.baseUrl, "baseUrl");
-  if (
-    credentials !== undefined &&
-    (apiKey !== undefined || record.extraHeaders !== undefined)
-  ) {
+  const extra = Object.keys(record).find((key) =>
+    !new Set(["provider", "baseUrl", "auth", "runtimeDiagnostics"]).has(key)
+  );
+  if (extra) throw new TypeError(`Unknown LLM connection field '${extra}'.`);
+  const provider = builtinProvider(record.provider, "LLM connection provider");
+  const baseUrl = optionalText(record.baseUrl, "LLM connection baseUrl");
+  const auth = Object.fromEntries(
+    plainDataEntries(record.auth, "LLM connection auth"),
+  );
+  const dynamic = auth.resolve !== undefined;
+  const authExtra = Object.keys(auth).find((key) =>
+    !new Set(dynamic ? ["resolve"] : ["apiKey", "extraHeaders"]).has(key)
+  );
+  if (authExtra) {
+    throw new TypeError(`Unknown LLM connection auth field '${authExtra}'.`);
+  }
+  if (dynamic && typeof auth.resolve !== "function") {
+    throw new TypeError("LLM connection auth.resolve must be a function.");
+  }
+  const apiKey = dynamic
+    ? undefined
+    : optionalText(auth.apiKey, "LLM connection auth.apiKey");
+  const extraHeaders = dynamic
+    ? undefined
+    : headerRecord(auth.extraHeaders, "LLM connection auth.extraHeaders");
+  if (!dynamic && apiKey === undefined && extraHeaders === undefined) {
     throw new TypeError(
-      "Model credentials cannot be combined with inline apiKey or extraHeaders.",
+      "LLM connection auth requires apiKey, extraHeaders, or resolve.",
     );
   }
-
-  const extraHeaders = headerRecord(record.extraHeaders, "Model extraHeaders");
 
   let runtimeDiagnostics: LlmRuntimeDiagnostics | undefined;
   if (record.runtimeDiagnostics !== undefined) {
     const diagnostics = Object.fromEntries(plainDataEntries(
       record.runtimeDiagnostics,
-      "Model runtimeDiagnostics",
+      "LLM connection runtimeDiagnostics",
     ));
     const diagnosticExtra = Object.keys(diagnostics).find((key) =>
       key !== "enabled" && key !== "credentialSource"
     );
     if (diagnosticExtra) {
       throw new TypeError(
-        `Unknown Model runtimeDiagnostics field '${diagnosticExtra}'.`,
+        `Unknown LLM connection runtimeDiagnostics field '${diagnosticExtra}'.`,
       );
     }
     if (
       diagnostics.enabled !== undefined &&
       typeof diagnostics.enabled !== "boolean"
     ) {
-      throw new TypeError("Model runtimeDiagnostics.enabled must be boolean.");
+      throw new TypeError(
+        "LLM connection runtimeDiagnostics.enabled must be boolean.",
+      );
     }
     const credentialSources = new Set<LlmCredentialSource>([
       "connected_account",
@@ -742,7 +680,7 @@ export function normalizeModel<TOptions extends LlmJsonObject = LlmJsonObject>(
         ))
     ) {
       throw new TypeError(
-        "Model runtimeDiagnostics.credentialSource is invalid.",
+        "LLM connection runtimeDiagnostics.credentialSource is invalid.",
       );
     }
     runtimeDiagnostics = Object.freeze({
@@ -757,12 +695,79 @@ export function normalizeModel<TOptions extends LlmJsonObject = LlmJsonObject>(
 
   return Object.freeze({
     provider,
-    model,
-    ...(credentials === undefined ? {} : { credentials }),
-    ...(apiKey === undefined ? {} : { apiKey }),
     ...(baseUrl === undefined ? {} : { baseUrl }),
-    ...(extraHeaders === undefined ? {} : { extraHeaders }),
-    ...(options ? { options: options as TOptions } : {}),
+    auth: dynamic
+      ? Object.freeze({ resolve: auth.resolve as LlmAuthResolver })
+      : Object.freeze({
+        ...(apiKey === undefined ? {} : { apiKey }),
+        ...(extraHeaders === undefined ? {} : { extraHeaders }),
+      }),
     ...(runtimeDiagnostics === undefined ? {} : { runtimeDiagnostics }),
+  }) as LlmConnectionResource;
+}
+
+/** Validates one durable connection/model selection and freezes its JSON options. */
+export function normalizeLlmModelSelection<
+  TOptions extends LlmJsonObject = LlmJsonObject,
+>(
+  value: unknown,
+  path = "LLM model selection",
+): LlmModelSelection<TOptions> {
+  const record = Object.fromEntries(plainDataEntries(value, path));
+  const extra = Object.keys(record).find((key) =>
+    !new Set(["connection", "model", "options"]).has(key)
+  );
+  if (extra) throw new TypeError(`${path}.${extra} is not supported.`);
+  const connection = requiredText(record.connection, `${path}.connection`);
+  const model = requiredText(record.model, `${path}.model`);
+  const options = record.options === undefined
+    ? undefined
+    : canonicalJson(record.options, `${path}.options`);
+  if (
+    options !== undefined &&
+    (options === null || Array.isArray(options) || typeof options !== "object")
+  ) throw new TypeError(`${path}.options must be a JSON object.`);
+  if (options) {
+    const reserved = Object.keys(options).find((key) =>
+      new Set([
+        "provider",
+        "adapter",
+        "baseUrl",
+        "apiKey",
+        "extraHeaders",
+        "auth",
+        "connection",
+        "model",
+      ]).has(key)
+    );
+    if (reserved) {
+      throw new TypeError(
+        `${path}.options.${reserved} cannot override connection transport or authentication.`,
+      );
+    }
+  }
+  return Object.freeze({
+    connection,
+    model,
+    ...(options ? { options: options as TOptions } : {}),
   });
+}
+
+export function normalizeLlmModelSelections(
+  value: unknown,
+  path = "LLM models",
+): LlmModelSelections {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${path} must be a non-empty array.`);
+  }
+  const selections = value.map((item, index) =>
+    normalizeLlmModelSelection(item, `${path}[${index}]`)
+  );
+  const identities = selections.map((item) =>
+    JSON.stringify([item.connection, item.model, item.options ?? null])
+  );
+  if (new Set(identities).size !== identities.length) {
+    throw new TypeError(`${path} must not contain duplicate selections.`);
+  }
+  return Object.freeze(selections) as LlmModelSelections;
 }

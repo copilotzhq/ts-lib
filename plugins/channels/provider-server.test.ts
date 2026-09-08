@@ -160,7 +160,12 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
     id: "support",
     name: "Support",
     role: "support",
-    models: { generate: ["fixtureModel"] as const },
+    models: {
+      generate: [{
+        connection: "fixtureModel",
+        model: "fixture-model",
+      }] as const,
+    },
   });
   const llm: LlmAdapter = Object.freeze({
     call() {
@@ -201,11 +206,8 @@ Deno.test("signed WhatsApp server ingress persists no credentials and retries on
     ],
     resources: {
       agents: { support: agent },
-      models: {
-        fixtureModel: {
-          adapter: "fixture",
-          model: "fixture-model",
-        },
+      llmConnections: {
+        fixtureModel: { adapter: "fixture" },
       },
     },
     adapters: { llm: { fixture: llm } },

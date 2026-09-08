@@ -26,7 +26,7 @@ The generic runtime owns:
 
 Plugins own semantic contracts and workflows. Core owns participants, threads,
 messages, Agent Resources, prompt policy, and the conversation loop. LLM owns
-`llm.call`, Model Resources, Adapter contracts, and built-in provider drivers.
+`llm.call`, LLM connections, Adapter contracts, and built-in provider drivers.
 Tools, Channels, Memory, Knowledge, Skills, Schedules, Usage, and Admin own
 their respective Collections, Actions, Processors, Resources, and Adapters.
 Goals are a Core authoring loop over ordinary application sends.
@@ -45,8 +45,8 @@ Runtime production code never imports a concrete plugin.
 
 Resources and Adapters compose independently. Application overlays win after
 plugin dependencies and root plugins. Plain typed values are canonical; helpers
-such as `defineAgent`, `defineModel`, and `defineTool` add validation and
-inference, not privileged object identities.
+such as `defineAgent`, `defineLlmConnection`, and `defineTool` add validation
+and inference, not privileged object identities.
 
 ## Durable lifecycle
 
@@ -69,17 +69,17 @@ fail the foreground operation.
 
 ## AI harness
 
-Agent, Model, Tool, and Skill values are Resources. Declarative fields are data;
-Agent instruction resolution, Context contribution, and Skill reading are
-examples of typed process-local policy hooks. Hooks are neither durable Actions
-nor persisted configuration. Built-in provider credentials and transport
-configuration live only in process-local Model Resources; custom provider
-implementations live in Adapters. Core turns an Agent's ordered Model Resource
-aliases into one `llm.call` Action. Tool Resources map model presentation to the
-same Action aliases present under `context.actions`; there is no Tool catalog,
-executor, wrapper Action, or second validation lifecycle. Tool and OpenAPI
-factories are compiler conveniences that materialize native Actions plus those
-data-only Tool Resources.
+Agent, LLM connection, Tool, and Skill values are Resources. Declarative fields
+are data; Agent instruction resolution, Context contribution, and Skill reading
+are examples of typed process-local policy hooks. Hooks are neither durable
+Actions nor persisted configuration. Built-in provider credentials and transport
+configuration live only in process-local LLM connections; custom provider
+implementations live in Adapters. Core turns an Agent's ordered connection/model
+selections into one `llm.call` Action. Tool Resources map model presentation to
+the same Action aliases present under `context.actions`; there is no Tool
+catalog, executor, wrapper Action, or second validation lifecycle. Tool and
+OpenAPI factories are compiler conveniences that materialize native Actions plus
+those data-only Tool Resources.
 
 Multiple model-produced Tool calls form a deterministic plan. Independent root
 branches run concurrently, stages inside each pipeline run sequentially, and the

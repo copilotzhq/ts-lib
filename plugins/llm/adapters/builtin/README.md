@@ -6,11 +6,11 @@ The adapter factory for the first-party LLM provider protocols.
 
 ## Why it exists
 
-It keeps provider selection private to built-in Model Resources.
+It keeps provider selection private to built-in LLM connections.
 
 ## How to use it
 
-Configure a built-in Model Resource; `llm.call` materializes this adapter
+Configure a built-in LLM connection; `llm.call` materializes this adapter
 automatically.
 
 ## How it works

@@ -47,7 +47,7 @@ Deno.test("core plugin is direct static plugin composition", () => {
   );
 });
 
-Deno.test("application owns every Model Resource and custom LLM Adapter", () => {
+Deno.test("application owns every LLM connection and custom LLM Adapter", () => {
   const adapter = {
     call: () => {
       throw new Error("not invoked by composition");
@@ -56,14 +56,13 @@ Deno.test("application owns every Model Resource and custom LLM Adapter", () => 
   const registry = createPluginRegistry({
     plugins: [corePlugin],
     resources: {
-      models: { default: { adapter: "test", model: "test-model" } },
+      llmConnections: { default: { adapter: "test" } },
     },
     adapters: { llm: { test: adapter } },
   });
   assertStrictEquals(registry.adapters.llm.test, adapter);
-  assertEquals(registry.resources.models.default, {
+  assertEquals(registry.resources.llmConnections.default, {
     adapter: "test",
-    model: "test-model",
   });
 });
 

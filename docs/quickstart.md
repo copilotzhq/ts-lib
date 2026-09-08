@@ -22,63 +22,68 @@ const app = await createCopilotz({
         id: "support",
         name: "Support",
         role: "Answer clearly and use only granted capabilities.",
-        models: { generate: ["fast"] },
+        models: {
+          generate: [{ connection: "openai", model: "your-provider-model-id" }],
+        },
         capabilities: {},
       },
     },
-    models: {
-      fast: {
+    llmConnections: {
+      openai: {
         provider: "openai",
-        model: "your-provider-model-id",
-        apiKey,
+        auth: { apiKey },
       },
     },
   },
 });
 ```
 
-Resources are immutable process-local semantic definitions. Their declarative
-fields are provider-neutral data; a Resource contract may also expose a typed,
-read-only policy hook (for example, dynamic Agent instructions). Hooks run from
-the composed Resource and are never persisted. A built-in Model Resource selects
-its provider driver and captures credentials and transport configuration at
-composition time. Neither the API key nor client is persisted in an Agent,
-Action input, or lifecycle output. Custom providers use
-`createLlmAdapter({ call })` from `/llm`; built-in providers need no Adapter
-declaration or factory import.
+Resources are immutable process-local definitions. The connection owns provider,
+endpoint, and authentication. Agents and direct `llm.call` inputs own model IDs
+and JSON options. Keys, resolved headers, and provider clients never enter
+persisted Action inputs or lifecycle outputs.
 
-When several Models use the same account, declare the credential once:
+One connection supports multiple models and reasoning levels:
 
 ```ts
-import { defineLlmCredential } from "jsr:@copilotz/copilotz@^0.65.4/llm";
+import { defineLlmConnection } from "@copilotz/copilotz/llm";
 
-const openai = defineLlmCredential({ provider: "openai", apiKey });
-
-const resources = {
-  llmCredentials: { openai },
-  models: {
-    fast: { provider: "openai", model: "fast-model", credentials: "openai" },
-    strong: {
-      provider: "openai",
-      model: "strong-model",
-      credentials: "openai",
+const openai = defineLlmConnection({ provider: "openai", auth: { apiKey } });
+const resources = { llmConnections: { openai } };
+const models = {
+  generate: [
+    {
+      connection: "openai",
+      model: "your-model",
+      options: { reasoningEffort: "high" },
     },
-  },
+    { connection: "openai", model: "your-fallback-model" },
+  ],
 };
 ```
 
-`defineLlmCredential({ provider, resolve })` supports a tenant/user-scoped
-connected account. The resolver receives a narrow trusted runtime context, runs
-at most once for that credential alias in one `llm.call`, and returns either
-ephemeral key/headers or `{ available: false }` so fallback skips the Model
-without provider I/O. Resolver output is never persisted.
+For dynamic authentication, use `auth: { resolve(context, execution) { ... } }`.
+The resolver receives trusted scope and collection access and returns ephemeral
+`{ available: true, apiKey, extraHeaders? }` or `{ available: false }`.
+Resolution is lazy and memoized per connection within one call. Provider
+failures retain the existing ordered fallback behavior. Transport/authentication
+fields are rejected in durable selections and their options.
+
+`createChatGptConnection` from `/llm` handles access-token expiry, refresh and
+in-process refresh sharing for an already connected ChatGPT account. Supply an
+explicit OAuth client ID and `load`, `save`, and `markExpired` callbacks. The
+application owns user/account authorization, encrypted storage, and conditional
+writes. See
+[the helper contract](../plugins/llm/authoring/chatgpt-connection/README.md).
+Custom providers use `createLlmAdapter({ call })` and a connection
+`{ adapter }`.
 
 ## Send typed ingress
 
 Core messages target an existing thread and participant graph. Channel or
 onboarding workflows may create that graph as part of their atomic ingress; a
 trusted Gateway host can also bootstrap Collections through its
-`/v3/collections/*` routes. The Goal runner consumes existing target and lead
+`/api/collections/*` routes. The Goal runner consumes existing target and lead
 threads rather than provisioning them.
 
 ```ts

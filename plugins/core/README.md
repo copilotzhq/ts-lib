@@ -12,7 +12,7 @@ domain storage primitives.
 
 ## How to use it
 
-Install `corePlugin`, compose Agent and Model Resources, then send typed
+Install `corePlugin`, compose Agents and LLM connections, then send typed
 `message(...)` inputs.
 
 ## How it works

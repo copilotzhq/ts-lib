@@ -11,9 +11,9 @@ credentials, streaming, and recovery behind one Action boundary.
 
 ## How to use it
 
-Compose `llmPlugin`, declare Model and optional credential Resources, then
-invoke `callLlm` directly or through the Core agent workflow. Pure preflight
-estimates are available from `@copilotz/copilotz/llm/tokens`.
+Compose `llmPlugin`, declare LLM connection Resources, then invoke `callLlm`
+directly or through the Core agent workflow. Pure preflight estimates are
+available from `@copilotz/copilotz/llm/tokens`.
 
 ## How it works
 

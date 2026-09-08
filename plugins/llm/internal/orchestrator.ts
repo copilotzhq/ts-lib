@@ -360,7 +360,7 @@ function toUsageStatusReason(
 }
 
 export type ChatOptions = {
-  /** The owning `llm.call` invocation has another Model Resource target. */
+  /** The owning `llm.call` invocation has another model candidate. */
   hasExternalFallback?: boolean;
 };
 

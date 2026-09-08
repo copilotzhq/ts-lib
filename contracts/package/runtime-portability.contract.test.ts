@@ -107,7 +107,7 @@ Deno.test("portable smoke contract uses only Web and injected capabilities", asy
       "TextEncoder",
       "Response",
       "definePlugin",
-      "defineModel",
+      "defineLlmConnection",
       "LlmAdapter",
     ]
   ) assertStringIncludes(smoke, capability);

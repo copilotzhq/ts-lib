@@ -152,12 +152,17 @@ Deno.test("Channel receipt observation includes delayed Core model output before
             name: "Support",
             role: "support",
             instructions: "Reply concisely.",
-            models: { generate: ["delayed"] as const },
+            models: {
+              generate: [{
+                connection: "delayed",
+                model: "delayed-model",
+              }] as const,
+            },
             capabilities: { tools: [] },
           } satisfies AgentResource,
         ),
       },
-      models: { delayed: { adapter: "delayed", model: "delayed-model" } },
+      llmConnections: { delayed: { adapter: "delayed" } },
     },
     adapters: { llm: { delayed: delayedAdapter } },
   });

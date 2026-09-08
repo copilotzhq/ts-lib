@@ -94,8 +94,8 @@ every schema operation using its operation ID-derived Tool alias.
 typed transport policies, such as request preparation and response-asset
 mapping, stay on that definition; the OpenAPI compiler is still required to
 materialize each operation's Action and Tool Resource. Its process-local API
-Resource may carry transport policy and credentials, just as a built-in LLM
-Model Resource does. A genuinely custom transport implementation belongs to an
+Resource may carry transport policy and credentials, just as a built-in LLM LLM
+connection does. A genuinely custom transport implementation belongs to an
 Adapter rather than a Resource hook.
 
 OpenAPI live NDJSON channels are append-only, media-stable, and materialized in
@@ -104,6 +104,6 @@ promotes standard image/audio/resource bodies through one staged
 materialization; runtime objects, typed arrays, cycles, and credential-bearing
 schemas reject.
 
-Pass built-in provider configuration directly in Model Resources. Import and
+Pass built-in provider configuration directly in LLM connections. Import and
 register an Adapter only for a custom provider or host capability. The registry
 does not load string presets, package paths, or modules at runtime.

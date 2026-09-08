@@ -44,6 +44,7 @@ function llmOutput(
     index: 0,
     providerRequest: true,
     model,
+    connection: "primary",
     adapter: "openai-primary",
     providerModel: "gpt-5-mini-test",
     status: "completed" as const,
@@ -52,6 +53,7 @@ function llmOutput(
   })]);
   return Object.freeze({
     model,
+    connection: "primary",
     adapter: "openai-primary",
     providerModel: "gpt-5-mini-test",
     content: Object.freeze([Object.freeze({
@@ -74,7 +76,7 @@ function llmOutput(
 const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
   id: "llm.call",
   async execute(input, context) {
-    const model = input.models[0];
+    const model = input.models[0].model;
     if (model === "failing-model") {
       await context.progress({
         schema: "copilotz.llm.attempt-accounting.v1",
@@ -83,6 +85,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           index: 0,
           providerRequest: true,
           model,
+          connection: "primary",
           adapter: "openai-primary",
           providerModel: "gpt-5-mini-test",
           status: "failed",
@@ -99,6 +102,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           index: 0,
           providerRequest: true,
           model,
+          connection: "primary",
           adapter: "openai-primary",
           providerModel: "gpt-5-mini-test",
           status: "cancelled",
@@ -115,6 +119,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
           index: 0,
           providerRequest: true,
           model,
+          connection: "primary",
           adapter: "openai-primary",
           providerModel: "gpt-5-mini-test",
           status: "failed",
@@ -140,6 +145,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
             index: 0,
             providerRequest: true,
             model: "aggregate-model",
+            connection: "primary",
             adapter: "openai-primary",
             providerModel: "fallback-a",
             status: "failed" as const,
@@ -158,6 +164,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
             index: 1,
             providerRequest: true,
             model: "aggregate-model",
+            connection: "primary",
             adapter: "openai-primary",
             providerModel: "gpt-5-mini-test",
             status: "completed" as const,
@@ -187,6 +194,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
             index: 0,
             providerRequest: true,
             model: "uncosted-model",
+            connection: "primary",
             adapter: "openai-primary",
             providerModel: "fallback-usd",
             status: "failed" as const,
@@ -202,6 +210,7 @@ const usageLlmAction = defineAction<LlmCallInput, LlmCallOutput>({
             index: 1,
             providerRequest: true,
             model: "uncosted-model",
+            connection: "primary",
             adapter: "openai-primary",
             providerModel: "fallback-eur",
             status: "completed" as const,
@@ -437,7 +446,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     await invoke("test.usage.llm", {
       key: "provider-0",
       input: {
-        models: ["primary-model"],
+        models: [{ connection: "primary", model: "primary-model" }],
         mode: "generate",
         request: {
           instructions: "prompt-must-not-be-copied",
@@ -457,7 +466,7 @@ Deno.test("usage workflow records Action terminals once without payload copies",
     await invoke("test.usage.llm", {
       key: "provider-1",
       input: {
-        models: ["failing-model"],
+        models: [{ connection: "primary", model: "failing-model" }],
         mode: "generate",
         request: { messages: [] },
       },
@@ -628,7 +637,7 @@ Deno.test("usage projects one ledger row per reported llm provider attempt", asy
         payload: {
           key,
           input: {
-            models: [model],
+            models: [{ connection: "primary", model }],
             mode: "generate",
             request: {
               instructions: `${model}-prompt-must-not-be-copied`,

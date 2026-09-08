@@ -54,11 +54,11 @@ export interface UsageEvent {
   resource: string;
   /** Vendor/provider name when applicable (e.g. "openai", "anthropic"). */
   provider?: string | null;
-  /** Selected Model Resource alias for an LLM call. */
+  /** Provider model selected for an LLM call; older stored rows may contain aliases. */
   model?: string | null;
   /** Selected LLM Adapter alias for an LLM call. */
   adapter?: string | null;
-  /** Provider-specific model identifier selected by the Model Resource. */
+  /** Provider-specific model identifier retained for existing Usage records. */
   providerModel?: string | null;
   /** Operation performed, e.g. "chat", "embed", "tool.exec". */
   operation?: string | null;

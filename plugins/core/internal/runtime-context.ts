@@ -8,7 +8,7 @@ import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type {
   callLlmAction,
   LlmAdapter,
-  ModelResource,
+  LlmConnectionResource,
 } from "@copilotz/copilotz/llm";
 /** Defines the composed runtime contexts used by Core primitives. @module */
 
@@ -24,7 +24,7 @@ export type CoreResources =
     agents: Readonly<Record<string, AgentResource | undefined>>;
     tools: Readonly<Record<string, ToolResource | undefined>>;
     skills: Readonly<Record<string, Skill | undefined>>;
-    models: Readonly<Record<string, ModelResource | undefined>>;
+    llmConnections: Readonly<Record<string, LlmConnectionResource | undefined>>;
     promptInstructions: Readonly<
       Record<string, PromptInstructionResource | undefined>
     >;

@@ -13,7 +13,10 @@ Deno.test("AgentResource is a plain Core resource with explicit aliases", () => 
     instructions: "Be concise.",
     personality: "Thoughtful",
     description: "Default application assistant",
-    models: { generate: ["default"], session: ["realtime"] },
+    models: {
+      generate: [{ connection: "default", model: "default" }],
+      session: [{ connection: "realtime", model: "realtime" }],
+    },
     capabilities: {
       tools: ["search", "calculator"],
       agents: ["researcher"],
@@ -22,7 +25,10 @@ Deno.test("AgentResource is a plain Core resource with explicit aliases", () => 
     metadata: { owner: "application" },
   } as const satisfies AgentResource;
 
-  assertEquals(agent.models.generate, ["default"]);
+  assertEquals(agent.models.generate, [{
+    connection: "default",
+    model: "default",
+  }]);
   assertEquals(agent.capabilities.tools, ["search", "calculator"]);
 
   type HasProvider = "provider" extends keyof AgentResource ? true : false;
@@ -39,21 +45,38 @@ Deno.test("defineAgent preserves inference while validating and freezing", () =>
     id: "assistant",
     name: "Assistant",
     role: "helper",
-    models: { generate: ["default", "backup"] },
+    models: {
+      generate: [{ connection: "default", model: "default" }, {
+        connection: "backup",
+        model: "backup",
+      }],
+    },
     capabilities: { tools: ["search"] },
     metadata: { source: "fixture" },
   });
 
   const inferredId: "assistant" = agent.id;
-  const inferredModels: readonly ["default", "backup"] | undefined =
-    agent.models.generate;
+  const inferredModels:
+    | readonly [
+      { readonly connection: "default"; readonly model: "default" },
+      { readonly connection: "backup"; readonly model: "backup" },
+    ]
+    | undefined = agent.models.generate;
   assertEquals(inferredId, "assistant");
-  assertEquals(inferredModels, ["default", "backup"]);
+  assertEquals(inferredModels, [{ connection: "default", model: "default" }, {
+    connection: "backup",
+    model: "backup",
+  }]);
   assertEquals(agent, {
     id: "assistant",
     name: "Assistant",
     role: "helper",
-    models: { generate: ["default", "backup"] },
+    models: {
+      generate: [{ connection: "default", model: "default" }, {
+        connection: "backup",
+        model: "backup",
+      }],
+    },
     capabilities: { tools: ["search"] },
     metadata: { source: "fixture" },
   });
@@ -83,7 +106,7 @@ Deno.test("defineAgent rejects provider fields and invalid selection aliases", (
         id: "assistant",
         name: "Assistant",
         role: "helper",
-        models: { generate: ["default"] },
+        models: { generate: [{ connection: "default", model: "default" }] },
         provider: "openai",
       } as unknown as AgentResource),
     TypeError,
@@ -95,10 +118,10 @@ Deno.test("defineAgent rejects provider fields and invalid selection aliases", (
         id: "assistant",
         name: "Assistant",
         role: "helper",
-        models: { generate: ["invalid-model"] },
+        models: { generate: [{ connection: "", model: "invalid-model" }] },
       }),
     TypeError,
-    "invalid alias",
+    "non-empty string",
   );
   assertThrows(
     () =>
@@ -117,10 +140,15 @@ Deno.test("defineAgent rejects provider fields and invalid selection aliases", (
         id: "assistant",
         name: "Assistant",
         role: "helper",
-        models: { generate: ["default", "default"] },
+        models: {
+          generate: [{ connection: "default", model: "default" }, {
+            connection: "default",
+            model: "default",
+          }],
+        },
       }),
     TypeError,
-    "duplicate generate model aliases",
+    "duplicate selections",
   );
   assertThrows(
     () =>
@@ -187,7 +215,7 @@ Deno.test("defineAgent keeps a dynamic instruction hook process-local and frozen
     id: "dynamic",
     name: "Dynamic",
     role: "helper",
-    models: { generate: ["default"] },
+    models: { generate: [{ connection: "default", model: "default" }] },
     instructions: { base: "base", resolve: () => "override" },
   });
   assert(Object.isFrozen(dynamic));

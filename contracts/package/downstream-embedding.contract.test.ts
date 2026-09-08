@@ -7,7 +7,7 @@ import {
   defineProcessor,
   type ProcessorContext,
 } from "@copilotz/copilotz/plugins";
-import { defineModel, type LlmAdapter } from "@copilotz/copilotz/llm";
+import { defineLlmConnection, type LlmAdapter } from "@copilotz/copilotz/llm";
 import { createTestDomainContext } from "../../plugins/core/internal/testing/context.ts";
 import { projectMessages } from "../../plugins/core/internal/testing/projections.ts";
 import { createTestDatabase } from "../../runtime/testing/ominipg.ts";
@@ -33,9 +33,8 @@ function migratedApplicationPlugin() {
       }),
     }),
   });
-  const model = defineModel({
+  const connection = defineLlmConnection({
     adapter: "downstreamInjected",
-    model: "injected",
   });
   const processor = defineProcessor<ProcessorContext>({
     id: "downstream.reply",
@@ -69,10 +68,10 @@ function migratedApplicationPlugin() {
           id: "support",
           name: "Support",
           role: "Support agent",
-          models: { generate: ["injected"] },
+          models: { generate: [{ connection: "injected", model: "injected" }] },
         },
       },
-      models: { injected: model },
+      llmConnections: { injected: connection },
     },
     adapters: { llm: { downstreamInjected: adapter } },
     processors: { reply: processor },

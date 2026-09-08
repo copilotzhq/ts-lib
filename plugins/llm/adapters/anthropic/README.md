@@ -10,7 +10,7 @@ It translates Anthropic’s Messages protocol into the LLM boundary.
 
 ## How to use it
 
-Declare a Model Resource with `provider: "anthropic"`.
+Declare a LLM connection with `provider: "anthropic"`.
 
 ## How it works
 

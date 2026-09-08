@@ -2,3 +2,5 @@
 
 export * from "./custom-adapter/index.ts";
 export * from "./token-estimation/index.ts";
+
+export * from "./chatgpt-connection/index.ts";

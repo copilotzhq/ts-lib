@@ -70,7 +70,9 @@ function agent(
     name: id.toUpperCase(),
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
-    models: { generate: ["testModel"] as const },
+    models: {
+      generate: [{ connection: "testModel", model: "parallel-model" }] as const,
+    },
     capabilities: { tools, ...(agents.length ? { agents } : {}) },
   });
 }
@@ -299,7 +301,7 @@ Deno.test("parallel Tool branches fan out, preserve pipes, and fan in in provide
     resources: {
       agents: { a: testAgent },
       tools,
-      models: { testModel: { adapter: "test", model: "parallel-model" } },
+      llmConnections: { testModel: { adapter: "test" } },
     },
     adapters: {
       llm: {
@@ -455,7 +457,7 @@ Deno.test("parallel Ask branches are futures: nested Agent/Tool work fans in bef
     resources: {
       agents: { a, b, c, d },
       tools: { mark: markTool, capture: captureTool },
-      models: { testModel: { adapter: "test", model: "ask-futures-model" } },
+      llmConnections: { testModel: { adapter: "test" } },
     },
     adapters: {
       llm: {
@@ -736,7 +738,9 @@ Deno.test("an unavailable root branch fans in with a successful sibling and one 
     name: "A",
     role: "assistant",
     instructions: "ACTIVE_AGENT=a",
-    models: { generate: ["testModel"] as [string, ...string[]] },
+    models: {
+      generate: [{ connection: "testModel", model: "parallel-model" }] as const,
+    },
     capabilities: { tools: ["good", "gone"] },
   };
   const testAgent = mutableAgent as AgentResource;
@@ -748,7 +752,7 @@ Deno.test("an unavailable root branch fans in with a successful sibling and one 
     resources: {
       agents: { a: testAgent },
       tools,
-      models: { testModel: { adapter: "test", model: "unavailable-root" } },
+      llmConnections: { testModel: { adapter: "test" } },
     },
     adapters: {
       llm: {
@@ -849,7 +853,7 @@ Deno.test("a trailing jq result retains its real Action provenance", async () =>
     resources: {
       agents: { a: testAgent },
       tools: { source: sourceTool },
-      models: { testModel: { adapter: "test", model: "trailing-jq" } },
+      llmConnections: { testModel: { adapter: "test" } },
     },
     adapters: {
       llm: {

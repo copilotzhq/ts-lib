@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.68.0 — Explicit LLM connections
+
+- Replace Model resources and credential registries with explicit connection,
+  model, and per-selection options. This is a breaking LLM and Agent
+  configuration change.
+- Add process-local static/dynamic LLM connections and a reusable ChatGPT token
+  refresh helper with conditional persistence callbacks.
+- Preserve provider fallback, progressive streams, cancellation, and usage
+  reporting; reject authentication configuration in durable model selections.
+
 ## 0.67.4 — 2026-09-07
 
 - Synchronize with the Admin facade integration and authenticated tenant scope

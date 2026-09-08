@@ -112,7 +112,9 @@ async function fixture() {
           name: "Target",
           role: "system under test",
           instructions: "ACTIVE_AGENT=target",
-          models: { generate: ["scripted"] },
+          models: {
+            generate: [{ connection: "scripted", model: "fixture-model" }],
+          },
           capabilities: { tools: ["goal_probe"] },
         }),
         lead: defineAgent({
@@ -120,11 +122,13 @@ async function fixture() {
           name: "Lead",
           role: "goal driver",
           instructions: "ACTIVE_AGENT=lead",
-          models: { generate: ["scripted"] },
+          models: {
+            generate: [{ connection: "scripted", model: "fixture-model" }],
+          },
         }),
       },
-      models: {
-        scripted: { adapter: "scripted", model: "fixture-model" },
+      llmConnections: {
+        scripted: { adapter: "scripted" },
       },
       tools: {
         goal_probe: defineTool("goal_probe", probeAction, {

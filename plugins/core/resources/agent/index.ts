@@ -1,5 +1,10 @@
 /** Defines immutable process-local Agent Resources. @module */
 
+import {
+  type LlmModelSelections,
+  normalizeLlmModelSelections,
+} from "@copilotz/copilotz/llm";
+
 const ALIAS_PATTERN = /^[a-z][a-zA-Z0-9_]*$/;
 const UNSAFE_ALIASES = new Set(["__proto__", "constructor", "prototype"]);
 const AGENT_KEYS = new Set([
@@ -25,8 +30,8 @@ export type AgentCapabilities = Readonly<{
   skills?: AgentCapabilitySelection;
 }>;
 
-/** Ordered Model Resource aliases selected for one interaction mode. */
-export type AgentModelSelection = readonly [string, ...string[]];
+/** Ordered connection/model candidates selected for one interaction mode. */
+export type AgentModelSelection = LlmModelSelections;
 
 /** Model candidates selected independently for each interaction mode. */
 export type AgentModels = Readonly<{
@@ -36,7 +41,7 @@ export type AgentModels = Readonly<{
 
 /**
  * Frozen, process-local Agent definition. Provider configuration and clients
- * belong to Model Resources and LLM Adapters, never to an Agent. Instruction
+ * belong to LLM connections and Adapters, never to an Agent. Instruction
  * hooks are pure, deterministic composition policy over the supplied durable
  * turn facts: their resolved text is persisted only by the subsequent
  * `llm.call` Action.
@@ -156,20 +161,10 @@ function modelSelection(
   mode: keyof AgentModels,
 ): AgentModelSelection | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError(
-      `Agent '${agentId}' ${mode} models must be a non-empty array of aliases.`,
-    );
-  }
-  const aliases = value.map((entry, index) =>
-    alias(entry, `Agent '${agentId}' ${mode} model at index ${index}`)
+  return normalizeLlmModelSelections(
+    value,
+    `Agent '${agentId}' ${mode} models`,
   );
-  if (new Set(aliases).size !== aliases.length) {
-    throw new TypeError(
-      `Agent '${agentId}' contains duplicate ${mode} model aliases.`,
-    );
-  }
-  return Object.freeze(aliases) as unknown as AgentModelSelection;
 }
 
 function models(value: unknown, agentId: string): AgentModels {

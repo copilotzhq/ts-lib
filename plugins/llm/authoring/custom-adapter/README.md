@@ -12,7 +12,7 @@ providers.
 ## How to use it
 
 Wrap an object with `call(input)` in `createLlmAdapter(...)`, then reference its
-alias from a custom Model Resource.
+alias from a custom LLM connection.
 
 ## How it works
 

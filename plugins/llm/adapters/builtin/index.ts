@@ -2,8 +2,8 @@
 
 import type {
   LlmAdapter,
-  LlmBuiltinModelResource,
   LlmBuiltinProvider,
+  LlmBuiltinProviderConfiguration,
   LlmJsonObject,
   LlmMode,
 } from "../../internal/contracts.ts";
@@ -31,9 +31,9 @@ const PROVIDERS: Readonly<Record<LlmBuiltinProvider, ProviderFactory>> = Object
     ollama: ollamaProvider,
   });
 
-/** Materializes one already-normalized built-in Model without exposing it. */
+/** Materializes one resolved built-in provider configuration without exposing it. */
 export function materializeBuiltinModel(
-  resource: LlmBuiltinModelResource,
+  resource: LlmBuiltinProviderConfiguration,
   mode: LlmMode,
   options: LlmJsonObject,
 ): LlmAdapter {

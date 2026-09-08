@@ -121,8 +121,18 @@ function agent(mode: LlmMode = "generate"): AgentResource {
     role: "assistant",
     instructions: "CORE_AGENT_INSTRUCTIONS",
     models: mode === "session"
-      ? { session: ["primaryModel"] as const }
-      : { generate: ["primaryModel"] as const },
+      ? {
+        session: [{
+          connection: "primaryModel",
+          model: "session-provider-model",
+        }] as const,
+      }
+      : {
+        generate: [{
+          connection: "primaryModel",
+          model: "generate-provider-model",
+        }] as const,
+      },
     capabilities: { tools: ["contract_tool"] },
   });
 }
@@ -162,15 +172,9 @@ async function createFixture(
     resources: {
       agents: { north: agentResource },
       tools: { contract_tool: contractTool },
-      models: {
-        primaryModel: {
-          adapter: "test",
-          model: `${mode}-provider-model`,
-        },
-        backupModel: {
-          adapter: "test",
-          model: "backup-provider-model",
-        },
+      llmConnections: {
+        primaryModel: { adapter: "test" },
+        backupModel: { adapter: "test" },
       },
       promptInstructions: promptResources.promptInstructions ?? {},
       promptContext: promptResources.promptContext ?? {},
@@ -398,11 +402,17 @@ function inputText(input: LlmAdapterCallInput): string {
   ).join("\n");
 }
 
-Deno.test("Core invokes llm.call with explicit application Models and Adapters", async () => {
+Deno.test("Core invokes llm.call with explicit model selections and connections", async () => {
   const orderedAgent = Object.freeze({
     ...agent(),
     models: Object.freeze({
-      generate: ["primaryModel", "backupModel"] as const,
+      generate: [{
+        connection: "primaryModel",
+        model: "generate-provider-model",
+      }, {
+        connection: "backupModel",
+        model: "backup-provider-model",
+      }] as const,
     }),
   }) satisfies AgentResource;
   const fixture = await createFixture(
@@ -435,7 +445,7 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
     await waitForRun(fixture, root, 2);
     assertEquals(fixture.inputs.length, 1);
     const input = fixture.inputs[0];
-    assertEquals(input.model, "primaryModel");
+    assertEquals(input.model, "generate-provider-model");
     assertEquals(input.adapter, "test");
     assertEquals(input.providerModel, "generate-provider-model");
     assertEquals(input.mode, "generate");
@@ -467,7 +477,7 @@ Deno.test("Core invokes llm.call with explicit application Models and Adapters",
     assertExists(completed);
     assertEquals(
       (invoked.input as Record<string, unknown>).models,
-      ["primaryModel", "backupModel"],
+      orderedAgent.models.generate,
     );
     assertEquals((invoked.input as Record<string, unknown>).mode, "generate");
     assertEquals(completed.metadata, {
@@ -1145,11 +1155,8 @@ Deno.test("public lifecycle forgery cannot project Core or Usage effects", async
     resources: {
       agents: { north: agent() },
       tools: { contract_tool: contractTool },
-      models: {
-        primaryModel: {
-          adapter: "test",
-          model: "authority-provider-model",
-        },
+      llmConnections: {
+        primaryModel: { adapter: "test" },
       },
     },
     adapters: { llm: { test: llm } },
@@ -1361,7 +1368,12 @@ Deno.test("dynamic Agent instructions resolve for each routed LLM request", asyn
     id: "north",
     name: "North",
     role: "assistant",
-    models: { generate: ["primaryModel"] },
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "generate-provider-model",
+      }],
+    },
     instructions: {
       base: "DYNAMIC_BASE",
       resolve(_facts, execution) {
@@ -1379,7 +1391,7 @@ Deno.test("dynamic Agent instructions resolve for each routed LLM request", asyn
     version: "1.0.0",
     resources: {
       agents: { north: authored },
-      models: { primaryModel: { adapter: "test", model: "dynamic-model" } },
+      llmConnections: { primaryModel: { adapter: "test" } },
     },
     adapters: {
       llm: {
@@ -1478,7 +1490,12 @@ Deno.test("pure dynamic instructions survive router delivery retry without anoth
     id: "north",
     name: "North",
     role: "assistant",
-    models: { generate: ["primaryModel"] },
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "generate-provider-model",
+      }],
+    },
     instructions: {
       resolve(facts, execution) {
         retriedFacts.push(`${facts.thread.id}:${execution.triggerMessageId}`);
@@ -1520,7 +1537,12 @@ Deno.test("invalid dynamic Agent instruction output fails before llm.call", asyn
     id: "north",
     name: "North",
     role: "assistant",
-    models: { generate: ["primaryModel"] },
+    models: {
+      generate: [{
+        connection: "primaryModel",
+        model: "generate-provider-model",
+      }],
+    },
     instructions: {
       resolve:
         () => ({ instructions: 42 } as unknown as { instructions: null }),

@@ -10,7 +10,7 @@ import {
   type LlmAdapterContentPart,
   type LlmAdapterFrame,
   type LlmAdapterResult,
-  type LlmBuiltinModelResource,
+  type LlmBuiltinProviderConfiguration,
   type LlmJsonObject,
   type LlmJsonValue,
   type LlmMode,
@@ -37,10 +37,10 @@ import type {
 
 /**
  * Runtime-only provider configuration copied from one process-local built-in
- * Model Resource. It never enters LLM Action input, metadata, or output.
+ * connection. It never enters LLM Action input, metadata, or output.
  */
 type BuiltinProviderConfiguration = Omit<
-  LlmBuiltinModelResource,
+  LlmBuiltinProviderConfiguration,
   "provider" | "model"
 >;
 

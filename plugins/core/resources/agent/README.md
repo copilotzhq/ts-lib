@@ -2,7 +2,7 @@
 
 ## What it is
 
-An immutable process-local Agent definition with Model and capability selection.
+An immutable process-local Agent definition with model and capability selection.
 
 ## Why it exists
 

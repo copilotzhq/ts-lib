@@ -62,8 +62,8 @@ This map describes the current implementation.
   `plugins/core/resources/`, `plugins/llm/resources/`, and
   `plugins/skills/resources/`
 - Agent contract, prompt policy, and conversation loop: `plugins/core/`
-- Provider-neutral LLM Action, Model/Adapter contracts, and providers:
-  `plugins/llm/`
+- Provider-neutral LLM Action, connection/model selection and Adapter contracts,
+  and providers: `plugins/llm/`
 - Provider-aware token estimation: `plugins/llm/authoring/token-estimation/`
 - Tool authoring contracts: `plugins/tools/`; concrete Tool plugins:
   `plugins/tool-*/`

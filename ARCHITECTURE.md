@@ -81,8 +81,8 @@ they do not require parallel `llm_attempt` or `tool_execution` Collections. The
 agent loop is expressed through Processors that react to conversation and Action
 Events and determine the next operation to perform.
 
-Concepts such as **agents**, **tools**, and **models** primarily enter the
-system as resources. An Agent can describe its identity, model preferences,
+Concepts such as **agents**, **tools**, and **LLM connections** primarily enter
+the system as resources. An Agent can describe its identity, model preferences,
 available tools, and an instructions policy hook. A Context Resource can
 contribute prompt material and a Skill can provide its files through similarly
 typed local hooks. These hooks are evaluated from the composed Resource; they
@@ -90,8 +90,10 @@ are not Action lifecycles, Event data, or persisted configuration. A Tool
 Resource instead describes how an existing Action is exposed to an LLM: its
 `action` field is the same alias used by both `resources.tools` and
 `context.actions`. It does not carry an `execute` method or a second execution
-lifecycle. A Model Resource describes one atomic model deployment. Ordered model
-preference and fallback belong to the Agent or direct LLM call.
+lifecycle. A connection Resource owns one provider transport and its
+authentication. Ordered `{ connection, model, options }` selections belong to
+the Agent or direct LLM call; models and reasoning levels need no separate
+registry.
 
 Provider-specific behavior is isolated behind adapters. For example, an
 `llm.call` action may own the common workflow for preparing an LLM request,
@@ -100,13 +102,11 @@ result into the runtime. The portions that differ between OpenAI, Google, or
 another provider are delegated to their respective LLM adapters. Consequently,
 the orchestration and business logic remains unchanged when the underlying
 provider changes. The LLM plugin installs the provider-neutral Action,
-contracts, and built-in provider drivers. Applications explicitly contribute
-Model Resources containing process-local provider configuration. A Model may
-carry a simple inline key or reference a reusable, provider-bound
-`llmCredentials` Resource; a custom provider is defined with `createLlmAdapter`
-and referenced by its Model Resource. Credential resolver output and clients
-never enter Action input, Action-call metadata, progress, output, or Usage
-records.
+contracts, and built-in provider drivers. Applications explicitly contribute LLM
+connections containing process-local provider configuration and static or
+dynamic authentication. Custom providers use `createLlmAdapter`, referenced by a
+connection. Resolver output and provider clients never enter Action inputs,
+metadata, progress, outputs, or Usage records.
 
 Each reported provider request becomes one durable Usage ledger row identified
 by the LLM Action run and attempt index. A completed logical call does not add a
@@ -283,19 +283,19 @@ instead.
 
 An LLM credential resolver is a narrower operational boundary: it resolves or
 refreshes authentication for the current trusted Action context, not semantic
-application behavior. Resolution is lazy and memoized once per credential alias
-inside one `llm.call`; `{ available: false }` skips that Model without provider
-I/O. Any scoped refresh write must use the supplied stable operation identity so
-at-least-once Action execution remains safe. Only the configured Resource and
-sanitized availability cross composition; resolved keys and headers remain
-ephemeral.
+application behavior. Resolution is lazy and memoized once per connection alias
+inside one `llm.call`; `{ available: false }` skips that candidate without
+provider I/O. Any scoped refresh write must use the supplied stable operation
+identity so at-least-once Action execution remains safe. Only the configured
+Resource and sanitized availability cross composition; resolved keys and headers
+remain ephemeral.
 
 Adapters own interchangeable custom external or infrastructural implementations.
 A semantic Resource may instead carry process-local credentials and transport
 policy for a built-in implementation. Neither is a policy hook. Semantic helpers
-such as `defineAgent`, `defineModel`, `defineContextResource`, `defineSkill`,
-and `defineApi` validate and freeze their corresponding Resource definition;
-they do not create a privileged runtime representation. In contrast,
+such as `defineAgent`, `defineLlmConnection`, `defineContextResource`,
+`defineSkill`, and `defineApi` validate and freeze their corresponding Resource
+definition; they do not create a privileged runtime representation. In contrast,
 `createToolsPlugin` and `createOpenApiToolsPlugin` are explicit compilers: each
 creates one or more native Actions plus matching data-only Tool Resources. The
 compiled maps remain inspectable, and there is still only one Action lifecycle
@@ -314,10 +314,10 @@ The reference AI harness follows the same composition rules. The minimal Core
 plugin owns conversation state, agent resources, ingress helpers, and the prompt
 policy and Processors that implement the agent loop. Core depends on the
 first-party LLM plugin through ordinary plugin composition. The LLM plugin owns
-the common `llm.call` Action, Model Resource contract, LLM Adapter contract, and
-first-party provider drivers. Applications choose and configure every Model
+the common `llm.call` Action, LLM connection contract, LLM Adapter contract, and
+first-party provider drivers. Applications choose and configure every connection
 explicitly; only genuinely custom providers require an Adapter. Neither LLM nor
-Core installs a default Model, client, or credential.
+Core installs a default connection, client, or credential.
 
 Core exposes an LLM tool by mapping a data-only Tool Resource to an existing
 Action alias. An object-form `defineTool({ ... execute })` is authoring sugar:

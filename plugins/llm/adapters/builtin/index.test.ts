@@ -10,26 +10,22 @@ import {
   LlmAdapterCallError,
   type LlmAdapterCallInput,
   type LlmAdapterFrame,
-  type LlmBuiltinModelResource,
   type LlmBuiltinProvider,
+  type LlmBuiltinProviderConfiguration,
 } from "../../internal/contracts.ts";
-import { defineModel } from "../../resources/model/index.ts";
 import { materializeBuiltinModel } from "./index.ts";
 
 function builtin(
   provider: LlmBuiltinProvider,
   configuration: Partial<
-    Omit<LlmBuiltinModelResource, "provider" | "model">
+    Omit<LlmBuiltinProviderConfiguration, "provider" | "model">
   > = {},
 ): LlmAdapter {
-  const resource = defineModel({
+  const resource: LlmBuiltinProviderConfiguration = {
     provider,
     model: "fixture-model",
     ...configuration,
-  });
-  if (resource.provider === undefined) {
-    throw new Error("Expected built-in Model.");
-  }
+  };
   return materializeBuiltinModel(
     resource,
     "generate",

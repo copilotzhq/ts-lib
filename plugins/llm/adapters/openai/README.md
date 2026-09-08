@@ -11,7 +11,7 @@ boundary.
 
 ## How to use it
 
-Declare a Model Resource with `provider: "openai"`.
+Declare a LLM connection with `provider: "openai"`.
 
 ## How it works
 

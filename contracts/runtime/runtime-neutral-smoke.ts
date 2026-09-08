@@ -1,9 +1,9 @@
 import { createMemoryAssetRepository } from "@copilotz/copilotz/content";
 import { createPluginRegistry, definePlugin } from "@copilotz/copilotz/plugins";
 import {
-  defineModel,
+  defineLlmConnection,
   type LlmAdapter,
-  type ModelResource,
+  type LlmConnectionResource,
 } from "@copilotz/copilotz/llm";
 
 export type RuntimeNeutralSmokeResult = Readonly<{
@@ -52,26 +52,26 @@ export async function runRuntimeNeutralSmoke(): Promise<
       }),
     }),
   });
-  const model = defineModel({
+  const connection = defineLlmConnection({
     adapter: "runtimeSmoke",
-    model: "runtime-smoke-model",
   });
   const plugin = definePlugin({
     id: "@copilotz/runtime-smoke",
     version: "3.0.0",
-    resources: { models: { runtimeSmoke: model } },
+    resources: { llmConnections: { runtimeSmoke: connection } },
     adapters: { llm: { runtimeSmoke: adapter } },
   });
   const registry = await createPluginRegistry({ plugins: [plugin] });
   const resolvedAdapter: LlmAdapter = registry.adapters.llm.runtimeSmoke;
-  const resolvedModel: ModelResource = registry.resources.models.runtimeSmoke;
+  const resolvedConnection: LlmConnectionResource =
+    registry.resources.llmConnections.runtimeSmoke;
   if (
     typeof resolvedAdapter.call !== "function" ||
-    !("adapter" in resolvedModel) ||
-    resolvedModel.adapter !== "runtimeSmoke"
+    !("adapter" in resolvedConnection) ||
+    resolvedConnection.adapter !== "runtimeSmoke"
   ) {
     throw new TypeError(
-      "Runtime-smoke LLM composition must include its Model and Adapter.",
+      "Runtime-smoke LLM composition must include its connection and Adapter.",
     );
   }
 

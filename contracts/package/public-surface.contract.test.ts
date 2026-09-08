@@ -85,7 +85,7 @@ Deno.test("package root exposes only the application factory", () => {
       "coreSchedulesPlugin",
       "defineLlmProviderResource",
       "defineAgent",
-      "defineModel",
+      "defineLlmConnection",
       "llmPlugin",
       "createAgentCapabilityResolver",
       "defineContextResource",
@@ -149,7 +149,14 @@ Deno.test("package subpaths expose cohesive factories", () => {
     "mapThreadRecord",
   ]);
   assertEquals(typeof core.corePlugin, "object");
-  assertFunctions(llm, ["createLlmAdapter", "defineModel"]);
+  assertFunctions(llm, [
+    "createLlmAdapter",
+    "defineLlmConnection",
+    "createChatGptConnection",
+    "normalizeLlmModelSelections",
+  ]);
+  assertEquals("defineModel" in llm, false);
+  assertEquals("defineLlmCredential" in llm, false);
   assertFunctions(llmTokens, ["estimateTextTokens", "estimateTokens"]);
   for (
     const removed of [

@@ -133,12 +133,17 @@ async function fixture(
           name: "North",
           role: "assistant",
           instructions: "NORTH_NATIVE_MEMORY_INSTRUCTIONS",
-          models: { generate: ["test_model"] },
+          models: {
+            generate: [{
+              connection: "test_model",
+              model: "native-memory-model",
+            }],
+          },
           capabilities: { tools: ["consolidate_memory"] },
         }),
       },
-      models: {
-        test_model: { adapter: "test", model: "native-memory-model" },
+      llmConnections: {
+        test_model: { adapter: "test" },
       },
       promptContext: {
         fixture: defineContextResource({
@@ -305,7 +310,7 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
 
     assertEquals(run.inputs.length, 2);
     const maintenance = run.inputs[1]!;
-    assertEquals(maintenance.model, "test_model");
+    assertEquals(maintenance.model, "native-memory-model");
     assertEquals(maintenance.providerModel, "native-memory-model");
     assertStringIncludes(
       maintenance.request.instructions ?? "",

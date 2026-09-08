@@ -10,7 +10,7 @@ It translates MiniMax’s Anthropic-compatible protocol into the LLM boundary.
 
 ## How to use it
 
-Declare a Model Resource with `provider: "minimax"`.
+Declare a LLM connection with `provider: "minimax"`.
 
 ## How it works
 

@@ -10,7 +10,7 @@ It translates DeepSeek’s compatible protocol into the LLM boundary.
 
 ## How to use it
 
-Declare a Model Resource with `provider: "deepseek"`.
+Declare a LLM connection with `provider: "deepseek"`.
 
 ## How it works
 

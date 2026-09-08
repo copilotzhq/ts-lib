@@ -10,7 +10,7 @@ It lets local Ollama models participate through the same LLM boundary.
 
 ## How to use it
 
-Declare a Model Resource with `provider: "ollama"` and, when needed, `baseUrl`.
+Declare a LLM connection with `provider: "ollama"` and, when needed, `baseUrl`.
 
 ## How it works
 

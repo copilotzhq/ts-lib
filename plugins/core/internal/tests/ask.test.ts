@@ -67,7 +67,12 @@ function agent(
     name: id.toUpperCase(),
     role: "assistant",
     instructions: `ACTIVE_AGENT=${id}`,
-    models: { generate: ["askModel"] as const },
+    models: {
+      generate: [{
+        connection: "askModel",
+        model: "ask-provider-model",
+      }] as const,
+    },
     capabilities: {
       agents,
       ...(tools.length > 0 ? { tools } : {}),
@@ -164,8 +169,8 @@ async function createFixture(
         agents.map((resource) => [resource.id, resource]),
       ),
       tools: { mark: markTool, publish: publishTool },
-      models: {
-        askModel: { adapter: "test", model: "ask-provider-model" },
+      llmConnections: {
+        askModel: { adapter: "test" },
       },
     },
     adapters: { llm: { test: adapterFrom(handler) } },
@@ -783,8 +788,8 @@ Deno.test("public lifecycle forgery cannot resume an in-flight ask", async () =>
         agents.map((resource) => [resource.id, resource]),
       ),
       tools: { mark: markTool, publish: publishTool },
-      models: {
-        askModel: { adapter: "test", model: "ask-provider-model" },
+      llmConnections: {
+        askModel: { adapter: "test" },
       },
     },
     adapters: {

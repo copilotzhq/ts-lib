@@ -31,7 +31,7 @@ or hidden workflow controller.
 ## Install
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.67.4";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.68.0";
 ```
 
 Host-only capabilities live on explicit subpaths. Importing the root does not
@@ -40,8 +40,8 @@ pull in filesystem, subprocess, terminal, MCP stdio, or provider credentials.
 ## Compose an AI application
 
 ```ts
-import { createCopilotz } from "jsr:@copilotz/copilotz@^0.67.4";
-import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.67.4/core";
+import { createCopilotz } from "jsr:@copilotz/copilotz@^0.68.0";
+import { corePlugin, message } from "jsr:@copilotz/copilotz@^0.68.0/core";
 
 const openAiKey = Deno.env.get("OPENAI_API_KEY");
 if (!openAiKey) throw new Error("OPENAI_API_KEY is required");
@@ -56,15 +56,16 @@ const app = await createCopilotz({
         id: "support",
         name: "Support",
         role: "Answer clearly and use only explicitly granted capabilities.",
-        models: { generate: ["default"] },
+        models: {
+          generate: [{ connection: "openai", model: "provider-model-id" }],
+        },
         capabilities: {},
       },
     },
-    models: {
-      default: {
+    llmConnections: {
+      openai: {
         provider: "openai",
-        model: "provider-model-id",
-        apiKey: openAiKey,
+        auth: { apiKey: openAiKey },
       },
     },
   },
@@ -107,12 +108,12 @@ See [Goal runner](./docs/goals.md).
   and Action identities make retries restore the same result.
 - Action lifecycle data is self-contained and authenticated by runtime-created
   Event Bodies. Public input cannot forge a registered lifecycle receipt.
-- Model Resources describe atomic model deployments. Agents and direct LLM calls
-  own an ordered list of model aliases for fallback. Built-in Model Resources
-  carry inline process-local credentials or reference one reusable,
-  provider-bound `llmCredentials` Resource. Credential resolvers run once per
-  alias and LLM call; their secrets never enter the durable call contract.
-  `createLlmAdapter` defines a genuinely custom provider implementation.
+- Agents and direct LLM calls select ordered `{ connection, model, options }`
+  candidates. One process-local `llmConnections` Resource owns each provider's
+  transport and static or dynamic authentication. Model choices and reasoning
+  options need no registry entries. Authentication resolves once per connection
+  per call; secrets never enter the durable call contract. `createLlmAdapter`
+  defines a genuinely custom provider implementation.
 - Tool Resources are data-only presentations of the same Action aliases that
   Core invokes. There is no second Tool execution path.
 - Progressive `stream.output` observations contain generic content metadata and
