@@ -217,6 +217,8 @@ export async function loadCoreThreadMessageSnapshot(
       historyScopeId?: string;
       internalOnly?: boolean;
       afterMessageId?: string;
+      /** Exact inclusive range used to verify a reserved memory source. */
+      range?: Readonly<{ startMessageId: string; endMessageId: string }>;
       viewerIds?: readonly string[];
     }
   > = {},
@@ -231,7 +233,20 @@ export async function loadCoreThreadMessageSnapshot(
   ) {
     throw new Error("Certified history boundary is no longer available.");
   }
+  const start = options.range
+    ? await messages.get({ id: options.range.startMessageId })
+    : null;
+  const end = options.range
+    ? await messages.get({ id: options.range.endMessageId })
+    : null;
+  if (
+    options.range &&
+    (!start || !end || start.threadId !== threadId || end.threadId !== threadId)
+  ) {
+    throw new Error("Memory source range is no longer available.");
+  }
   const window = await loadThreadMessageRecordWindow(context, threadId, {
+    ...(start && end ? { from: start, anchor: end } : {}),
     ...(options.historyScopeId
       ? { historyScopeId: options.historyScopeId }
       : {}),
@@ -240,7 +255,7 @@ export async function loadCoreThreadMessageSnapshot(
     ...(boundary ? { after: boundary } : {}),
   });
   const currentTrigger = await messages.get({ id: String(trigger.id) });
-  const active = Boolean(
+  const active = window.anchorActive && Boolean(
     currentTrigger &&
       String(currentTrigger.createdAt) === String(trigger.createdAt) &&
       threadMessageRecordInWindow(

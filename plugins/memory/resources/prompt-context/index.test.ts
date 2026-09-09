@@ -87,7 +87,11 @@ Deno.test("memory context selects the newest ready checkpoint visible to this th
               },
               updatedAt: "2026-01-01T00:00:00.000Z",
             },
-          ]),
+          ].map((item) => ({
+            threadId: "thread-a",
+            agentId: "north",
+            ...item,
+          }))),
       },
     },
     signal: new AbortController().signal,

@@ -68,6 +68,7 @@ export type ThreadMessageRecordWindow = Readonly<{
   viewerIds?: readonly string[];
   anchor?: CollectionRecord;
   after?: CollectionRecord;
+  from?: CollectionRecord;
   branch?: ActiveBranchBounds;
 }>;
 
@@ -301,6 +302,7 @@ export function threadMessageRecordInWindow(
     (!window.anchor ||
       compareThreadMessageRecords(record, window.anchor) <= 0) &&
     (!window.after || compareThreadMessageRecords(record, window.after) > 0) &&
+    (!window.from || compareThreadMessageRecords(record, window.from) >= 0) &&
     (!window.internalOnly || asRecord(record.visibility).kind === "internal") &&
     visibleInHistoryScope(record, window.historyScopeId) &&
     activeInBranch(record, window.branch);
@@ -373,6 +375,7 @@ export function threadMessageWindowFilter(
         ]
         : []),
       ...(window.anchor ? [boundary(window.anchor, "lte")] : []),
+      ...(window.from ? [boundary(window.from, "gte")] : []),
       ...(window.after
         ? [
           {
@@ -443,6 +446,7 @@ export async function loadThreadMessageRecordWindow(
   options: Readonly<{
     anchor?: CollectionRecord;
     after?: CollectionRecord;
+    from?: CollectionRecord;
     historyScopeId?: string;
     internalOnly?: boolean;
     viewerIds?: readonly string[];
@@ -466,6 +470,12 @@ export async function loadThreadMessageRecordWindow(
   const currentAnchor = options.anchor
     ? await messages.get({ id: options.anchor.id })
     : undefined;
+  const from = options.from
+    ? await messages.get({ id: options.from.id })
+    : undefined;
+  if (options.from && (!from || String(from.threadId) !== threadId)) {
+    throw new Error("Message range start is no longer available.");
+  }
   const currentAfter = options.after
     ? await messages.get({ id: options.after.id })
     : undefined;
@@ -489,16 +499,26 @@ export async function loadThreadMessageRecordWindow(
       : {}),
     ...(anchor ? { anchor } : {}),
     ...(after ? { after } : {}),
+    ...(from ? { from } : {}),
     ...(branch ? { branch } : {}),
   }) satisfies ThreadMessageRecordWindow;
-  const anchorActive = options.anchor === undefined || Boolean(
+  let anchorActive = options.anchor === undefined || Boolean(
     anchor &&
       String(anchor.createdAt) === String(options.anchor.createdAt) &&
       threadMessageRecordInWindow(base, anchor),
   );
 
   const selected: CollectionRecord[] = [];
-  if (anchorActive && anchor) selected.push(anchor);
+  if (anchorActive && anchor) {
+    // Anchors must pass the same storage authorization predicate as paged rows.
+    const [authorized] = await messages.list({
+      where: { id: anchor.id },
+      filter: threadMessageWindowFilter(base),
+      limit: 1,
+    });
+    anchorActive = Boolean(authorized);
+    if (authorized) selected.push(authorized);
+  }
   if (anchorActive) {
     const descending = Boolean(anchor || requestedLimit !== undefined);
     let cursor = anchor?.id;
@@ -554,6 +574,7 @@ export async function loadThreadMessageRecordWindow(
       : {}),
     ...(anchor ? { anchor } : {}),
     ...(after ? { after } : {}),
+    ...(from ? { from } : {}),
     ...(branch ? { branch } : {}),
   });
 }

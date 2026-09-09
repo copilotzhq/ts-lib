@@ -254,7 +254,103 @@ Deno.test("duplicate local IDs and invisible references are rejected before muta
   );
 });
 
-Deno.test("range reservation retains tool-result units and remains deterministic", () => {
+Deno.test("shared validation preserves all semantic forms and normalizes only declared fields", () => {
+  const parsed = parseConsolidateMemoryInput({
+    outcome: "changes",
+    continuity: " Continue. ",
+    entities: [{
+      localId: " entity ",
+      kind: "entity.project",
+      summary: " Project ",
+      name: " Compass ",
+      externalIds: { " key ": " value " },
+      attributes: { literal: " untouched " },
+    }],
+    assertions: [{
+      localId: "assertion",
+      kind: "assertion.state",
+      summary: "State",
+      subject: { localId: " entity " },
+      predicate: " status ",
+      object: { ref: { memoryId: "memory-old" } },
+      epistemic: { basis: "reported", stance: "tentative" },
+      temporal: { validFrom: " now " },
+    }],
+    occurrences: [{
+      localId: "occurrence",
+      kind: "occurrence.event",
+      summary: "Event",
+      participants: [{ node: { type: "sharedDocument", id: "doc-a" } }],
+      temporal: { startedAt: " yesterday " },
+    }],
+    intents: [{
+      localId: "intent",
+      kind: "intent.objective",
+      summary: "Objective",
+      status: "active",
+      owner: { localId: "entity" },
+      target: { memoryId: "memory-old" },
+      dueAt: " tomorrow ",
+    }],
+    inquiries: [{
+      localId: "inquiry",
+      kind: "inquiry.question",
+      summary: "Question",
+      question: " Why? ",
+      status: "open",
+      about: [{ localId: "entity" }],
+    }],
+    procedures: [{
+      localId: "procedure",
+      kind: "procedure.workflow",
+      summary: "Steps",
+      steps: [" First ", " Second "],
+      preconditions: [" Ready "],
+      trigger: " Start ",
+    }],
+  }, {
+    ...options(),
+    defaultEvidenceSources: [{ type: "message", id: "message-a" }],
+  });
+  assertEquals(parsed.continuity, "Continue.");
+  assertEquals(parsed.entities?.[0].name, "Compass");
+  assertEquals(parsed.entities?.[0].attributes, { literal: " untouched " });
+  assertEquals(parsed.entities?.[0].externalIds, { key: "value" });
+  assertEquals(parsed.assertions?.[0].subject, { localId: "entity" });
+  assertEquals(parsed.assertions?.[0].object, {
+    ref: { memoryId: "memory-old" },
+  });
+  assertEquals(parsed.occurrences?.[0].temporal, { startedAt: "yesterday" });
+  assertEquals(parsed.intents?.[0].dueAt, "tomorrow");
+  assertEquals(parsed.inquiries?.[0].question, "Why?");
+  assertEquals(parsed.procedures?.[0].steps, ["First", "Second"]);
+});
+
+Deno.test("direct callers cannot bypass the detailed structural schema", () => {
+  const entity = {
+    localId: "entity",
+    kind: "entity.project",
+    summary: "Project",
+    name: "Compass",
+  };
+  for (
+    const patch of [{ name: 42 }, { kind: "unregistered" }, {
+      arbitraryAuthority: "admin",
+    }, { attributes: [] }]
+  ) {
+    assertThrows(
+      () =>
+        parseConsolidateMemoryInput({
+          outcome: "changes",
+          continuity: "Continue",
+          entities: [{ ...entity, ...patch }],
+        }, options()),
+      TypeError,
+    );
+  }
+});
+
+Deno.test("range reservation keeps a chronological prefix and recent tail", () => {
   const selected = selectLongTermMemoryRange({
     messages: [
       { id: "m0", senderType: "agent", senderId: "a", text: "boundary" },
@@ -272,99 +368,49 @@ Deno.test("range reservation retains tool-result units and remains deterministic
   assertEquals(selected?.sourceEndMessageId, "m3");
 });
 
-Deno.test("retained tail does not split an interleaved dependency group", () => {
+Deno.test("a retained tool result does not retain its earlier call", () => {
   const selected = selectLongTermMemoryRange({
     messages: [
-      { id: "boundary", senderType: "agent", senderId: "a", text: "old" },
-      { id: "before", senderType: "human", senderId: "u", text: "before" },
+      { id: "question", senderType: "human", senderId: "u", text: "question" },
       {
-        id: "ask-plan",
-        senderType: "agent",
-        senderId: "a",
-        text: "ask",
-        dependencyIds: ["ask-1"],
+        id: "call",
+        senderType: "assistant",
+        senderId: "north",
+        text: "ask south",
+        toolCalls: [{ id: "ask", action: "ask" }],
       },
-      {
-        id: "peer-message",
-        senderType: "human",
-        senderId: "u",
-        text: "peer ".repeat(40),
-      },
-      {
-        id: "ask-result",
-        senderType: "tool",
-        senderId: "tool",
-        text: "result ".repeat(40),
-        dependencyIds: ["ask-1"],
-      },
-      { id: "trigger", senderType: "agent", senderId: "a", text: "done" },
+      { id: "result", senderType: "tool", senderId: "ask", text: "answer" },
     ],
-    triggerMessageId: "trigger",
-    previousBoundaryMessageId: "boundary",
+    triggerMessageId: "result",
     triggerEstimatedTokens: 1,
-    retainRecentEstimatedTokens: 10,
+    retainRecentEstimatedTokens: 1,
   });
-
-  // The retained result also retains its plan and the interleaved peer message,
-  // because history replacement must remain a contiguous prefix.
-  assertEquals(selected?.messages.map((message) => message.id), ["before"]);
+  assertEquals(selected?.sourceEndMessageId, "call");
+  assertEquals(selected?.retainedMessageCount, 1);
 });
 
-Deno.test("an unfinished dependency group is retained with everything after it", () => {
-  const selected = selectLongTermMemoryRange({
-    messages: [
-      { id: "boundary", senderType: "agent", senderId: "a", text: "old" },
-      { id: "before", senderType: "human", senderId: "u", text: "before" },
-      {
-        id: "pending-plan",
-        senderType: "agent",
-        senderId: "a",
-        text: "pending",
-        dependencyIds: ["ask-2"],
-        pendingDependency: true,
-      },
-      {
-        id: "later",
-        senderType: "human",
-        senderId: "u",
-        text: "later",
-        dependencyIds: ["ask-2"],
-      },
-      { id: "trigger", senderType: "agent", senderId: "a", text: "done" },
-    ],
-    triggerMessageId: "trigger",
-    previousBoundaryMessageId: "boundary",
-    triggerEstimatedTokens: 1,
-  });
-
-  assertEquals(selected?.messages.map((message) => message.id), ["before"]);
-});
-
-Deno.test("an oversized first dependency group does not silently truncate history", () => {
+Deno.test("an open Ask can be summarized without waiting for its answer", () => {
   const selected = selectLongTermMemoryRange({
     messages: [
       {
-        id: "plan",
-        senderType: "agent",
-        senderId: "a",
-        text: "large ".repeat(200),
-        dependencyIds: ["ask-3"],
+        id: "call",
+        senderType: "assistant",
+        senderId: "north",
+        text: "ask south",
+        toolCalls: [{ id: "ask", action: "ask" }],
       },
       {
-        id: "result",
-        senderType: "tool",
-        senderId: "tool",
-        text: "large ".repeat(200),
-        dependencyIds: ["ask-3"],
+        id: "progress",
+        senderType: "user",
+        senderId: "south",
+        text: "still working",
       },
-      { id: "trigger", senderType: "agent", senderId: "a", text: "done" },
     ],
-    triggerMessageId: "trigger",
+    triggerMessageId: "progress",
     triggerEstimatedTokens: 1,
-    maxSourceEstimatedTokens: 10,
+    retainRecentEstimatedTokens: 1,
   });
-
-  assertEquals(selected, null);
+  assertEquals(selected?.sourceEndMessageId, "call");
 });
 
 Deno.test("range reservation is a safe no-op when its prior boundary is absent", () => {

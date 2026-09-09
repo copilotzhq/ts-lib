@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.70.2 — 2026-09-09
+
+- Consolidate bounded chronological history across unfinished Tool and Ask
+  calls, preserving execution identities and late answers across summary
+  boundaries.
+- Share detailed proposal validation and checkpoint reservation while preserving
+  semantic-memory authorization and atomic settlement.
+- Read and validate exact checkpoint ranges, including endpoint authorization,
+  and avoid reloading successful content batches during source selection.
+
 ## 0.70.1 — 2026-09-09
 
 - Keep foreground Agent answers waiting for certified memory consolidation, with

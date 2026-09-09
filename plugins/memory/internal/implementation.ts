@@ -1,8 +1,3 @@
-import {
-  agentAskMetadata,
-  coreToolPlanResultMetadata,
-  coreToolResultOrigin,
-} from "../../core/internal/workflow-metadata.ts";
 /**
  * Shared semantic-memory mechanics used by the canonical primitive owners.
  *
@@ -14,7 +9,6 @@ import {
   coreAgentTurnMetadata,
   coreLlmCallMetadata,
   coreToolActionMetadata,
-  coreToolPlanMetadata,
   withCoreAgentTurnMetadata,
   workflowMetadata,
 } from "@copilotz/copilotz/core";
@@ -72,6 +66,7 @@ import {
   selectLongTermMemoryRange,
   stableMemoryRecordId,
 } from "../authoring/consolidation/index.ts";
+import { consolidationInputSchema } from "../authoring/consolidation/schema.ts";
 import { memoryRecordCollection } from "../collections/internal/definitions.ts";
 import {
   type AssertionMemoryDraft,
@@ -329,13 +324,14 @@ function participantAgentId(participant: Participant): string {
 }
 
 async function checkpoints(
-  context: MemoryProcessorContext,
+  context: Pick<MemoryProcessorContext, "collections">,
   threadId: string,
   agentId: string,
   status?: "pending" | "ready" | "failed" | "cancelled",
 ) {
   const values = await context.collections.longTermMemory.list({
     where: { threadId, agentId, ...(status ? { status } : {}) },
+    order: { field: "sequence", direction: "desc" },
     limit: 1_000,
   });
   return Object.freeze(
@@ -346,6 +342,67 @@ async function checkpoints(
       checkpointSequence(right) - checkpointSequence(left)
     ),
   );
+}
+
+/** Reserve one checkpoint; only the caller may supply certified history coverage. */
+async function createCheckpoint(
+  context: MemoryProcessorContext,
+  input: Readonly<{
+    id?: string;
+    threadId: string;
+    agentId: string;
+    spaces: readonly MemorySpaceDescriptor[];
+    sourceStartMessageId: string;
+    sourceEndMessageId: string;
+    metadata: Readonly<Record<string, unknown>>;
+  }>,
+): Promise<CollectionRecord> {
+  const { threadId, agentId, spaces } = input;
+  const writable = spaces.filter((space) => space.access === "read_write");
+  const defaultSpace = spaces.find((space) => space.defaultWrite);
+  if (!defaultSpace || !writable.length) {
+    throw new Error("Thread has no default writable memory space.");
+  }
+  const sequence = checkpointSequence(
+    (await checkpoints(context, threadId, agentId))[0] ?? null,
+  ) + 1;
+  const id = input.id ?? `memory:${threadId}:${agentId}:${sequence}`;
+  try {
+    return await context.collections.longTermMemory.create({
+      id,
+      name: `Thread ${threadId} / ${agentId} / ${sequence}`,
+      threadId,
+      schemaVersion: "4",
+      strategy: "semantic_graph",
+      status: "pending",
+      memorySpaceId: defaultSpace.id,
+      readMemorySpaceIds: spaces.map((space) => space.id),
+      writeMemorySpaceIds: writable.map((space) => space.id),
+      defaultWriteMemorySpaceId: defaultSpace.id,
+      sequence,
+      agentId,
+      sourceStartMessageId: input.sourceStartMessageId,
+      sourceEndMessageId: input.sourceEndMessageId,
+      content: [],
+      contextSnapshotContent: [],
+      contextSnapshot: null,
+      embedding: null,
+      contentHash: null,
+      tokenEstimate: null,
+      error: null,
+      metadata: input.metadata,
+    }, {
+      operationKey: input.id
+        ? `checkpoint:on-demand:${id}`
+        : `checkpoint:reserve:${id}`,
+    });
+  } catch (error) {
+    const concurrent = input.id
+      ? await context.collections.longTermMemory.get({ id })
+      : (await checkpoints(context, threadId, agentId, "pending"))[0];
+    if (concurrent) return concurrent;
+    throw error;
+  }
 }
 
 async function threadMemorySpaces(
@@ -428,7 +485,7 @@ async function ensureWritableMemorySpace(
 
 function checkpointAccessible(
   checkpoint: CollectionRecord,
-  spaces: readonly MemorySpaceDescriptor[],
+  spaces: readonly Pick<MemorySpaceDescriptor, "id">[],
 ): boolean {
   const readable = new Set(spaces.map((space) => space.id));
   const ids = Array.isArray(checkpoint.readMemorySpaceIds)
@@ -486,79 +543,16 @@ function preparedSourceText(content: readonly unknown[]): string {
   }).join("\n");
 }
 
-/** Dependency groups with a member beyond the hydrated prefix stay in raw history. */
-export function pendingDependenciesOutsideCandidate(
-  dependencies: ReadonlyMap<string, readonly string[]>,
-  candidateIds: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const pending = new Set<string>();
-  for (const [messageId, ids] of dependencies) {
-    if (candidateIds.has(messageId)) continue;
-    for (const id of ids) pending.add(id);
-  }
-  return pending;
-}
-
 async function projectedSourceMessages(
   context: MemoryProcessorContext,
   input: Readonly<{
     threadId: string;
     participantId: string;
     messages: readonly ConversationMessage[];
-    /** Full metadata-only history used to preserve dependency boundaries. */
-    allMessages?: readonly ConversationMessage[];
     byteLimit?: number;
   }>,
 ): Promise<readonly MemorySourceMessage[]> {
   const sourceIds: string[] = [];
-  const plans = new Map<string, number>();
-  const completed = new Map<string, Set<number>>();
-  const answered = new Set<string>();
-  const dependencies = new Map<string, string[]>();
-  // Dependency completion is derived from the complete metadata snapshot, even
-  // when only a bounded prefix is hydrated below. A Tool/Ask continuation just
-  // outside that prefix must keep its earlier group in the raw tail.
-  for (const item of input.allMessages ?? input.messages) {
-    const plan = coreToolPlanMetadata(item.metadata);
-    const origin = coreToolResultOrigin(item.metadata);
-    const ask = agentAskMetadata(item.metadata);
-    const ids: string[] = [];
-    if (plan) {
-      plans.set(plan.planId, plan.planSize);
-      ids.push(`plan:${plan.planId}`);
-    }
-    if (origin) {
-      ids.push(`plan:${origin.planId}`);
-      if (
-        coreToolPlanResultMetadata(item.metadata) ||
-        origin.stageIndex === origin.stageCount - 1
-      ) {
-        const indices = completed.get(origin.planId) ?? new Set<number>();
-        indices.add(origin.planIndex);
-        completed.set(origin.planId, indices);
-      }
-    }
-    if (ask) {
-      ids.push(`ask:${ask.askId}`, `plan:${ask.origin.planId}`);
-      if (ask.phase === "answer") answered.add(ask.askId);
-    }
-    dependencies.set(item.id, [...new Set(ids)]);
-  }
-  const pending = new Set(
-    [...plans].filter(([id, size]) => (completed.get(id)?.size ?? 0) < size)
-      .map(([id]) => `plan:${id}`),
-  );
-  for (const ids of dependencies.values()) {
-    for (const id of ids) {
-      if (id.startsWith("ask:") && !answered.has(id.slice(4))) pending.add(id);
-    }
-  }
-  for (
-    const id of pendingDependenciesOutsideCandidate(
-      dependencies,
-      new Set(input.messages.map((message) => message.id)),
-    )
-  ) pending.add(id);
   buildLlmTranscript({
     threadId: input.threadId,
     participantId: input.participantId,
@@ -569,18 +563,23 @@ async function projectedSourceMessages(
     participantId: input.participantId,
     history: input.messages,
   }, input.byteLimit === undefined ? {} : { byteLimit: input.byteLimit });
-  return Object.freeze(prepared.flatMap((message, index) => {
+  const positions = new Map(input.messages.map((message, index) => [
+    message.id,
+    index,
+  ]));
+  const projected = prepared.flatMap((message, index) => {
     const id = sourceIds[index];
     if (!id) return [];
     return [Object.freeze({
       id,
-      dependencyIds: dependencies.get(id) ?? [],
-      pendingDependency: (dependencies.get(id) ?? []).some((key) =>
-        pending.has(key)
-      ),
       senderType: message.role,
       senderId: message.name ?? message.role,
       text: preparedSourceText(message.content),
+      ...((message.role === "assistant" || message.role === "tool") &&
+          message.toolPlanId
+        ? { toolPlanId: message.toolPlanId }
+        : {}),
+      ...(message.role === "tool" ? { toolCallId: message.toolCallId } : {}),
       ...(message.role === "assistant" && message.reasoning
         ? { reasoning: preparedSourceText(message.reasoning) }
         : {}),
@@ -588,7 +587,15 @@ async function projectedSourceMessages(
         ? { toolCalls: structuredClone(message.toolCalls) }
         : {}),
     })];
-  }));
+  });
+  // Transcript preparation can reposition an Ask receipt next to its answer.
+  // Checkpoints always cover a contiguous raw-history prefix instead.
+  return Object.freeze(
+    projected.sort((left, right) =>
+      (positions.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+      (positions.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+    ),
+  );
 }
 
 function memoryRecord(value: CollectionRecord): MemoryRecordProjection | null {
@@ -939,56 +946,19 @@ async function reserveOnDemandCheckpoint(
   }
   const range = history.slice(start, triggerIndex + 1);
   if (!range.length) throw new Error("Memory Tool has no source Messages.");
-  const writable = spaces.filter((space) => space.access === "read_write");
-  const defaultSpace = spaces.find((space) => space.defaultWrite);
-  if (!defaultSpace || !writable.length) {
-    throw new Error("Thread has no default writable memory space.");
-  }
-  const sequence = Math.max(
-    checkpointSequence(previous),
-    ...(await checkpoints(context, provenance.threadId, provenance.agentId))
-      .map(
-        checkpointSequence,
-      ),
-  ) + 1;
-  try {
-    await context.collections.longTermMemory.create({
-      id,
-      name:
-        `Thread ${provenance.threadId} / ${provenance.agentId} / ${sequence}`,
-      threadId: provenance.threadId,
-      schemaVersion: "4",
-      strategy: "semantic_graph",
-      status: "pending",
-      memorySpaceId: defaultSpace.id,
-      readMemorySpaceIds: spaces.map((space) => space.id),
-      writeMemorySpaceIds: writable.map((space) => space.id),
-      defaultWriteMemorySpaceId: defaultSpace.id,
-      sequence,
-      agentId: provenance.agentId,
-      sourceStartMessageId: range[0]!.id,
-      sourceEndMessageId: range.at(-1)!.id,
-      content: [],
-      contextSnapshotContent: [],
-      contextSnapshot: null,
-      embedding: null,
-      contentHash: null,
-      tokenEstimate: null,
-      error: null,
-      metadata: {
-        agentParticipantId: provenance.agentParticipantId,
-        initiatorParticipantId: provenance.initiatorParticipantId,
-        onDemand: true,
-      },
-    }, { operationKey: `checkpoint:on-demand:${id}` });
-  } catch (error) {
-    const concurrent = await context.collections.longTermMemory.get({ id });
-    if (concurrent) return concurrent;
-    throw error;
-  }
-  const created = await context.collections.longTermMemory.get({ id });
-  if (!created) throw new Error(`Memory checkpoint '${id}' was not created.`);
-  return created;
+  return await createCheckpoint(context, {
+    id,
+    threadId: provenance.threadId,
+    agentId: provenance.agentId,
+    spaces,
+    sourceStartMessageId: range[0].id,
+    sourceEndMessageId: range.at(-1)!.id,
+    metadata: {
+      agentParticipantId: provenance.agentParticipantId,
+      initiatorParticipantId: provenance.initiatorParticipantId,
+      onDemand: true,
+    },
+  });
 }
 
 async function checkpointForConsolidation(
@@ -1278,6 +1248,10 @@ async function checkpointSourceMessages(
       String(checkpoint.threadId),
       sourceEnd,
       {
+        range: {
+          startMessageId: String(checkpoint.sourceStartMessageId),
+          endMessageId: String(checkpoint.sourceEndMessageId),
+        },
         viewerIds: [
           String(
             candidate.agentParticipantId ??
@@ -1400,552 +1374,6 @@ async function settleCheckpoint(
       content: settlement.content,
     }, { operationKey: `memory-checkpoint:ready:${input.checkpoint.id}` });
   });
-}
-
-const consolidationInputSchemaBase: ActionSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["outcome", "continuity"],
-  example: {
-    outcome: "no_changes",
-    continuity:
-      "Continue the current release: verify the memory output contract, then publish after the checks pass. The current constraint is preserving certified history coverage; no durable memory records changed. No user question is pending.",
-  },
-  $defs: {
-    source: {
-      description:
-        "Trusted evidence reference. Explicit references must use canonical IDs authorized for the current checkpoint; do not invent IDs. Omit draft sources when no authorized ID is available.",
-      oneOf: [
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["type", "id"],
-          properties: {
-            type: { enum: ["message", "asset", "external"] },
-            id: {
-              type: "string",
-              minLength: 1,
-              description:
-                "Canonical source ID supplied by trusted context or a discovery Tool.",
-            },
-          },
-        },
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["type", "collection", "id"],
-          properties: {
-            type: { const: "collection_record" },
-            collection: { type: "string", minLength: 1 },
-            id: {
-              type: "string",
-              minLength: 1,
-              description:
-                "Canonical record ID supplied by the frozen trusted context.",
-            },
-            version: { type: ["string", "number"] },
-            updatedAt: { type: "string" },
-            fragment: { type: "string" },
-          },
-        },
-      ],
-    },
-    ref: {
-      oneOf: [
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["localId"],
-          properties: {
-            localId: {
-              type: "string",
-              minLength: 1,
-              example: "project",
-              description:
-                "Temporary ID defined by another draft in this same payload.",
-            },
-          },
-        },
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["memoryId"],
-          properties: { memoryId: { type: "string", minLength: 1 } },
-        },
-        {
-          type: "object",
-          additionalProperties: false,
-          required: ["node"],
-          properties: {
-            node: {
-              type: "object",
-              additionalProperties: false,
-              required: ["type", "id"],
-              description:
-                "Domain node visible in the frozen checkpoint context. Both type and canonical ID must come from trusted context.",
-              properties: {
-                type: { type: "string", minLength: 1 },
-                id: { type: "string", minLength: 1 },
-              },
-            },
-          },
-        },
-      ],
-    },
-  },
-  oneOf: [
-    {
-      properties: { outcome: { const: "changes" } },
-      anyOf: [
-        { required: ["entities"], properties: { entities: { minItems: 1 } } },
-        {
-          required: ["assertions"],
-          properties: { assertions: { minItems: 1 } },
-        },
-        {
-          required: ["occurrences"],
-          properties: { occurrences: { minItems: 1 } },
-        },
-        { required: ["intents"], properties: { intents: { minItems: 1 } } },
-        {
-          required: ["inquiries"],
-          properties: { inquiries: { minItems: 1 } },
-        },
-        {
-          required: ["procedures"],
-          properties: { procedures: { minItems: 1 } },
-        },
-        {
-          required: ["relations"],
-          properties: { relations: { minItems: 1 } },
-        },
-        {
-          required: ["lifecycle"],
-          properties: { lifecycle: { minItems: 1 } },
-        },
-      ],
-    },
-    {
-      properties: { outcome: { const: "no_changes" } },
-      allOf: [
-        { properties: { entities: { maxItems: 0 } } },
-        { properties: { assertions: { maxItems: 0 } } },
-        { properties: { occurrences: { maxItems: 0 } } },
-        { properties: { intents: { maxItems: 0 } } },
-        { properties: { inquiries: { maxItems: 0 } } },
-        { properties: { procedures: { maxItems: 0 } } },
-        { properties: { relations: { maxItems: 0 } } },
-        { properties: { lifecycle: { maxItems: 0 } } },
-      ],
-    },
-  ],
-  properties: {
-    outcome: {
-      enum: ["changes", "no_changes"],
-      example: "no_changes",
-      description:
-        "Use changes when at least one draft, relation, or lifecycle change is present. Use no_changes when no durable memory record should be written; continuity is still required.",
-    },
-    continuity: {
-      type: "string",
-      minLength: 1,
-      description:
-        "Required in every payload, including no_changes. This replaces the compacted conversation prefix, whose source messages will no longer be directly present in the next prompt. State the active task, constraints, decisions/results, outstanding work, and uncertainty so work can continue without those messages.",
-    },
-    entities: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["localId", "kind", "summary", "name"],
-        properties: {
-          localId: { type: "string" },
-          kind: { type: "string" },
-          summary: { type: "string" },
-          name: {
-            type: "string",
-            minLength: 1,
-            description: "Canonical display name of the entity.",
-          },
-          aliases: {
-            type: "array",
-            uniqueItems: true,
-            items: { type: "string", minLength: 1 },
-          },
-          externalIds: {
-            type: "object",
-            additionalProperties: { type: "string", minLength: 1 },
-          },
-          spaceId: { type: "string" },
-          attributes: { type: "object" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
-        },
-      },
-    },
-    assertions: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "localId",
-          "kind",
-          "summary",
-          "subject",
-          "predicate",
-          "object",
-          "epistemic",
-        ],
-        properties: {
-          localId: { type: "string" },
-          kind: { type: "string" },
-          summary: { type: "string" },
-          spaceId: { type: "string" },
-          attributes: { type: "object" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
-          subject: { $ref: "#/$defs/ref" },
-          predicate: {
-            type: "string",
-            minLength: 1,
-            description: "Stable domain predicate relating subject and object.",
-          },
-          object: {
-            oneOf: [{
-              type: "object",
-              additionalProperties: false,
-              required: ["ref"],
-              properties: { ref: { $ref: "#/$defs/ref" } },
-            }, {
-              type: "object",
-              additionalProperties: false,
-              required: ["value"],
-              properties: {
-                value: { type: ["string", "number", "boolean", "null"] },
-              },
-            }],
-          },
-          epistemic: {
-            type: "object",
-            additionalProperties: false,
-            required: ["basis", "stance"],
-            properties: {
-              basis: { enum: ["observed", "reported", "inferred", "assumed"] },
-              stance: { enum: ["affirmed", "denied", "tentative", "disputed"] },
-            },
-          },
-          temporal: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              validFrom: { type: "string" },
-              validTo: { type: "string" },
-            },
-          },
-        },
-      },
-    },
-    occurrences: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["localId", "kind", "summary"],
-        properties: {
-          localId: { type: "string" },
-          kind: { type: "string" },
-          summary: { type: "string" },
-          spaceId: { type: "string" },
-          attributes: { type: "object" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
-          participants: { type: "array", items: { $ref: "#/$defs/ref" } },
-          temporal: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              startedAt: { type: "string" },
-              endedAt: { type: "string" },
-            },
-          },
-        },
-      },
-    },
-    intents: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["localId", "kind", "summary", "status"],
-        properties: {
-          localId: { type: "string" },
-          kind: { type: "string" },
-          summary: { type: "string" },
-          spaceId: { type: "string" },
-          attributes: { type: "object" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
-          owner: { $ref: "#/$defs/ref" },
-          target: { $ref: "#/$defs/ref" },
-          status: { enum: ["proposed", "active", "completed", "cancelled"] },
-          dueAt: { type: "string" },
-        },
-      },
-    },
-    inquiries: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["localId", "kind", "summary", "question", "status"],
-        properties: {
-          localId: { type: "string" },
-          kind: { type: "string" },
-          summary: { type: "string" },
-          question: {
-            type: "string",
-            minLength: 1,
-            description:
-              "The unresolved or answered question in explicit form.",
-          },
-          spaceId: { type: "string" },
-          attributes: { type: "object" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
-          about: { type: "array", items: { $ref: "#/$defs/ref" } },
-          answer: { $ref: "#/$defs/ref" },
-          status: { enum: ["open", "answered", "obsolete"] },
-        },
-      },
-    },
-    procedures: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["localId", "kind", "summary", "steps"],
-        properties: {
-          localId: { type: "string" },
-          kind: { type: "string" },
-          summary: { type: "string" },
-          spaceId: { type: "string" },
-          attributes: { type: "object" },
-          sources: { type: "array", items: { $ref: "#/$defs/source" } },
-          trigger: { type: "string" },
-          preconditions: {
-            type: "array",
-            uniqueItems: true,
-            items: { type: "string", minLength: 1 },
-          },
-          steps: {
-            type: "array",
-            minItems: 1,
-            uniqueItems: true,
-            items: { type: "string", minLength: 1 },
-            description: "Ordered, non-empty reusable procedure steps.",
-          },
-          expectedOutcome: { type: "string" },
-          applicability: { type: "string" },
-        },
-      },
-    },
-    relations: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["from", "type", "to"],
-        properties: {
-          from: { $ref: "#/$defs/ref" },
-          type: {
-            enum: [
-              "about",
-              "same_as",
-              "supports",
-              "contradicts",
-              "depends_on",
-              "contributes_to",
-              "blocks",
-              "answers",
-            ],
-          },
-          to: { $ref: "#/$defs/ref" },
-          sources: {
-            type: "array",
-            minItems: 1,
-            items: { $ref: "#/$defs/source" },
-            description:
-              "Optional explicit relation evidence. When present it must contain at least one authorized canonical source.",
-          },
-        },
-      },
-    },
-    lifecycle: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["target", "status", "sources"],
-        properties: {
-          target: {
-            oneOf: [{
-              type: "object",
-              additionalProperties: false,
-              required: ["memoryId"],
-              properties: { memoryId: { type: "string" } },
-            }, {
-              type: "object",
-              additionalProperties: false,
-              required: ["match"],
-              properties: {
-                match: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["form", "query"],
-                  properties: {
-                    form: { enum: MEMORY_FORMS },
-                    kind: {
-                      type: "string",
-                      minLength: 1,
-                      description:
-                        "Optional kind used to narrow visible candidates. Use a registered kind for the selected form; resolution remains state-dependent.",
-                    },
-                    subject: {
-                      $ref: "#/$defs/ref",
-                      description:
-                        "Optional subject filter accepted by the parser. Any memoryId or node reference must come from visible trusted context.",
-                    },
-                    predicate: {
-                      type: "string",
-                      minLength: 1,
-                      description:
-                        "Optional stable predicate used to narrow lifecycle candidates.",
-                    },
-                    query: {
-                      type: "string",
-                      minLength: 1,
-                      description:
-                        "Lexical query that must resolve exactly one visible memory; zero or multiple matches are returned as unresolved.",
-                    },
-                  },
-                },
-              },
-            }],
-          },
-          status: {
-            enum: [
-              "superseded",
-              "retracted",
-              "completed",
-              "cancelled",
-              "answered",
-              "obsolete",
-              "deprecated",
-            ],
-            description:
-              "Lifecycle transition of the described object. Use invalidate_memory, not lifecycle, for editorial invalidation of the memory record.",
-          },
-          replacement: { $ref: "#/$defs/ref" },
-          sources: {
-            type: "array",
-            minItems: 1,
-            items: { $ref: "#/$defs/source" },
-          },
-        },
-      },
-    },
-  },
-};
-
-type MutableActionSchema = Record<string, unknown>;
-
-function mutableSchemaObject(
-  value: unknown,
-  label: string,
-): MutableActionSchema {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`Invalid consolidate_memory schema node '${label}'.`);
-  }
-  return value as MutableActionSchema;
-}
-
-function memoryKindInputSchema(
-  form: MemoryForm,
-  kinds: readonly MemoryKindDefinition[],
-): ActionSchema {
-  const registered = kinds.filter((kind) => kind.form === form);
-  const catalogue = registered.map((kind) =>
-    `${kind.id} — ${kind.description}${
-      kind.schema
-        ? ` Persisted semantic data schema: ${JSON.stringify(kind.schema)}`
-        : " No additional kind-specific data schema is registered."
-    }`
-  ).join(" ");
-  return {
-    type: "string",
-    enum: registered.map((kind) => kind.id),
-    description:
-      `Registered ${form} kind. Choose by semantics; arbitrary strings are rejected. ${catalogue}`,
-    oneOf: registered.map((kind) => ({
-      const: kind.id,
-      title: kind.id,
-      description: kind.schema
-        ? `${kind.description} Persisted semantic data must also satisfy: ${
-          JSON.stringify(kind.schema)
-        }`
-        : `${kind.description} No additional kind-specific fields are registered.`,
-    })),
-  };
-}
-
-function consolidationInputSchema(
-  kinds: readonly MemoryKindDefinition[],
-): ActionSchema {
-  const schema = structuredClone(consolidationInputSchemaBase);
-  const properties = mutableSchemaObject(schema.properties, "properties");
-  const groups: Readonly<Record<MemoryForm, string>> = {
-    entity: "entities",
-    assertion: "assertions",
-    occurrence: "occurrences",
-    intent: "intents",
-    inquiry: "inquiries",
-    procedure: "procedures",
-  };
-  for (const form of MEMORY_FORMS) {
-    const group = mutableSchemaObject(properties[groups[form]], groups[form]);
-    const items = mutableSchemaObject(group.items, `${groups[form]}.items`);
-    const itemProperties = mutableSchemaObject(
-      items.properties,
-      `${groups[form]}.items.properties`,
-    );
-    itemProperties.localId = {
-      ...mutableSchemaObject(itemProperties.localId, `${form}.localId`),
-      minLength: 1,
-      example: `${form}-1`,
-      description:
-        "Unique temporary ID within this payload. Use { localId } references to connect drafts before canonical memory IDs exist.",
-    };
-    itemProperties.kind = memoryKindInputSchema(form, kinds);
-    itemProperties.summary = {
-      ...mutableSchemaObject(itemProperties.summary, `${form}.summary`),
-      minLength: 1,
-      description:
-        "Self-contained durable summary used for retrieval. Preserve uncertainty, negation, ownership, and temporal meaning.",
-    };
-    itemProperties.spaceId = {
-      ...mutableSchemaObject(itemProperties.spaceId, `${form}.spaceId`),
-      description:
-        "Optional writable memory-space ID. Omit it to use the checkpoint's trusted default writable space.",
-    };
-    itemProperties.attributes = {
-      ...mutableSchemaObject(itemProperties.attributes, `${form}.attributes`),
-      description:
-        "Optional namespaced semantic attributes. When the selected kind documents an additional persisted-data schema, the final semantic data (including these attributes) must satisfy it.",
-    };
-    itemProperties.sources = {
-      ...mutableSchemaObject(itemProperties.sources, `${form}.sources`),
-      minItems: 1,
-      description:
-        "Optional explicit evidence. IDs must be authorized for this checkpoint. If omitted, the runtime currently uses the checkpoint's trusted default evidence; use explicit sources only when canonical IDs are actually available.",
-    };
-  }
-  return schema;
 }
 
 const consolidationOutputSchema: ActionSchema = {
@@ -3319,13 +2747,6 @@ export async function reserveMemoryCheckpoint(
     maxSourceEstimatedTokens?: number;
   }> = {},
 ): Promise<CollectionRecord | null> {
-  // Tool-call projections are intermediate Agent output. Consolidating them
-  // would race the Tool result/final answer and could reserve an incomplete
-  // turn, preventing the actual terminal output from being selected while that
-  // checkpoint remains pending.
-  if (!options.force && coreToolPlanMetadata(messageRecord.metadata)) {
-    return null;
-  }
   const ownerParticipantId = optionalText(options.ownerParticipantId) ??
     optionalText(messageRecord.senderId);
   if (!ownerParticipantId) return null;
@@ -3417,151 +2838,87 @@ export async function reserveMemoryCheckpoint(
     1,
     Math.max(maxSourceEstimatedTokens, config.triggerEstimatedTokens) * 8,
   );
-  let candidateCount = Math.min(16, snapshot.messages.length);
-  let largestSafeCandidateCount = 0;
-  let smallestOversizedCandidateCount = snapshot.messages.length + 1;
+  const sources: MemorySourceMessage[] = [];
+  const encoder = new TextEncoder();
+  let usedBytes = 0;
+  let batchSize = 16;
   let range: ReturnType<typeof selectLongTermMemoryRange> = null;
-  for (;;) {
-    const candidate = snapshot.messages.slice(0, candidateCount);
+  for (let offset = 0; offset < snapshot.messages.length;) {
+    let batch: readonly MemorySourceMessage[];
     try {
-      const sources = await projectedSourceMessages(context, {
+      batch = await projectedSourceMessages(context, {
         threadId: message.threadId,
         participantId: owner.id,
-        messages: candidate,
-        allMessages: snapshot.messages,
-        byteLimit: sourceByteLimit,
-      });
-      range = selectLongTermMemoryRange({
-        messages: options.force
-          ? sources.map((item) =>
-            item.id === message.id ? { ...item, pendingDependency: true } : item
-          )
-          : sources,
-        triggerMessageId: sources.at(-1)?.id ?? message.id,
-        triggerEstimatedTokens: options.force
-          ? 0
-          : config.triggerEstimatedTokens,
-        retainRecentEstimatedTokens: options.force
-          ? Math.min(
-            config.retainRecentEstimatedTokens,
-            Math.floor(maxSourceEstimatedTokens / 4),
-          )
-          : config.retainRecentEstimatedTokens,
-        maxSourceEstimatedTokens,
+        messages: snapshot.messages.slice(offset, offset + batchSize),
+        byteLimit: Math.max(0, sourceByteLimit - usedBytes),
       });
     } catch (error) {
       if (!isContentByteLimitError(error)) throw error;
-      smallestOversizedCandidateCount = Math.min(
-        smallestOversizedCandidateCount,
-        candidateCount,
-      );
-      if (!largestSafeCandidateCount && candidateCount === 1) {
-        throw new Error(
-          "The first complete memory source unit exceeds the maintenance content budget.",
-          { cause: error },
-        );
-      }
-      if (range) break;
-      if (!largestSafeCandidateCount) {
-        candidateCount = Math.max(1, Math.floor(candidateCount / 2));
-        continue;
-      }
-      if (smallestOversizedCandidateCount - largestSafeCandidateCount > 1) {
-        candidateCount = Math.floor(
-          (smallestOversizedCandidateCount + largestSafeCandidateCount) / 2,
-        );
+      if (batchSize > 1) {
+        batchSize = Math.max(1, Math.floor(batchSize / 2));
         continue;
       }
       throw new Error(
-        "No complete memory source prefix large enough for background consolidation fits the maintenance content budget.",
+        sources.length
+          ? "Memory source cannot reach the consolidation trigger within the maintenance content budget."
+          : "The first memory source message exceeds the maintenance content budget.",
         { cause: error },
       );
     }
-    largestSafeCandidateCount = candidateCount;
-    if (range || candidateCount === snapshot.messages.length) break;
-    if (smallestOversizedCandidateCount - candidateCount <= 1) {
-      throw new Error(
-        "No complete memory source prefix large enough for background consolidation fits the maintenance content budget.",
-      );
-    }
-    candidateCount = Math.min(
-      snapshot.messages.length,
-      Math.min(
-        smallestOversizedCandidateCount - 1,
-        candidateCount + 16,
-      ),
+    sources.push(...batch);
+    usedBytes += batch.reduce(
+      (total, source) =>
+        total + encoder.encode(source.text).byteLength +
+        encoder.encode(source.reasoning ?? "").byteLength,
+      0,
     );
+    offset += batchSize;
+    batchSize = 16;
+    range = selectLongTermMemoryRange({
+      messages: sources,
+      triggerMessageId: sources.at(-1)?.id ?? message.id,
+      triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
+      retainRecentEstimatedTokens: options.force
+        ? Math.min(
+          config.retainRecentEstimatedTokens,
+          Math.floor(maxSourceEstimatedTokens / 4),
+        )
+        : config.retainRecentEstimatedTokens,
+      maxSourceEstimatedTokens,
+    });
+    if (range) break;
   }
   if (!range) return null;
-  const writable = spaces.filter((space) => space.access === "read_write");
-  const defaultSpace = spaces.find((space) => space.defaultWrite);
-  if (!defaultSpace || !writable.length) {
-    throw new Error("Thread has no default writable memory space.");
-  }
-  const sequence = Math.max(
-    checkpointSequence(previous),
-    ...(await checkpoints(context, message.threadId, agentId)).map(
-      checkpointSequence,
-    ),
-  ) + 1;
-  const id = `memory:${message.threadId}:${agentId}:${sequence}`;
-  try {
-    return await context.collections.longTermMemory.create({
-      id,
-      name: `Thread ${message.threadId} / ${agentId} / ${sequence}`,
-      threadId: message.threadId,
-      schemaVersion: "4",
-      strategy: "semantic_graph",
-      status: "pending",
-      memorySpaceId: defaultSpace.id,
-      readMemorySpaceIds: spaces.map((space) => space.id),
-      writeMemorySpaceIds: writable.map((space) => space.id),
-      defaultWriteMemorySpaceId: defaultSpace.id,
-      sequence,
-      agentId,
-      sourceStartMessageId: range.sourceStartMessageId,
-      sourceEndMessageId: range.sourceEndMessageId,
-      content: [],
-      contextSnapshotContent: [],
-      contextSnapshot: null,
-      embedding: null,
-      contentHash: null,
-      tokenEstimate: null,
-      error: null,
-      metadata: {
+  return await createCheckpoint(context, {
+    threadId: message.threadId,
+    agentId,
+    spaces,
+    sourceStartMessageId: range.sourceStartMessageId,
+    sourceEndMessageId: range.sourceEndMessageId,
+    metadata: {
+      agentParticipantId: owner.id,
+      initiatorParticipantId,
+      estimatedTokens: range.estimatedTokens,
+      retainedEstimatedTokens: range.retainedEstimatedTokens,
+      retainedMessageCount: range.retainedMessageCount,
+      coverageCandidate: {
+        schema: "copilotz.memory.coverage.v1",
         agentParticipantId: owner.id,
-        initiatorParticipantId,
-        estimatedTokens: range.estimatedTokens,
-        retainedEstimatedTokens: range.retainedEstimatedTokens,
-        retainedMessageCount: range.retainedMessageCount,
-        coverageCandidate: {
-          schema: "copilotz.memory.coverage.v1",
-          agentParticipantId: owner.id,
-          ...(optionalText(messageRecord.historyScopeId)
-            ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
-            : {}),
-          branch: thread ? branchCertificate(thread) : "public",
-          startMessageId: range.sourceStartMessageId,
-          endMessageId: range.sourceEndMessageId,
-          sourceFingerprint: await sourceRangeFingerprint(
-            rangeMessages(snapshot.messages, {
-              sourceStartMessageId: range.sourceStartMessageId,
-              sourceEndMessageId: range.sourceEndMessageId,
-            }),
-          ),
-        },
+        ...(optionalText(messageRecord.historyScopeId)
+          ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
+          : {}),
+        branch: thread ? branchCertificate(thread) : "public",
+        startMessageId: range.sourceStartMessageId,
+        endMessageId: range.sourceEndMessageId,
+        sourceFingerprint: await sourceRangeFingerprint(
+          rangeMessages(snapshot.messages, {
+            sourceStartMessageId: range.sourceStartMessageId,
+            sourceEndMessageId: range.sourceEndMessageId,
+          }),
+        ),
       },
-    }, { operationKey: `checkpoint:reserve:${id}` });
-  } catch (error) {
-    const concurrent = (await checkpoints(
-      context,
-      message.threadId,
-      agentId,
-      "pending",
-    ))[0];
-    if (concurrent) return concurrent;
-    throw error;
-  }
+    },
+  });
 }
 
 export function memoryReservationProcessor(
@@ -3932,24 +3289,18 @@ export function createMemoryContextResource(
         where: { threadId: input.thread.id },
         limit: 1_000,
       });
-      const readable = new Set(
-        grants.map((grant) => String(grant.memorySpaceId)),
-      );
-      const values = await checkpointCollection.list({
-        where: {
-          threadId: input.thread.id,
-          agentId: input.agent.id,
-          status: "ready",
-        },
-        limit: 1_000,
-      });
-      const checkpoint = values.filter((item) =>
-        item.status === "ready" && (Array.isArray(item.readMemorySpaceIds)
-          ? item.readMemorySpaceIds.every((id) =>
-            readable.has(String(id))
-          )
-          : false)
-      ).sort((a, b) => checkpointSequence(b) - checkpointSequence(a))[0];
+      const spaces = grants.map((grant) => ({
+        id: String(grant.memorySpaceId),
+      }));
+      const checkpoint = (await checkpoints(
+        { collections: input.collections } as Pick<
+          MemoryProcessorContext,
+          "collections"
+        >,
+        input.thread.id,
+        input.agent.id,
+        "ready",
+      )).find((item) => checkpointAccessible(item, spaces));
       if (
         !checkpoint || !Array.isArray(checkpoint.content) ||
         !checkpoint.content.length

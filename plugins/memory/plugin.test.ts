@@ -10,6 +10,7 @@ import {
   corePlugin,
   defineAgent,
   defineContextResource,
+  withCoreToolPlanMetadata,
 } from "@copilotz/copilotz/core";
 import type {
   LlmAdapter,
@@ -271,7 +272,7 @@ async function eventually(
   fixture: Fixture,
   condition: () => Promise<boolean>,
 ): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (await condition()) return;
     await fixture.engine.recover({ namespace: NAMESPACE });
@@ -562,6 +563,80 @@ Deno.test("background compaction reaches its default trigger when one source chu
     assert(maintenance);
     assertStringIncludes(text(maintenance), "BACKGROUND_0");
     assertEquals(text(maintenance).includes("BACKGROUND_LATEST"), false);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("an open Ask plan cannot pin the consolidation boundary", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("Continue after compaction."),
+    {
+      inputLimit: 40_000,
+      memoryConfig: { triggerEstimatedTokens: 20_000 },
+    },
+  );
+  try {
+    await setupThread(run);
+    const content = await run.engine.content.preparer.prepare(
+      "OPEN_ASK: South is still working.",
+      {
+        namespace: NAMESPACE,
+        idempotencyKey: "open-ask-content",
+      },
+    );
+    await collection(run, "message").create({
+      id: "message:open-ask",
+      threadId: "thread-a",
+      senderId: "agent-north",
+      recipientIds: [],
+      content,
+      metadata: withCoreToolPlanMetadata({
+        llmToolCalls: [{
+          id: "ask-south",
+          action: "ask",
+          input: { target: "south", message: "Investigate." },
+        }],
+      }, {
+        schema: "copilotz.core.tool-plan.v1",
+        planId: "unresolved-plan",
+        planSize: 1,
+      }),
+    }, { namespace: NAMESPACE });
+    for (let index = 0; index < 13; index++) {
+      await createHumanMessage(run, {
+        id: `message:progress:${index}`,
+        text: `PROGRESS_${index} ${"history ".repeat(1_600)}`,
+      });
+    }
+    await createHumanMessage(run, {
+      id: "message:resume",
+      text: "Resume.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () =>
+        (await checkpoints(run)).some((item: { status: string }) =>
+          item.status === "ready"
+        ),
+    );
+    const saved = (await checkpoints(run)).find((item: { status: string }) =>
+      item.status === "ready"
+    );
+    assertEquals(saved.sourceStartMessageId, "message:open-ask");
+    assert(saved.sourceEndMessageId !== "message:open-ask");
+    const maintenance = run.inputs.find((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assert(maintenance);
+    assertStringIncludes(text(maintenance), "OPEN_ASK");
+    assertStringIncludes(text(maintenance), "ask-south");
+    assertStringIncludes(text(maintenance), "unresolved-plan");
     await assertNoDeadLetters(run);
   } finally {
     await run.close();

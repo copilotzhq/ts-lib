@@ -16,17 +16,16 @@ import {
   type InquiryMemoryDraft,
   type IntentMemoryDraft,
   MEMORY_FORMS,
-  MEMORY_RELATION_TYPES,
   type MemoryDraftBase,
   type MemoryForm,
   type MemoryKindDefinition,
   type MemoryLifecycleDraft,
-  type MemoryRelationDraft,
   memorySourceKey,
   type OccurrenceMemoryDraft,
   type ProcedureMemoryDraft,
   type ProposedMemoryRef,
 } from "../ontology/index.ts";
+import { assertConsolidationInput } from "./schema.ts";
 
 export type MemorySourceMessage = Readonly<{
   id: string;
@@ -34,11 +33,9 @@ export type MemorySourceMessage = Readonly<{
   senderId: string;
   text: string;
   toolCalls?: unknown;
+  toolPlanId?: string;
+  toolCallId?: string;
   reasoning?: string;
-  /** IDs of causal message groups that must be consolidated as a whole. */
-  dependencyIds?: readonly string[];
-  /** The message or one of its dependency groups has not reached a safe end. */
-  pendingDependency?: boolean;
 }>;
 
 export type SelectedMemoryRange = Readonly<{
@@ -261,34 +258,6 @@ function parseBase(
   };
 }
 
-function parseEpistemic(value: unknown) {
-  const input = record(value);
-  const basis = requiredText(input.basis, "Assertion epistemic basis");
-  const stance = requiredText(input.stance, "Assertion epistemic stance");
-  if (!["observed", "reported", "inferred", "assumed"].includes(basis)) {
-    throw new TypeError(`Invalid assertion epistemic basis '${basis}'.`);
-  }
-  if (!["affirmed", "denied", "tentative", "disputed"].includes(stance)) {
-    throw new TypeError(`Invalid assertion epistemic stance '${stance}'.`);
-  }
-  return Object.freeze({ basis, stance }) as AssertionMemoryDraft["epistemic"];
-}
-
-function parseDrafts<T>(
-  value: unknown,
-  form: MemoryForm,
-  parse: (base: ReturnType<typeof parseBase>) => T,
-  options: ParseConsolidationOptions,
-): readonly T[] {
-  if (value === undefined) return Object.freeze([]);
-  if (!Array.isArray(value)) {
-    throw new TypeError(`${form} drafts must be an array.`);
-  }
-  return Object.freeze(
-    value.map((candidate) => parse(parseBase(candidate, form, options))),
-  );
-}
-
 function parseTemporal(
   value: unknown,
 ): Readonly<Record<string, string>> | undefined {
@@ -302,437 +271,202 @@ function parseTemporal(
   return Object.keys(result).length ? Object.freeze(result) : undefined;
 }
 
+/** Structural shape is validated once; this pass normalizes values and enforces authority. */
+function normalizeDraft(
+  value: unknown,
+  form: MemoryForm,
+  localIds: ReadonlySet<string>,
+  options: ParseConsolidationOptions,
+): MemoryDraftBase & Readonly<Record<string, unknown>> {
+  const { source, ...base } = parseBase(value, form, options);
+  const output: Record<string, unknown> = { ...source, ...base };
+  for (const field of ["name", "predicate", "question"]) {
+    if (field in source) {
+      output[field] = requiredText(source[field], `${form} ${field}`);
+    }
+  }
+  for (
+    const field of ["dueAt", "trigger", "expectedOutcome", "applicability"]
+  ) {
+    if (!(field in source)) continue;
+    const text = optionalText(source[field]);
+    if (text) output[field] = text;
+    else delete output[field];
+  }
+  for (const field of ["aliases", "preconditions", "steps"]) {
+    if (field in source) {
+      output[field] = uniqueStrings(source[field], `${form} ${field}`);
+    }
+  }
+  for (const field of ["subject", "owner", "target", "answer"]) {
+    if (field in source) {
+      output[field] = parseRef(
+        source[field],
+        localIds,
+        options,
+        `${form} ${field}`,
+      );
+    }
+  }
+  for (const field of ["participants", "about"]) {
+    if (field in source) {
+      output[field] = Object.freeze(
+        (source[field] as readonly unknown[]).map((ref) =>
+          parseRef(ref, localIds, options, `${form} ${field}`)
+        ),
+      );
+    }
+  }
+  if (form === "assertion") {
+    const object = record(source.object);
+    output.object = "ref" in object
+      ? Object.freeze({
+        ref: parseRef(object.ref, localIds, options, "Assertion object"),
+      })
+      : Object.freeze({ value: object.value });
+    output.epistemic = Object.freeze({ ...record(source.epistemic) });
+  }
+  if (source.temporal !== undefined) {
+    const temporal = parseTemporal(source.temporal);
+    if (temporal) output.temporal = temporal;
+    else delete output.temporal;
+  }
+  if (source.externalIds !== undefined) {
+    const entries = Object.entries(record(source.externalIds));
+    if (entries.length) {
+      output.externalIds = Object.freeze(
+        Object.fromEntries(
+          entries.map((
+            [key, value],
+          ) => [
+            requiredText(key, "Entity external id key"),
+            requiredText(value, "Entity external id value"),
+          ]),
+        ),
+      );
+    } else delete output.externalIds;
+  }
+  return Object.freeze(output) as
+    & MemoryDraftBase
+    & Readonly<Record<string, unknown>>;
+}
+
 /** Validates and normalizes one model-authored consolidation tool call. */
 export function parseConsolidateMemoryInput(
   value: unknown,
   options: ParseConsolidationOptions,
 ): ConsolidateMemoryInput {
-  const input = record(value);
-  if (input.outcome !== "changes" && input.outcome !== "no_changes") {
-    throw new TypeError(
-      "consolidate_memory outcome must be 'changes' or 'no_changes'.",
-    );
-  }
-  const continuity = requiredText(input.continuity, "Memory continuity");
-
-  const rawGroups = [
-    input.entities,
-    input.assertions,
-    input.occurrences,
-    input.intents,
-    input.inquiries,
-    input.procedures,
-  ];
-  const rawLocalIds = rawGroups.flatMap((group) =>
-    Array.isArray(group)
-      ? group.map((item) => optionalText(record(item).localId)).filter((
-        id,
-      ): id is string => Boolean(id))
-      : []
+  assertConsolidationInput(value, [...options.kinds.values()]);
+  // This assertion follows the shared structural schema, never replaces validation.
+  const input = structuredClone(value) as ConsolidateMemoryInput;
+  const drafts = proposalDrafts(input);
+  const localIds = new Set(
+    drafts.map(({ draft }) => requiredText(draft.localId, "Memory localId")),
   );
-  if (new Set(rawLocalIds).size !== rawLocalIds.length) {
+  if (localIds.size !== drafts.length) {
     throw new TypeError("Memory proposal localIds must be unique.");
   }
-  const localIds = new Set(rawLocalIds);
-
-  const entities = parseDrafts<EntityMemoryDraft>(
-    input.entities,
-    "entity",
-    (base) =>
-      Object.freeze({
-        localId: base.localId,
-        kind: base.kind,
-        summary: base.summary,
-        spaceId: base.spaceId,
-        sources: base.sources,
-        ...(base.attributes ? { attributes: base.attributes } : {}),
-        name: requiredText(base.source.name, `Entity '${base.localId}' name`),
-        ...(base.source.aliases !== undefined
-          ? {
-            aliases: uniqueStrings(
-              base.source.aliases,
-              `Entity '${base.localId}' aliases`,
-            ),
-          }
-          : {}),
-        ...(Object.keys(record(base.source.externalIds)).length
-          ? {
-            externalIds: Object.freeze(Object.fromEntries(
-              Object.entries(record(base.source.externalIds)).map((
-                [key, item],
-              ) => [
-                requiredText(key, "Entity external id key"),
-                requiredText(item, "Entity external id value"),
-              ]),
-            )),
-          }
-          : {}),
-      }),
-    options,
-  );
-
-  const assertions = parseDrafts<AssertionMemoryDraft>(
-    input.assertions,
-    "assertion",
-    (base) => {
-      const object = record(base.source.object);
-      const parsedObject = Object.prototype.hasOwnProperty.call(object, "ref")
-        ? Object.freeze({
-          ref: parseRef(
-            object.ref,
-            localIds,
-            options,
-            `Assertion '${base.localId}' object`,
-          ),
-        })
-        : Object.prototype.hasOwnProperty.call(object, "value") &&
-            (object.value === null ||
-              ["string", "number", "boolean"].includes(typeof object.value))
-        ? Object.freeze({
-          value: object.value as string | number | boolean | null,
-        })
-        : (() => {
-          throw new TypeError(
-            `Assertion '${base.localId}' requires an object ref or scalar value.`,
-          );
-        })();
-      return Object.freeze({
-        localId: base.localId,
-        kind: base.kind,
-        summary: base.summary,
-        spaceId: base.spaceId,
-        sources: base.sources,
-        ...(base.attributes ? { attributes: base.attributes } : {}),
-        subject: parseRef(
-          base.source.subject,
-          localIds,
-          options,
-          `Assertion '${base.localId}' subject`,
-        ),
-        predicate: requiredText(
-          base.source.predicate,
-          `Assertion '${base.localId}' predicate`,
-        ),
-        object: parsedObject,
-        epistemic: parseEpistemic(base.source.epistemic),
-        ...(parseTemporal(base.source.temporal)
-          ? { temporal: parseTemporal(base.source.temporal) }
-          : {}),
-      });
-    },
-    options,
-  );
-
-  const occurrences = parseDrafts<OccurrenceMemoryDraft>(
-    input.occurrences,
-    "occurrence",
-    (base) =>
-      Object.freeze({
-        localId: base.localId,
-        kind: base.kind,
-        summary: base.summary,
-        spaceId: base.spaceId,
-        sources: base.sources,
-        ...(base.attributes ? { attributes: base.attributes } : {}),
-        ...(Array.isArray(base.source.participants)
-          ? {
-            participants: Object.freeze(base.source.participants.map((item) =>
-              parseRef(
-                item,
-                localIds,
-                options,
-                `Occurrence '${base.localId}' participant`,
-              )
-            )),
-          }
-          : {}),
-        ...(parseTemporal(base.source.temporal)
-          ? { temporal: parseTemporal(base.source.temporal) }
-          : {}),
-      }),
-    options,
-  );
-
-  const intents = parseDrafts<IntentMemoryDraft>(
-    input.intents,
-    "intent",
-    (base) => {
-      const status = requiredText(
-        base.source.status,
-        `Intent '${base.localId}' status`,
-      );
-      if (!["proposed", "active", "completed", "cancelled"].includes(status)) {
-        throw new TypeError(
-          `Intent '${base.localId}' has invalid status '${status}'.`,
-        );
-      }
-      return Object.freeze({
-        localId: base.localId,
-        kind: base.kind,
-        summary: base.summary,
-        spaceId: base.spaceId,
-        sources: base.sources,
-        ...(base.attributes ? { attributes: base.attributes } : {}),
-        status: status as IntentMemoryDraft["status"],
-        ...(base.source.owner
-          ? {
-            owner: parseRef(
-              base.source.owner,
-              localIds,
-              options,
-              `Intent '${base.localId}' owner`,
-            ),
-          }
-          : {}),
-        ...(base.source.target
-          ? {
-            target: parseRef(
-              base.source.target,
-              localIds,
-              options,
-              `Intent '${base.localId}' target`,
-            ),
-          }
-          : {}),
-        ...(optionalText(base.source.dueAt)
-          ? { dueAt: optionalText(base.source.dueAt) }
-          : {}),
-      });
-    },
-    options,
-  );
-
-  const inquiries = parseDrafts<InquiryMemoryDraft>(
-    input.inquiries,
-    "inquiry",
-    (base) => {
-      const status = requiredText(
-        base.source.status,
-        `Inquiry '${base.localId}' status`,
-      );
-      if (!["open", "answered", "obsolete"].includes(status)) {
-        throw new TypeError(
-          `Inquiry '${base.localId}' has invalid status '${status}'.`,
-        );
-      }
-      return Object.freeze({
-        localId: base.localId,
-        kind: base.kind,
-        summary: base.summary,
-        spaceId: base.spaceId,
-        sources: base.sources,
-        ...(base.attributes ? { attributes: base.attributes } : {}),
-        question: requiredText(
-          base.source.question,
-          `Inquiry '${base.localId}' question`,
-        ),
-        status: status as InquiryMemoryDraft["status"],
-        ...(Array.isArray(base.source.about)
-          ? {
-            about: Object.freeze(
-              base.source.about.map((item) =>
-                parseRef(
-                  item,
-                  localIds,
-                  options,
-                  `Inquiry '${base.localId}' about`,
-                )
-              ),
-            ),
-          }
-          : {}),
-        ...(base.source.answer
-          ? {
-            answer: parseRef(
-              base.source.answer,
-              localIds,
-              options,
-              `Inquiry '${base.localId}' answer`,
-            ),
-          }
-          : {}),
-      });
-    },
-    options,
-  );
-
-  const procedures = parseDrafts<ProcedureMemoryDraft>(
-    input.procedures,
-    "procedure",
-    (base) => {
-      const steps = uniqueStrings(
-        base.source.steps,
-        `Procedure '${base.localId}' steps`,
-      );
-      if (!steps.length) {
-        throw new TypeError(
-          `Procedure '${base.localId}' requires at least one step.`,
-        );
-      }
-      return Object.freeze({
-        localId: base.localId,
-        kind: base.kind,
-        summary: base.summary,
-        spaceId: base.spaceId,
-        sources: base.sources,
-        ...(base.attributes ? { attributes: base.attributes } : {}),
-        steps,
-        ...(optionalText(base.source.trigger)
-          ? { trigger: optionalText(base.source.trigger) }
-          : {}),
-        ...(base.source.preconditions !== undefined
-          ? {
-            preconditions: uniqueStrings(
-              base.source.preconditions,
-              `Procedure '${base.localId}' preconditions`,
-            ),
-          }
-          : {}),
-        ...(optionalText(base.source.expectedOutcome)
-          ? { expectedOutcome: optionalText(base.source.expectedOutcome) }
-          : {}),
-        ...(optionalText(base.source.applicability)
-          ? { applicability: optionalText(base.source.applicability) }
-          : {}),
-      });
-    },
-    options,
-  );
-
-  const parseRelation = (value: unknown): MemoryRelationDraft => {
-    const candidate = record(value);
-    const type = requiredText(candidate.type, "Memory relation type");
-    if (
-      !MEMORY_RELATION_TYPES.includes(type as never) ||
-      type === "derived_from" || type === "supersedes"
-    ) throw new TypeError(`Memory relation type '${type}' cannot be proposed.`);
-    return Object.freeze({
-      from: parseRef(
-        candidate.from,
-        localIds,
-        options,
-        "Memory relation source",
-      ),
-      type: type as MemoryRelationDraft["type"],
-      to: parseRef(candidate.to, localIds, options, "Memory relation target"),
-      ...(candidate.sources !== undefined
-        ? {
-          sources: parseSources(candidate.sources, options, "Memory relation"),
-        }
-        : {}),
-    });
+  const output: Record<string, unknown> = {
+    outcome: input.outcome,
+    continuity: requiredText(input.continuity, "Memory continuity"),
   };
-  const relations = input.relations === undefined
-    ? Object.freeze([])
-    : Array.isArray(input.relations)
-    ? Object.freeze(input.relations.map(parseRelation))
-    : (() => {
-      throw new TypeError("Memory relations must be an array.");
-    })();
-
-  const parseLifecycle = (value: unknown): MemoryLifecycleDraft => {
-    const candidate = record(value);
-    const target = record(candidate.target);
-    const memoryId = optionalText(target.memoryId);
-    let parsedTarget: MemoryLifecycleDraft["target"];
-    if (memoryId) {
-      if (!options.visibleMemoryIds.has(memoryId)) {
-        throw new TypeError(`Lifecycle target '${memoryId}' was not visible.`);
-      }
-      parsedTarget = Object.freeze({ memoryId });
-    } else {
-      const match = record(target.match);
-      const form = requiredText(
-        match.form,
-        "Lifecycle match form",
-      ) as MemoryForm;
-      if (!MEMORY_FORMS.includes(form)) {
-        throw new TypeError(`Invalid lifecycle match form '${form}'.`);
-      }
-      parsedTarget = Object.freeze({
-        match: Object.freeze({
-          form,
-          ...(optionalText(match.kind)
-            ? { kind: optionalText(match.kind) }
-            : {}),
-          ...(match.subject
-            ? {
-              subject: parseRef(
-                match.subject,
-                localIds,
-                options,
-                "Lifecycle match subject",
-              ),
-            }
-            : {}),
-          ...(optionalText(match.predicate)
-            ? { predicate: optionalText(match.predicate) }
-            : {}),
-          query: requiredText(match.query, "Lifecycle match query"),
-        }),
-      });
+  const groups = {
+    entity: "entities",
+    assertion: "assertions",
+    occurrence: "occurrences",
+    intent: "intents",
+    inquiry: "inquiries",
+    procedure: "procedures",
+  } as const;
+  for (const form of MEMORY_FORMS) {
+    const values = input[groups[form]];
+    if (values?.length) {
+      output[groups[form]] = Object.freeze(
+        values.map((draft) => normalizeDraft(draft, form, localIds, options)),
+      );
     }
-    const status = requiredText(candidate.status, "Lifecycle status");
-    if (
-      ![
-        "superseded",
-        "retracted",
-        "completed",
-        "cancelled",
-        "answered",
-        "obsolete",
-        "deprecated",
-      ].includes(status)
-    ) {
-      throw new TypeError(`Invalid lifecycle status '${status}'.`);
-    }
-    return Object.freeze({
-      target: parsedTarget,
-      status: status as MemoryLifecycleDraft["status"],
-      ...(candidate.replacement
-        ? {
-          replacement: parseRef(
-            candidate.replacement,
-            localIds,
-            options,
-            "Lifecycle replacement",
-          ),
-        }
-        : {}),
-      sources: parseSources(candidate.sources, options, "Lifecycle change"),
-    });
-  };
-  const lifecycle = input.lifecycle === undefined
-    ? Object.freeze([])
-    : Array.isArray(input.lifecycle)
-    ? Object.freeze(input.lifecycle.map(parseLifecycle))
-    : (() => {
-      throw new TypeError("Memory lifecycle changes must be an array.");
-    })();
-
-  const changed = entities.length + assertions.length + occurrences.length +
-    intents.length + inquiries.length + procedures.length + relations.length +
-    lifecycle.length;
-  if (input.outcome === "no_changes" && changed) {
-    throw new TypeError("A no_changes consolidation cannot contain changes.");
   }
-  if (input.outcome === "changes" && !changed) {
-    throw new TypeError(
-      "A changes consolidation must contain at least one change.",
+  if (input.relations?.length) {
+    output.relations = Object.freeze(
+      input.relations.map((relation) =>
+        Object.freeze({
+          from: parseRef(
+            relation.from,
+            localIds,
+            options,
+            "Memory relation source",
+          ),
+          type: relation.type,
+          to: parseRef(
+            relation.to,
+            localIds,
+            options,
+            "Memory relation target",
+          ),
+          ...(relation.sources === undefined ? {} : {
+            sources: parseSources(relation.sources, options, "Memory relation"),
+          }),
+        })
+      ),
     );
   }
-  return Object.freeze({
-    outcome: input.outcome,
-    continuity,
-    ...(entities.length ? { entities } : {}),
-    ...(assertions.length ? { assertions } : {}),
-    ...(occurrences.length ? { occurrences } : {}),
-    ...(intents.length ? { intents } : {}),
-    ...(inquiries.length ? { inquiries } : {}),
-    ...(procedures.length ? { procedures } : {}),
-    ...(relations.length ? { relations } : {}),
-    ...(lifecycle.length ? { lifecycle } : {}),
-  });
+  if (input.lifecycle?.length) {
+    output.lifecycle = Object.freeze(input.lifecycle.map((change) => {
+      let target: MemoryLifecycleDraft["target"];
+      if ("memoryId" in change.target) {
+        const memoryId = requiredText(
+          change.target.memoryId,
+          "Lifecycle target",
+        );
+        if (!options.visibleMemoryIds.has(memoryId)) {
+          throw new TypeError(
+            `Lifecycle target '${memoryId}' was not visible.`,
+          );
+        }
+        target = Object.freeze({ memoryId });
+      } else {
+        const match = change.target.match;
+        target = Object.freeze({
+          match: Object.freeze({
+            form: match.form,
+            query: requiredText(match.query, "Lifecycle match query"),
+            ...(optionalText(match.kind)
+              ? { kind: optionalText(match.kind) }
+              : {}),
+            ...(optionalText(match.predicate)
+              ? { predicate: optionalText(match.predicate) }
+              : {}),
+            ...(match.subject
+              ? {
+                subject: parseRef(
+                  match.subject,
+                  localIds,
+                  options,
+                  "Lifecycle match subject",
+                ),
+              }
+              : {}),
+          }),
+        });
+      }
+      return Object.freeze({
+        target,
+        status: change.status,
+        ...(change.replacement
+          ? {
+            replacement: parseRef(
+              change.replacement,
+              localIds,
+              options,
+              "Lifecycle replacement",
+            ),
+          }
+          : {}),
+        sources: parseSources(change.sources, options, "Lifecycle change"),
+      });
+    }));
+  }
+  return Object.freeze(output) as ConsolidateMemoryInput;
 }
 
 function sourceMessageTokens(message: MemorySourceMessage): number {
@@ -740,6 +474,8 @@ function sourceMessageTokens(message: MemorySourceMessage): number {
     [
       message.senderType,
       message.senderId,
+      message.toolPlanId ?? "",
+      message.toolCallId ?? "",
       message.text,
       message.toolCalls === undefined ? "" : JSON.stringify(message.toolCalls),
       message.reasoning ?? "",
@@ -783,61 +519,17 @@ export function selectLongTermMemoryRange(
   const retainTarget = Math.max(0, input.retainRecentEstimatedTokens ?? 0);
   let retainedEstimatedTokens = 0;
   let retainedMessageCount = 0;
-  if (retainTarget > 0) {
-    const units: MemorySourceMessage[][] = [];
-    for (const message of selected) {
-      if (message.senderType === "tool" && units.length) {
-        units.at(-1)!.push(message);
-      } else units.push([message]);
-    }
-    for (
-      let index = units.length - 1;
-      index >= 0 && retainedEstimatedTokens < retainTarget;
-      index--
-    ) {
-      retainedEstimatedTokens += units[index].reduce(
-        (total, message) => total + sourceMessageTokens(message),
-        0,
-      );
-      retainedMessageCount += units[index].length;
-    }
+  for (
+    let index = selected.length - 1;
+    index >= 0 && retainedEstimatedTokens < retainTarget;
+    index--
+  ) {
+    retainedEstimatedTokens += sourceMessageTokens(selected[index]);
+    retainedMessageCount++;
   }
   let end = retainedMessageCount
     ? selected.length - retainedMessageCount
     : selected.length;
-
-  const dependencyIndexes = new Map<string, number[]>();
-  for (const [index, message] of selected.entries()) {
-    for (const dependencyId of message.dependencyIds ?? []) {
-      const indexes = dependencyIndexes.get(dependencyId) ?? [];
-      indexes.push(index);
-      dependencyIndexes.set(dependencyId, indexes);
-    }
-  }
-  // An unfinished group is retained in its entirety. Because source ranges are
-  // contiguous prefixes, its first member is also the latest safe endpoint.
-  for (const indexes of dependencyIndexes.values()) {
-    if (indexes.some((index) => selected[index].pendingDependency)) {
-      end = Math.min(end, indexes[0]);
-    }
-  }
-  for (const [index, message] of selected.entries()) {
-    if (message.pendingDependency) end = Math.min(end, index);
-  }
-
-  // Retaining one member of a dependency group means retaining all messages
-  // between the group's first and last member too: source deletion always
-  // covers a single prefix and cannot silently skip interleaved history.
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const indexes of dependencyIndexes.values()) {
-      if (indexes[0] < end && indexes.at(-1)! >= end) {
-        end = indexes[0];
-        changed = true;
-      }
-    }
-  }
 
   const maxSourceEstimatedTokens = input.maxSourceEstimatedTokens;
   if (maxSourceEstimatedTokens !== undefined) {
@@ -846,12 +538,9 @@ export function selectLongTermMemoryRange(
     for (let index = 0; index < end; index++) {
       boundedTokens += sourceMessageTokens(selected[index]);
       if (boundedTokens > maxSourceEstimatedTokens) break;
-      const cutsDependency = [...dependencyIndexes.values()].some((indexes) =>
-        indexes[0] <= index && indexes.at(-1)! > index
-      );
-      if (!cutsDependency) boundedEnd = index + 1;
+      boundedEnd = index + 1;
     }
-    // Even the first safe contiguous source unit is too large. Callers must
+    // Even the first source message is too large. Callers must
     // handle that overflow explicitly rather than discarding history.
     if (!boundedEnd) return null;
     end = boundedEnd;
@@ -908,6 +597,8 @@ export function buildMemoryConsolidationInstruction(
       senderType: message.senderType,
       senderId: message.senderId,
       text: message.text,
+      ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
+      ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
       ...(message.toolCalls === undefined
         ? {}
         : { toolCalls: message.toolCalls }),

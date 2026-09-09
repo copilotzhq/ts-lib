@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import type {
   CollectionQuery,
   CollectionRecord,
@@ -263,5 +263,40 @@ Deno.test("a delayed trigger before compaction still selects the latest authoriz
   assertEquals(
     snapshot.records.map((item) => item.id),
     records.slice(3).map((item) => item.id),
+  );
+});
+
+Deno.test("checkpoint snapshots read their inclusive range and reject missing endpoints", async () => {
+  const records = Array.from({ length: 6 }, (_, index) => message(index));
+  const thread = {
+    id: THREAD_ID,
+    namespace: NAMESPACE,
+    participantIds: ["human", "agent"],
+    status: "active",
+    metadata: {},
+    createdAt: timestamp(0),
+    updatedAt: timestamp(5),
+  };
+  const context = testContext(records, thread);
+  const snapshot = await loadCoreThreadMessageSnapshot(
+    context,
+    THREAD_ID,
+    records[3],
+    {
+      range: { startMessageId: records[1].id, endMessageId: records[3].id },
+    },
+  );
+  assertEquals(snapshot.active, true);
+  assertEquals(
+    snapshot.records.map((r) => r.id),
+    records.slice(1, 4).map((r) => r.id),
+  );
+  await assertRejects(
+    () =>
+      loadCoreThreadMessageSnapshot(context, THREAD_ID, records[3], {
+        range: { startMessageId: "deleted", endMessageId: records[3].id },
+      }),
+    Error,
+    "Memory source range is no longer available",
   );
 });

@@ -14,6 +14,7 @@ import type {
 } from "../../../../runtime/collections/index.ts";
 import { messageCollection } from "../../../core-collections/collections/message/index.ts";
 import {
+  loadThreadMessageRecordWindow,
   mapMessageRecord,
   threadMessageRecordInWindow,
   threadMessageWindowFilter,
@@ -320,6 +321,54 @@ Deno.test("Agent window predicates select private scope, branch and anchor befor
       { ...query, limit: 1000 },
     );
     assertEquals(all.map((r) => r.id), expected);
+    const bounded = { ...window, from: records[1000], anchor: records[1998] };
+    const range = await queryCollectionRecords(
+      session,
+      { nodes: "window_nodes", edges: "unused" },
+      messageCollection,
+      "tenant",
+      { ...query, filter: threadMessageWindowFilter(bounded), limit: 1000 },
+    );
+    assertEquals(range.map((r) => r.id), ["m1998", "m1000"]);
+    assertEquals(
+      range.map((r) => r.id),
+      records.filter((r) => threadMessageRecordInWindow(bounded, r)).reverse()
+        .map((r) => r.id),
+    );
+    const privateAnchor = {
+      ...records[2000],
+      visibility: { kind: "participants", participantIds: ["west"] },
+    };
+    await session.query(
+      "UPDATE window_nodes SET data = $1::jsonb WHERE id = $2",
+      [JSON.stringify(privateAnchor), privateAnchor.id],
+    );
+    const authorizedWindow = await loadThreadMessageRecordWindow(
+      {
+        collections: {
+          thread: { get: () => Promise.resolve(window.threadRecord) },
+          participant: {
+            get: () => Promise.resolve(null),
+          },
+          message: {
+            get: ({ id }: { id: string }) =>
+              Promise.resolve(id === privateAnchor.id ? privateAnchor : null),
+            list: (query: CollectionQuery) =>
+              queryCollectionRecords(
+                session,
+                { nodes: "window_nodes", edges: "unused" },
+                messageCollection,
+                "tenant",
+                query,
+              ),
+          },
+        },
+      } as unknown as CoreProcessorContext,
+      "thread",
+      { anchor: privateAnchor, viewerIds: ["north"] },
+    );
+    assertEquals(authorizedWindow.anchorActive, false);
+    assertEquals(authorizedWindow.records, []);
   } finally {
     await db.close();
   }

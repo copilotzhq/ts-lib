@@ -107,8 +107,13 @@ function projectMessage(
           ? Object.freeze({ role: "user", content, ...(name ? { name } : {}) })
           : null;
       }
-      // The caller receives this answer only through the receipt below.
-      if (targetParticipantId === ask.askingParticipantId) return null;
+      if (targetParticipantId === ask.askingParticipantId) {
+        return Object.freeze({
+          role: "user",
+          content,
+          ...(name ? { name } : {}),
+        });
+      }
       if (targetParticipantId === ask.askedParticipantId) {
         return Object.freeze({
           role: "assistant",
@@ -208,45 +213,47 @@ export function buildLlmTranscript(
   }>,
   onSelectedSource?: (messageId: string) => void,
 ): readonly LlmMessage[] {
-  const history = input.history;
-  const selected = input.messageIds !== undefined
-    ? (() => {
-      const byId = new Map(history.map((message) => [message.id, message]));
-      return input.messageIds.map((id) => {
-        const message = byId.get(id);
-        if (!message) {
-          throw new Error(
-            `LLM input message '${id}' was not found in thread '${input.threadId}'.`,
-          );
-        }
-        return message;
-      });
-    })()
-    : history;
-  const byId = new Map(history.map((message) => [message.id, message]));
-  const output: LlmMessage[] = [];
-  const sources = new WeakMap<LlmMessage, string>();
-  const project = (message: ConversationMessage) => {
-    const result = toLlmMessage(message, input.participantId);
-    if (result) sources.set(result, message.id);
-    return result;
-  };
-
-  const appendNormal = (message: ConversationMessage) => {
-    const projected = project(message);
-    if (projected) output.push(projected);
-  };
-  for (const message of selected) {
-    const answerId = agentAskResultMetadata(message.metadata)?.answerMessageId;
-    const answer = answerId
-      ? receiptAnswer(message, byId.get(answerId), input.participantId)
-      : null;
-    appendNormal(message);
-    if (answer) {
-      sources.set(answer, answerId!);
-      output.push(answer);
+  const byId = new Map(input.history.map((message) => [message.id, message]));
+  const selected = input.messageIds === undefined
+    ? input.history
+    : input.messageIds.map((id) => {
+      const message = byId.get(id);
+      if (!message) {
+        throw new Error(
+          `LLM input message '${id}' was not found in thread '${input.threadId}'.`,
+        );
+      }
+      return message;
+    });
+  const selectedIds = new Set(selected.map((message) => message.id));
+  const answers = new Map<string, { id: string; message: LlmMessage }>();
+  const deferredAnswers = new Set<string>();
+  for (const receipt of selected) {
+    const id = agentAskResultMetadata(receipt.metadata)?.answerMessageId;
+    if (!id || !selectedIds.has(id)) continue;
+    const answer = receiptAnswer(receipt, byId.get(id), input.participantId);
+    if (answer && !deferredAnswers.has(id)) {
+      answers.set(receipt.id, { id, message: answer });
+      deferredAnswers.add(id);
     }
   }
-  for (const message of output) onSelectedSource?.(sources.get(message)!);
+  const output: LlmMessage[] = [];
+  for (const message of selected) {
+    // Keep existing receipt order when both records are present. A prefix ending
+    // before the receipt still includes the answer; a tail never reloads content
+    // already covered by its summary.
+    if (!deferredAnswers.has(message.id)) {
+      const projected = toLlmMessage(message, input.participantId);
+      if (projected) {
+        output.push(projected);
+        onSelectedSource?.(message.id);
+      }
+    }
+    const answer = answers.get(message.id);
+    if (answer) {
+      output.push(answer.message);
+      onSelectedSource?.(answer.id);
+    }
+  }
   return Object.freeze(output);
 }

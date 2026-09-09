@@ -59,15 +59,17 @@ work. Older semantic checkpoints remain readable but do not certify a cutoff.
 The first certified range begins at the start of eligible history; later ranges
 continue after the previous certified boundary and carry its summary forward.
 
-Compaction takes bounded contiguous chunks and keeps unfinished Tool/Ask groups
-in the raw tail. The private task contains its authorized source text and prior
-context; its own scoped transcript replaces replaying the whole public thread.
-The owning Agent's instructions, tools, model selection and authentication stay
-in effect. The private scope is never accepted from HTTP history input.
+Compaction takes bounded chronological chunks and may cross unfinished Tool or
+Ask calls. Execution continues independently; continuity preserves outstanding
+work, and later results retain their plan and call identities. The private task
+contains its authorized source text and prior context; its own scoped transcript
+replaces replaying the whole public thread. The owning Agent's instructions,
+tools, model selection and authentication stay in effect. The private scope is
+never accepted from HTTP history input.
 
 Core preflights the same formatted input used by execution. If necessary, it
 waits for certified compaction progress and rebuilds the request. Waiting is
-cancellable and bounded to 45 seconds per pass, with at most eight passes.
+cancellable; repeated attempts at the same boundary fail instead of looping.
 Unavailable compaction, a failed checkpoint, an indivisible oversized input, or
 failure to make progress produces an input-limit failure instead of dropping
 history. A source change invalidates its pending checkpoint and ends that
