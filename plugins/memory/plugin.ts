@@ -15,7 +15,7 @@ import type {
   CreateLongTermMemoryPluginOptions,
   MemoryEmbed,
 } from "./authoring/contracts/index.ts";
-import { normalizedConfig } from "./internal/implementation.ts";
+import { normalizedConfig } from "./resources/config/index.ts";
 import {
   CONSOLIDATE_MEMORY_ACTION_ID,
   createConsolidateMemoryAction,

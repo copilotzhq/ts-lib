@@ -1,8 +1,8 @@
 /** Composes concrete Knowledge primitives into one plugin. @module */
 
 import type { AnyActionDefinition } from "@copilotz/copilotz/actions";
-import { definePlugin } from "@copilotz/copilotz/plugins";
-import type { CopilotzPlugin } from "@copilotz/copilotz/plugins";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
+
 import type { ToolResource } from "@copilotz/copilotz/tools";
 import {
   createIndexKnowledgeDocumentAction,

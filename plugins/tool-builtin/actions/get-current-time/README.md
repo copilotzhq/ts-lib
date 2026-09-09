@@ -12,4 +12,5 @@ Compose it through the built-in tools plugin.
 
 ## How it works
 
-It delegates date formatting to the shared implementation.
+It reads the injected clock and formats the result for the requested format and
+timezone.

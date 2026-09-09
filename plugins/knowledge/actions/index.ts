@@ -32,7 +32,7 @@ export {
   type DeleteKnowledgeDocumentInput,
   type DeleteKnowledgeDocumentResult,
 } from "./delete-document/index.ts";
-export type { KnowledgeActionContext } from "./internal/operations.ts";
+export type { KnowledgeActionContext } from "./internal/context.ts";
 
 export type KnowledgeIndexActionCallers = Readonly<{
   indexKnowledgeDocument: ActionCaller<IndexKnowledgeDocumentAction>;

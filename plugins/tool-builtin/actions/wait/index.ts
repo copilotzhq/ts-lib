@@ -4,17 +4,27 @@
  */
 
 import { defineAction } from "@copilotz/copilotz/actions";
-import { waitDefinition } from "../../internal/definitions.ts";
+import { record } from "../internal/input.ts";
 
 export function createWaitAction(
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>,
 ) {
-  const definition = waitDefinition(sleep);
   return defineAction({
     id: "copilotz.tools.builtin.wait",
-    inputSchema: definition.inputSchema,
-    execute(input, context) {
-      return definition.execute(input, context);
+    inputSchema: {
+      type: "object",
+      properties: {
+        seconds: { type: "number", minimum: 0.1, maximum: 60, default: 1 },
+      },
+    },
+    async execute(raw, context) {
+      const seconds = Number(record(raw).seconds ?? 1);
+      if (!Number.isFinite(seconds) || seconds < 0.1 || seconds > 60) {
+        throw new TypeError("seconds must be between 0.1 and 60.");
+      }
+      const startedAt = Date.now();
+      await sleep(seconds * 1_000, context.signal);
+      return { requested: seconds, actual: (Date.now() - startedAt) / 1_000 };
     },
   });
 }

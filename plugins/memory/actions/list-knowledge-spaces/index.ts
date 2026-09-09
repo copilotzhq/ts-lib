@@ -1,23 +1,39 @@
-/** Lists memory spaces available to the current action provenance. @module */
+/** Lists the caller's accessible memory spaces. @module */
 import {
   type ActionDefinition,
   type ActionSchema,
   defineAction,
 } from "@copilotz/copilotz/actions";
+
+import type { MemoryActionContext } from "../../internal/contracts.ts";
+import { positiveInteger, record } from "../../internal/input.ts";
 import {
-  listSpacesAction as createImplementation,
-  type MemoryActionContext,
-} from "../../internal/implementation.ts";
+  memoryActionProvenance,
+  threadMemorySpaces,
+} from "../../internal/access.ts";
+
 export function createListKnowledgeSpacesAction(): ActionDefinition<
   unknown,
   unknown,
   MemoryActionContext,
   ActionSchema
 > {
-  const implementation = createImplementation();
   return defineAction({
     id: "copilotz.memory.spaces.list",
-    inputSchema: implementation.inputSchema,
-    execute: implementation.execute,
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "integer", minimum: 1, maximum: 1_000 } },
+    },
+    async execute(
+      raw: unknown,
+      context: MemoryActionContext,
+    ) {
+      const limit = positiveInteger(record(raw).limit, 100);
+      const values = (await threadMemorySpaces(
+        context,
+        memoryActionProvenance(context).threadId,
+      )).slice(0, Math.min(limit, 1_000));
+      return { knowledgeSpaces: values, totalKnowledgeSpaces: values.length };
+    },
   });
 }

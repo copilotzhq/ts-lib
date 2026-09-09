@@ -65,7 +65,12 @@ Empty directories are omitted. A concrete plugin root always owns `README.md`,
 4. `index.ts` is the deliberate public barrel. Private implementation modules
    are never re-exported accidentally.
 5. Each hand-authored primitive owns its implementation, focused tests, README,
-   and source-level module documentation in its own directory.
+   and source-level module documentation in its own directory. Define it
+   directly there; do not introduce a factory that returns definition fragments
+   only for another factory to copy them into `defineAction`,
+   `defineCollection`, or `defineProcessor`. Keep configured factories and
+   meaningful shared operations. Substantial private handlers may live in the
+   primitive’s own `internal/` directory.
 6. Private code goes in the nearest `internal/` directory. The root
    `dependencies/` directory is reserved for wrapped external packages and is
    not used inside plugins; registry selections and versions belong exclusively

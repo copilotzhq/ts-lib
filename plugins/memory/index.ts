@@ -79,7 +79,7 @@ export type {
   MemoryActionCallers,
   MemoryActionContext,
   MemoryProcessorContext,
-} from "./internal/implementation.ts";
+} from "./internal/contracts.ts";
 export type {
   CreateLongTermMemoryPluginOptions,
   MemoryAdapters,

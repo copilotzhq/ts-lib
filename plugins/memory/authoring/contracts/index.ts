@@ -5,9 +5,12 @@
  */
 
 import type { RuntimeContextNamespaces } from "@copilotz/copilotz/actions";
-import type { ConversationThread } from "@copilotz/copilotz/core";
+import type {
+  AgentResource,
+  ConversationThread,
+} from "@copilotz/copilotz/core";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
-import type { AgentResource } from "@copilotz/copilotz/core";
+
 import type { MemoryKindDefinition } from "../ontology/index.ts";
 import type { LongTermMemoryConfig } from "../../resources/config/index.ts";
 
