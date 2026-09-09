@@ -8,6 +8,28 @@ import {
 } from "./index.ts";
 import { CORE_MEMORY_KINDS, memorySourceKey } from "../ontology/index.ts";
 
+Deno.test("maintenance instruction requires continuity even when no durable record changes", () => {
+  const instruction = buildMemoryConsolidationInstruction({
+    spaces: [{
+      id: "shared",
+      name: "Shared",
+      scopeType: "thread",
+      access: "read_write",
+      defaultWrite: true,
+    }],
+    sourceMessages: [],
+    kinds: [],
+    previousRecords: [],
+    context: [],
+  });
+  assertStringIncludes(
+    instruction,
+    "Every payload, including outcome no_changes",
+  );
+  assertStringIncludes(instruction, "will no longer be directly present");
+  assertEquals(instruction.includes("no_changes alone"), false);
+});
+
 function options() {
   return {
     kinds: new Map(CORE_MEMORY_KINDS.map((kind) => [kind.id, kind])),

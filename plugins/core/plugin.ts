@@ -22,14 +22,21 @@ import {
   toolPlanCoordinatorProcessor,
 } from "./processors/index.ts";
 import { askTool } from "./resources/ask-tool/index.ts";
+import { compactContextAction } from "./actions/compact-context/index.ts";
 
 export const CORE_PLUGIN_ID = "@copilotz/core";
 export const CORE_PLUGIN_VERSION = "0.65.1";
 
 export type CoreCollections = typeof coreCollections;
-export type CoreActions = typeof coreCollectionActions;
-
-export const coreActions = coreCollectionActions;
+export type CoreActions =
+  & typeof coreCollectionActions
+  & Readonly<{
+    compactContext: typeof compactContextAction;
+  }>;
+export const coreActions: CoreActions = Object.freeze({
+  ...coreCollectionActions,
+  compactContext: compactContextAction,
+});
 
 export type CoreProcessors = Readonly<{
   messageRouter: typeof messageRouterProcessor;

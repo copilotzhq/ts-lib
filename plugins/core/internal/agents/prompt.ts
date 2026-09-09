@@ -247,6 +247,7 @@ export async function buildCoreLlmRequest(
     messageIds: readonly string[];
     tools: readonly CoreToolEntry[];
     contributions?: readonly CollectedContextContribution[];
+    historyByteLimit?: number;
   }>,
 ): Promise<LlmRequest> {
   const participant = mapParticipantRecord(input.participant);
@@ -282,7 +283,7 @@ export async function buildCoreLlmRequest(
     history: rawHistory,
     messageIds: input.messageIds,
     participantId: participant.id,
-  });
+  }, { byteLimit: input.historyByteLimit });
   const agents = Object.values(context.resources.agents ?? {}).filter(
     (value): value is AgentResource => Boolean(value),
   );

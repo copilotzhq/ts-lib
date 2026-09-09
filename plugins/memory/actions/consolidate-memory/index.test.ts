@@ -349,7 +349,8 @@ Deno.test("consolidate output schema publishes the runtime audit bounds", () => 
   }
   assertEquals(object(action.inputSchema).example, {
     outcome: "no_changes",
-    continuity: "No outstanding work.",
+    continuity:
+      "Continue the current release: verify the memory output contract, then publish after the checks pass. The current constraint is preserving certified history coverage; no durable memory records changed. No user question is pending.",
   });
   assertEquals(
     object(object(object(action.inputSchema).properties).outcome).example,
@@ -359,6 +360,26 @@ Deno.test("consolidate output schema publishes the runtime audit bounds", () => 
   assertStringIncludes(
     String(object(properties.unresolved).description),
     "Total",
+  );
+  const validateOutput = new (Ajv as any)({ strict: false }).compile(
+    action.outputSchema,
+  );
+  assert(
+    validateOutput({
+      outcome: "no_changes",
+      continuity: "Continue validation; no durable record changed.",
+      created: 0,
+      reused: 0,
+      lifecycleChanged: 0,
+      createdRecords: [],
+      reusedRecords: [],
+      unresolvedReconciliations: [],
+    }),
+    JSON.stringify(validateOutput.errors),
+  );
+  assertEquals(
+    validateOutput({ outcome: "no_changes", continuity: "" }),
+    false,
   );
 });
 

@@ -24,7 +24,7 @@ Deno.test("core plugin is direct static plugin composition", () => {
   );
   assertEquals(
     Object.values(corePlugin.actions).map((definition) => definition.id),
-    CORE_ACTION_IDS,
+    [...CORE_ACTION_IDS, "copilotz.core.context.compact"],
   );
   assertEquals(Object.keys(corePlugin.processors), [
     "messageRouter",

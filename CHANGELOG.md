@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.70.1 — 2026-09-09
+
+- Keep foreground Agent answers waiting for certified memory consolidation, with
+  durable progress and cancellation.
+- Bound compaction source hydration and preserve complete Tool/Ask dependency
+  groups when selecting history prefixes.
+- Validate consolidation continuity outputs and clarify continuation summaries,
+  including no-change results.
+- Reject oversized content before loading asset bodies with an explicit content
+  budget error.
+
 ## 0.70.0 — 2026-09-08
 
 - Prepare each new Agent invocation from the latest authorized history for its

@@ -1,9 +1,11 @@
 /** Routes canonical Messages into agent LLM calls. @module */
 
 import {
+  ContextInputLimitError,
   isContextInputLimitError,
   preflightLlmRequest,
 } from "@copilotz/copilotz/llm";
+import { isContentByteLimitError } from "@copilotz/copilotz/content";
 import { isSettledActionError } from "@copilotz/copilotz/actions";
 import {
   agentAskMetadata,
@@ -218,7 +220,8 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
           : `${record.id}:${recipientId}`;
         try {
           await context.actions.callLlm.prepare(async () => {
-            for (let preparation = 0;; preparation += 1) {
+            const compactedBoundaries = new Set<string>();
+            for (;;) {
               context.signal.throwIfAborted();
               const captured = await context.readSnapshot(
                 async ({ collections }) => {
@@ -317,18 +320,86 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 triggerMessage: record,
                 triggerSender: sender,
               });
-              const request = await buildCoreLlmRequest(context, {
-                agent: resolved.agent,
-                participant,
-                thread: snapshot.thread,
-                ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
-                history: snapshot.messages,
-                messageIds: Object.freeze(
-                  snapshot.records.map((item) => String(item.id)),
-                ),
-                tools: availableTools,
-                contributions: captured.contributions,
-              });
+              const selection = modelsFor(resolved.agent);
+              const afterMessageId = captured.contributions.map((item) =>
+                item.historyAfterMessageId
+              ).filter((id): id is string => Boolean(id)).at(-1);
+              const hasCompaction = !agentTurn &&
+                Object.values(context.resources.promptContext ?? {})
+                  .some((resource) =>
+                    isContextResource(resource) && resource.compact
+                  );
+              const limits = selection.models.map((model) =>
+                preflightLlmRequest(
+                  { messages: [] },
+                  { ...model.options, model: model.model },
+                  context.namespace,
+                ).limitEstimatedInputTokens
+              ).filter((limit): limit is number =>
+                typeof limit === "number" && Number.isFinite(limit) && limit > 0
+              );
+              const limit = limits.length ? Math.min(...limits) : undefined;
+              const compact = async (error: ContextInputLimitError) => {
+                const boundaryKey = afterMessageId ?? "initial";
+                if (compactedBoundaries.has(boundaryKey)) {
+                  throw new Error(
+                    "Consolidation did not advance the conversation history boundary.",
+                  );
+                }
+                compactedBoundaries.add(boundaryKey);
+                await context.actions.compactContext({
+                  threadId: snapshot.thread.id,
+                  agentId: resolved.agent.id,
+                  participantId: String(participant.id),
+                  triggerMessageId: String(record.id),
+                  ...(afterMessageId
+                    ? { historyAfterMessageId: afterMessageId }
+                    : {}),
+                  estimatedTokens: error.estimatedInputTokens,
+                  limitEstimatedTokens: error.limitEstimatedInputTokens,
+                }, {
+                  operationKey: `context:${continuationKey}:${boundaryKey}`,
+                  signal: context.signal,
+                  metadata: {
+                    schema: "copilotz.core.context-compaction.v1",
+                    threadId: snapshot.thread.id,
+                    agentId: resolved.agent.id,
+                    agentName: resolved.agent.name,
+                    agentParticipantId: String(participant.id),
+                    triggerMessageId: String(record.id),
+                  },
+                });
+              };
+              let request;
+              try {
+                request = await buildCoreLlmRequest(context, {
+                  agent: resolved.agent,
+                  participant,
+                  thread: snapshot.thread,
+                  ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
+                  history: snapshot.messages,
+                  messageIds: Object.freeze(
+                    snapshot.records.map((item) => String(item.id)),
+                  ),
+                  tools: availableTools,
+                  contributions: captured.contributions,
+                  ...(hasCompaction && limit
+                    ? { historyByteLimit: Math.floor(limit * 8) }
+                    : {}),
+                });
+              } catch (error) {
+                if (
+                  !isContentByteLimitError(error) || !hasCompaction ||
+                  !limit
+                ) throw error;
+                await compact(
+                  new ContextInputLimitError(
+                    Math.max(limit + 1, Math.ceil(error.bytes / 8)),
+                    limit,
+                  ),
+                );
+                continue;
+              }
               const currentThread = await context.collections.thread.get({
                 id: snapshot.thread.id,
               });
@@ -380,7 +451,6 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                   agentId,
                 },
               });
-              const selection = modelsFor(resolved.agent);
               try {
                 for (const model of selection.models) {
                   const connection =
@@ -400,39 +470,10 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
                 }
               } catch (error) {
                 if (!isContextInputLimitError(error)) throw error;
-                // Maintenance turns already contain a bounded source segment. Never
-                // recursively compact them. The durable LLM Action records a terminal
-                // overflow if no certified boundary can advance within this budget.
-                let advanced = false;
-                if (!agentTurn && preparation < 8) {
-                  for (
-                    const resource of Object.values(
-                      context.resources.promptContext ?? {},
-                    )
-                  ) {
-                    if (!isContextResource(resource) || !resource.compact) {
-                      continue;
-                    }
-                    advanced = await resource.compact({
-                      purpose: "conversation",
-                      agent: resolved.agent,
-                      participant: mapParticipantRecord(participant),
-                      thread: snapshot.thread,
-                      collections: context.collections,
-                      context,
-                      triggerMessageId: String(record.id),
-                      historyAfterMessageId: captured.contributions.map((
-                        item,
-                      ) => item.historyAfterMessageId).filter(Boolean).at(-1),
-                      signal: context.signal,
-                      idempotencyKey:
-                        `${context.operationKey}:compact:${recipientId}:${preparation}`,
-                      estimatedTokens: error.estimatedInputTokens,
-                      limitEstimatedTokens: error.limitEstimatedInputTokens,
-                    }) || advanced;
-                  }
+                if (hasCompaction) {
+                  await compact(error);
+                  continue;
                 }
-                if (advanced) continue;
               }
               return {
                 input: {

@@ -1,5 +1,33 @@
 import type { ContentError, ContentErrorCode } from "./types.ts";
 
+/** A resolved read exceeded its declared body budget. */
+export type ContentByteLimitError =
+  & RangeError
+  & Readonly<{ bytes: number; limit: number }>;
+
+export function createContentByteLimitError(
+  bytes: number,
+  limit: number,
+): ContentByteLimitError {
+  return Object.assign(
+    new RangeError(`Resolved content exceeds the ${limit} byte budget.`),
+    {
+      name: "ContentByteLimitError",
+      bytes,
+      limit,
+    },
+  );
+}
+
+export function isContentByteLimitError(
+  error: unknown,
+): error is ContentByteLimitError {
+  return error instanceof RangeError &&
+    error.name === "ContentByteLimitError" &&
+    typeof (error as Partial<ContentByteLimitError>).bytes === "number" &&
+    typeof (error as Partial<ContentByteLimitError>).limit === "number";
+}
+
 /** Creates typed content errors without custom error constructors. */
 export function createContentError(
   code: ContentErrorCode,

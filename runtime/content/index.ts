@@ -87,7 +87,13 @@ export {
   type CreateDatabaseAssetRepositoryOptions,
   type DatabaseAssetRepository,
 } from "./database-repository.ts";
-export { createContentError, isContentError } from "./errors.ts";
+export {
+  type ContentByteLimitError,
+  createContentByteLimitError,
+  createContentError,
+  isContentByteLimitError,
+  isContentError,
+} from "./errors.ts";
 export {
   type ContentNormalizer,
   createContentNormalizer,

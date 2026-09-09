@@ -32,9 +32,11 @@ import {
 import { projectMessages } from "../core/internal/testing/projections.ts";
 import { createTestDomainContext } from "../core/internal/testing/context.ts";
 import AjvModule from "ajv";
+import { createConsolidateMemoryAction } from "./actions/consolidate-memory/index.ts";
 import { createInspectMemoryAction } from "./actions/inspect-memory/index.ts";
 import { createSearchMemoryAction } from "./actions/search-memory/index.ts";
 import { createLongTermMemoryPlugin } from "./plugin.ts";
+import type { LongTermMemoryConfig } from "./resources/config/index.ts";
 
 const NAMESPACE = "tenant-memory-native-turn";
 const SCHEMA = "copilotz_memory_native_turn";
@@ -116,13 +118,21 @@ function text(input: LlmAdapterCallInput): string {
 
 async function fixture(
   script: Script,
-  options: Readonly<{ enabled?: boolean; inputLimit?: number }> = {},
+  options: Readonly<{
+    enabled?: boolean;
+    inputLimit?: number;
+    memoryConfig?: Partial<LongTermMemoryConfig>;
+  }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const inputs: LlmAdapterCallInput[] = [];
   const memory = createLongTermMemoryPlugin({
     enabled: options.enabled,
-    config: { triggerEstimatedTokens: 1, retainRecentEstimatedTokens: 0 },
+    config: {
+      triggerEstimatedTokens: 1,
+      retainRecentEstimatedTokens: 0,
+      ...options.memoryConfig,
+    },
   });
   const app = definePlugin({
     id: "test.memory-native-agent-turn",
@@ -298,6 +308,18 @@ async function assertNoDeadLetters(fixture: Fixture) {
   );
 }
 
+function assertConsolidationLifecycleOutput(value: unknown) {
+  const validate = new AjvModule.default({ strict: false }).compile(
+    createConsolidateMemoryAction({
+      triggerEstimatedTokens: 1,
+      retainRecentEstimatedTokens: 0,
+      maxContentEstimatedTokens: 1,
+      retrievalLimit: 1,
+    }).outputSchema as any,
+  );
+  assert(validate(value), JSON.stringify(validate.errors));
+}
+
 Deno.test("memory composes Core-native dispatch and settlement without a model selector", () => {
   const plugin = createLongTermMemoryPlugin({
     config: { triggerEstimatedTokens: 1 },
@@ -372,6 +394,9 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       }).coverage?.continuity,
       "Compass remains the active project for the next turn.",
     );
+    assertConsolidationLifecycleOutput(
+      (savedCheckpoint.metadata as { result?: unknown }).result,
+    );
     const records = await collection(run, "memory_record").list({
       limit: 10,
     });
@@ -393,6 +418,150 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       publicHistory.map((message) => message.id).sort(),
     );
     assertEquals(sources.filter((source) => source.type === "asset").length, 2);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("a no_changes maintenance Action completes with schema-valid continuity", async () => {
+  const run = await fixture((_input, call) =>
+    call === 1 ? stop("I will remember that.") : tool({
+      outcome: "no_changes",
+      continuity:
+        "Continue the Compass conversation; no durable memory record changed and no user answer is pending.",
+    })
+  );
+  try {
+    await startUserTurn(run);
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const saved = await checkpoint(run);
+    assertEquals(saved.status, "ready");
+    assertConsolidationLifecycleOutput(
+      (saved.metadata as { result?: unknown }).result,
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("an uncertified legacy checkpoint rebuilds from the raw bounded prefix", async () => {
+  const run = await fixture((_input, call) =>
+    call === 1 ? stop("I will remember that.") : tool(memoryProposal())
+  );
+  try {
+    await setupThread(run);
+    await createHumanMessage(run, {
+      id: "message:legacy",
+      text: "LEGACY_SOURCE_MUST_BE_REBUILT",
+    });
+    const spaces = collection(run, "memory_space");
+    const grants = collection(run, "memory_space_access");
+    await spaces.create({
+      id: "space-a",
+      name: "Space A",
+      scopeType: "thread",
+      scopeId: "thread-a",
+      threadId: "thread-a",
+      access: "read_write",
+      defaultWrite: true,
+      metadata: {},
+    });
+    await grants.create({
+      id: "grant-a",
+      threadId: "thread-a",
+      memorySpaceId: "space-a",
+      access: "read_write",
+      defaultWrite: true,
+      metadata: {},
+    });
+    await collection(run, "long_term_memory").create({
+      id: "legacy-ready",
+      threadId: "thread-a",
+      schemaVersion: "4",
+      strategy: "semantic_graph",
+      status: "ready",
+      sequence: 89,
+      agentId: "north",
+      readMemorySpaceIds: ["space-a"],
+      sourceStartMessageId: "message:legacy",
+      sourceEndMessageId: "message:legacy",
+      content: [],
+      contextSnapshotContent: [],
+      contextSnapshot: null,
+      embedding: null,
+      contentHash: null,
+      tokenEstimate: null,
+      error: null,
+      metadata: { agentParticipantId: "agent-north" },
+    });
+    await createHumanMessage(run, {
+      id: "message:current",
+      text: "Current request after the legacy checkpoint.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () =>
+        (await checkpoints(run)).some((item: { id: string; status: string }) =>
+          item.id !== "legacy-ready" && item.status === "ready"
+        ),
+    );
+    const maintenance = run.inputs.find((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assert(maintenance);
+    assertStringIncludes(
+      text(maintenance),
+      "LEGACY_SOURCE_MUST_BE_REBUILT",
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("background compaction reaches its default trigger when one source chunk is smaller", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("The ordinary request can continue."),
+    {
+      inputLimit: 40_000,
+      memoryConfig: { triggerEstimatedTokens: 20_000 },
+    },
+  );
+  try {
+    await setupThread(run);
+    for (let index = 0; index < 13; index++) {
+      await createHumanMessage(run, {
+        id: "message:background:" + index,
+        text: "BACKGROUND_" + index + " " + "history ".repeat(1_600),
+      });
+    }
+    await createHumanMessage(run, {
+      id: "message:background:latest",
+      text: "BACKGROUND_LATEST keeps the normal turn active.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () =>
+        (await checkpoints(run)).some((item: { status: string }) =>
+          item.status === "ready"
+        ),
+    );
+    const maintenance = run.inputs.find((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assert(maintenance);
+    assertStringIncludes(text(maintenance), "BACKGROUND_0");
+    assertEquals(text(maintenance).includes("BACKGROUND_LATEST"), false);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();

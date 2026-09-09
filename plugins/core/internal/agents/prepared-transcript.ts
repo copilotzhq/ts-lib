@@ -3,6 +3,24 @@ import type { LlmMessage } from "@copilotz/copilotz/llm";
 import type { ConversationMessage } from "../../../core-collections/internal/contracts.ts";
 import type { CoreProcessorContext } from "../runtime-context.ts";
 import { buildLlmTranscript } from "./transcript.ts";
+import {
+  createContentByteLimitError,
+  isContentByteLimitError,
+} from "@copilotz/copilotz/content";
+
+function bodyBytes(value: unknown): number {
+  if (!Array.isArray(value)) return 0;
+  return value.reduce((total, entry) => {
+    if (!entry || typeof entry !== "object" || !("value" in entry)) {
+      return total;
+    }
+    const body = entry.value;
+    return total +
+      (body instanceof Uint8Array ? body.byteLength : new TextEncoder().encode(
+        typeof body === "string" ? body : JSON.stringify(body) ?? "",
+      ).byteLength);
+  }, 0);
+}
 
 function contentReferences(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
@@ -40,6 +58,7 @@ function optionalSnapshotFilter(
 export async function prepareLlmTranscript(
   context: CoreProcessorContext,
   input: Parameters<typeof buildLlmTranscript>[0],
+  options: Readonly<{ byteLimit?: number }> = {},
 ): Promise<readonly LlmMessage[]> {
   const sources: string[] = [];
   const transcript = buildLlmTranscript(input, (id) => sources.push(id));
@@ -55,51 +74,82 @@ export async function prepareLlmTranscript(
   const resolved = new Map<string, CollectionRecord>();
   const messages = context.collections.message;
   if (!messages) throw new Error("Core requires the Message Collection.");
+  let usedBytes = 0;
   for (const reasoning of [false, true]) {
     const ids = [...new Set(sources)].filter((id) =>
       withReasoning.has(id) === reasoning
     );
     for (let offset = 0; offset < ids.length; offset += 20) {
-      const records = await messages.list({
-        where: { threadId: input.threadId },
-        // Match the captured record before resolved-read can open any Body.
-        filter: {
-          or: ids.slice(offset, offset + 20).flatMap((id) => {
-            const snapshot = snapshots.get(id);
-            return snapshot
-              ? [{
-                and: [
-                  { field: "id", eq: id },
-                  { field: "senderId", eq: snapshot.sender.id },
-                  { field: "createdAt", eq: snapshot.createdAt },
-                  { field: "updatedAt", eq: snapshot.updatedAt },
-                  {
-                    field: "content",
-                    jsonEquals: contentReferences(snapshot.content),
-                  },
-                  {
-                    field: "metadata",
-                    jsonEquals: snapshotMetadata(snapshot.metadata),
-                  },
-                  optionalSnapshotFilter(snapshot, "visibility"),
-                  optionalSnapshotFilter(snapshot, "revision"),
-                ],
-              }]
-              : [];
-          }),
-        },
-        limit: 20,
-      }, {
-        content: {
-          fields: reasoning
-            ? ["content", "metadata.llmReasoning"]
-            : ["content"],
-          exclude: [{ disposition: "attachment" }, {
-            kind: "file",
-            disposition: null,
-          }],
-        },
-      });
+      let records: readonly CollectionRecord[];
+      try {
+        records = await messages.list({
+          where: { threadId: input.threadId },
+          // Match the captured record before resolved-read can open any Body.
+          filter: {
+            or: ids.slice(offset, offset + 20).flatMap((id) => {
+              const snapshot = snapshots.get(id);
+              return snapshot
+                ? [{
+                  and: [
+                    { field: "id", eq: id },
+                    { field: "senderId", eq: snapshot.sender.id },
+                    { field: "createdAt", eq: snapshot.createdAt },
+                    { field: "updatedAt", eq: snapshot.updatedAt },
+                    {
+                      field: "content",
+                      jsonEquals: contentReferences(snapshot.content),
+                    },
+                    {
+                      field: "metadata",
+                      jsonEquals: snapshotMetadata(snapshot.metadata),
+                    },
+                    optionalSnapshotFilter(snapshot, "visibility"),
+                    optionalSnapshotFilter(snapshot, "revision"),
+                  ],
+                }]
+                : [];
+            }),
+          },
+          limit: 20,
+        }, {
+          content: {
+            ...(options.byteLimit === undefined
+              ? {}
+              : { byteLimit: Math.max(0, options.byteLimit - usedBytes) }),
+            fields: reasoning
+              ? ["content", "metadata.llmReasoning"]
+              : ["content"],
+            exclude: [{ disposition: "attachment" }, {
+              kind: "file",
+              disposition: null,
+            }],
+          },
+        });
+      } catch (error) {
+        if (
+          isContentByteLimitError(error) &&
+          options.byteLimit !== undefined
+        ) {
+          throw createContentByteLimitError(
+            usedBytes + error.bytes,
+            options.byteLimit,
+          );
+        }
+        throw error;
+      }
+      usedBytes += records.reduce(
+        (total, record) =>
+          total + bodyBytes(record.content) +
+          (reasoning
+            ? bodyBytes(
+              (record.metadata as Record<string, unknown>)?.llmReasoning,
+            )
+            : 0),
+        0,
+      );
+      if (options.byteLimit !== undefined && usedBytes > options.byteLimit) {
+        throw createContentByteLimitError(usedBytes, options.byteLimit);
+      }
       for (const record of records) resolved.set(record.id, record);
     }
   }

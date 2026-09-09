@@ -17,6 +17,7 @@ import type { PromptInstructionResource } from "../resources/prompt-instructions
 import type { ToolResource } from "@copilotz/copilotz/tools";
 import type { Skill } from "@copilotz/copilotz/skills";
 import type { createThreadMessageAction } from "../../core-collections/actions/create-thread-message/index.ts";
+import type { compactContextAction } from "../actions/compact-context/index.ts";
 
 export type CoreResources =
   & RuntimeContextNamespaces
@@ -44,6 +45,7 @@ export type CoreComposedContext = Readonly<{
 export type CoreActionCallers = Readonly<{
   createThreadMessage: BoundActionCaller<typeof createThreadMessageAction>;
   callLlm: BoundActionCaller<typeof callLlmAction>;
+  compactContext: BoundActionCaller<typeof compactContextAction>;
 }>;
 
 /** Runtime capabilities plus the composed namespaces used by Core semantics. */

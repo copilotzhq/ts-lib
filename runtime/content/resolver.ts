@@ -1,6 +1,6 @@
 import { createContentBodyDecoder } from "./decode.ts";
 import { digestContent } from "./digest.ts";
-import { createContentError } from "./errors.ts";
+import { createContentByteLimitError, createContentError } from "./errors.ts";
 import type {
   AssetBody,
   AssetRepository,
@@ -156,9 +156,7 @@ export function createContentResolver(dependencies: {
       }
       const bytes = metadata.reduce((sum, asset) => sum + asset.byteLength, 0);
       if (bytes > options.maxBytes) {
-        throw new RangeError(
-          `Resolved content exceeds the ${options.maxBytes} byte budget.`,
-        );
+        throw createContentByteLimitError(bytes, options.maxBytes);
       }
     }
     const bodies = await dependencies.assets.readMany(options.namespace, ids);
@@ -186,8 +184,9 @@ export function createContentResolver(dependencies: {
       bodies.reduce((sum, body) => sum + body.bytes.byteLength, 0) >
         options.maxBytes
     ) {
-      throw new RangeError(
-        `Resolved content exceeds the ${options.maxBytes} byte budget.`,
+      throw createContentByteLimitError(
+        bodies.reduce((sum, body) => sum + body.bytes.byteLength, 0),
+        options.maxBytes,
       );
     }
     return Object.freeze(resolved);

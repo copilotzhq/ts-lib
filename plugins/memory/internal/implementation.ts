@@ -23,6 +23,7 @@ import type {
   PreparedAsset,
   PreparedContent,
 } from "@copilotz/copilotz/content";
+import { isContentByteLimitError } from "@copilotz/copilotz/content";
 import type {
   CollectionRecord,
   GraphRelationUpsertInput,
@@ -473,19 +474,6 @@ function certifiedHistoryBoundary(
   return optionalText(coverage.endMessageId);
 }
 
-async function latestReadyCheckpoint(
-  context: MemoryProcessorContext,
-  threadId: string,
-  agentId: string,
-  spaces: readonly MemorySpaceDescriptor[],
-  beforeSequence = Number.POSITIVE_INFINITY,
-) {
-  return (await checkpoints(context, threadId, agentId, "ready")).find((item) =>
-    checkpointSequence(item) < beforeSequence &&
-    checkpointAccessible(item, spaces)
-  ) ?? null;
-}
-
 function preparedSourceText(content: readonly unknown[]): string {
   return content.map((entry) => {
     const value = record(entry).value;
@@ -498,12 +486,28 @@ function preparedSourceText(content: readonly unknown[]): string {
   }).join("\n");
 }
 
+/** Dependency groups with a member beyond the hydrated prefix stay in raw history. */
+export function pendingDependenciesOutsideCandidate(
+  dependencies: ReadonlyMap<string, readonly string[]>,
+  candidateIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const pending = new Set<string>();
+  for (const [messageId, ids] of dependencies) {
+    if (candidateIds.has(messageId)) continue;
+    for (const id of ids) pending.add(id);
+  }
+  return pending;
+}
+
 async function projectedSourceMessages(
   context: MemoryProcessorContext,
   input: Readonly<{
     threadId: string;
     participantId: string;
     messages: readonly ConversationMessage[];
+    /** Full metadata-only history used to preserve dependency boundaries. */
+    allMessages?: readonly ConversationMessage[];
+    byteLimit?: number;
   }>,
 ): Promise<readonly MemorySourceMessage[]> {
   const sourceIds: string[] = [];
@@ -511,7 +515,10 @@ async function projectedSourceMessages(
   const completed = new Map<string, Set<number>>();
   const answered = new Set<string>();
   const dependencies = new Map<string, string[]>();
-  for (const item of input.messages) {
+  // Dependency completion is derived from the complete metadata snapshot, even
+  // when only a bounded prefix is hydrated below. A Tool/Ask continuation just
+  // outside that prefix must keep its earlier group in the raw tail.
+  for (const item of input.allMessages ?? input.messages) {
     const plan = coreToolPlanMetadata(item.metadata);
     const origin = coreToolResultOrigin(item.metadata);
     const ask = agentAskMetadata(item.metadata);
@@ -546,6 +553,12 @@ async function projectedSourceMessages(
       if (id.startsWith("ask:") && !answered.has(id.slice(4))) pending.add(id);
     }
   }
+  for (
+    const id of pendingDependenciesOutsideCandidate(
+      dependencies,
+      new Set(input.messages.map((message) => message.id)),
+    )
+  ) pending.add(id);
   buildLlmTranscript({
     threadId: input.threadId,
     participantId: input.participantId,
@@ -555,7 +568,7 @@ async function projectedSourceMessages(
     threadId: input.threadId,
     participantId: input.participantId,
     history: input.messages,
-  });
+  }, input.byteLimit === undefined ? {} : { byteLimit: input.byteLimit });
   return Object.freeze(prepared.flatMap((message, index) => {
     const id = sourceIds[index];
     if (!id) return [];
@@ -887,12 +900,23 @@ async function reserveOnDemandCheckpoint(
   const existing = await context.collections.longTermMemory.get({ id });
   if (existing) return existing;
   const spaces = await ensureWritableMemorySpace(context, provenance.threadId);
-  const previous = await latestReadyCheckpoint(
-    context,
-    provenance.threadId,
-    provenance.agentId,
-    spaces,
-  );
+  const thread = await loadThreadRecord(context, provenance.threadId);
+  const previous = thread
+    ? (await checkpoints(
+      context,
+      provenance.threadId,
+      provenance.agentId,
+      "ready",
+    ))
+      .find((item) =>
+        checkpointAccessible(item, spaces) &&
+        Boolean(certifiedHistoryBoundary(item, {
+          agentId: provenance.agentId,
+          participantId: provenance.agentParticipantId,
+          thread,
+        }))
+      ) ?? null
+    : null;
   const history = await listThreadMessageRecords(context, provenance.threadId);
   const triggerIndex = history.findIndex((message) =>
     message.id === provenance.triggerMessageId
@@ -900,7 +924,13 @@ async function reserveOnDemandCheckpoint(
   if (triggerIndex < 0) {
     throw new Error("Memory Tool trigger Message is unavailable.");
   }
-  const after = optionalText(previous?.sourceEndMessageId);
+  const after = previous && thread
+    ? certifiedHistoryBoundary(previous, {
+      agentId: provenance.agentId,
+      participantId: provenance.agentParticipantId,
+      thread,
+    })
+    : undefined;
   const start = after
     ? history.findIndex((message) => message.id === after) + 1
     : 0;
@@ -1376,7 +1406,11 @@ const consolidationInputSchemaBase: ActionSchema = {
   type: "object",
   additionalProperties: false,
   required: ["outcome", "continuity"],
-  example: { outcome: "no_changes", continuity: "No outstanding work." },
+  example: {
+    outcome: "no_changes",
+    continuity:
+      "Continue the current release: verify the memory output contract, then publish after the checks pass. The current constraint is preserving certified history coverage; no durable memory records changed. No user question is pending.",
+  },
   $defs: {
     source: {
       description:
@@ -1510,13 +1544,13 @@ const consolidationInputSchemaBase: ActionSchema = {
       enum: ["changes", "no_changes"],
       example: "no_changes",
       description:
-        "Use changes when at least one draft, relation, or lifecycle change is present. Use no_changes alone when nothing durable should be written.",
+        "Use changes when at least one draft, relation, or lifecycle change is present. Use no_changes when no durable memory record should be written; continuity is still required.",
     },
     continuity: {
       type: "string",
       minLength: 1,
       description:
-        "Required replacement for the compacted conversation prefix. State the active task, constraints, decisions/results, and outstanding work, including uncertainty.",
+        "Required in every payload, including no_changes. This replaces the compacted conversation prefix, whose source messages will no longer be directly present in the next prompt. State the active task, constraints, decisions/results, outstanding work, and uncertainty so work can continue without those messages.",
     },
     entities: {
       type: "array",
@@ -1921,6 +1955,12 @@ const consolidationOutputSchema: ActionSchema = {
   properties: {
     outcome: {
       enum: ["already_settled", "no_changes", "changes", "invalidated"],
+    },
+    continuity: {
+      type: "string",
+      minLength: 1,
+      description:
+        "Certified replacement summary for the compacted source range when consolidation succeeds.",
     },
     created: {
       type: "integer",
@@ -3320,12 +3360,19 @@ export async function reserveMemoryCheckpoint(
       "Memory maintenance requires trusted initiating human provenance.",
     );
   }
-  const previous = await latestReadyCheckpoint(
-    context,
-    message.threadId,
-    agentId,
-    spaces,
-  );
+  const previous = thread
+    ? (await checkpoints(context, message.threadId, agentId, "ready")).find(
+      (item) =>
+        checkpointAccessible(item, spaces) && Boolean(
+          certifiedHistoryBoundary(item, {
+            agentId,
+            participantId: owner.id,
+            historyScopeId: optionalText(messageRecord.historyScopeId),
+            thread,
+          }),
+        ),
+    ) ?? null
+    : null;
   const certifiedPreviousBoundary = previous && thread
     ? certifiedHistoryBoundary(previous, {
       agentId,
@@ -3351,41 +3398,100 @@ export async function reserveMemoryCheckpoint(
     )
   );
   if (!snapshot.active) return null;
-  const sources = await projectedSourceMessages(context, {
-    threadId: message.threadId,
-    participantId: owner.id,
-    messages: snapshot.messages,
-  });
-  const range = selectLongTermMemoryRange({
-    messages: options.force
-      ? sources.map((item) =>
-        item.id === message.id ? { ...item, pendingDependency: true } : item
-      )
-      : sources,
-    triggerMessageId: sources.at(-1)?.id ?? message.id,
-    triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
-    retainRecentEstimatedTokens: options.force
-      ? Math.min(
-        config.retainRecentEstimatedTokens,
-        Math.floor(
-          (options.maxSourceEstimatedTokens ?? config.triggerEstimatedTokens) /
-            4,
-        ),
-      )
-      : config.retainRecentEstimatedTokens,
-    maxSourceEstimatedTokens: options.maxSourceEstimatedTokens ??
-      Math.floor(
-        Math.min(
-          ...(context.resources.agents[agentId]?.models.generate ??
-            context.resources.agents[agentId]?.models.session ?? [])
-            .map((model) =>
-              typeof model.options?.limitEstimatedInputTokens === "number"
-                ? model.options.limitEstimatedInputTokens
-                : 150_000
-            ),
-        ) / 3,
+  const maxSourceEstimatedTokens = options.maxSourceEstimatedTokens ??
+    Math.floor(
+      Math.min(
+        ...(context.resources.agents[agentId]?.models.generate ??
+          context.resources.agents[agentId]?.models.session ?? [])
+          .map((model) =>
+            typeof model.options?.limitEstimatedInputTokens === "number"
+              ? model.options.limitEstimatedInputTokens
+              : 150_000
+          ),
+      ) / 3,
+    );
+  // Background eligibility may require seeing more source than one maintenance
+  // turn can carry. The scan remains bounded, while range selection below
+  // still caps the checkpoint source at maxSourceEstimatedTokens.
+  const sourceByteLimit = Math.max(
+    1,
+    Math.max(maxSourceEstimatedTokens, config.triggerEstimatedTokens) * 8,
+  );
+  let candidateCount = Math.min(16, snapshot.messages.length);
+  let largestSafeCandidateCount = 0;
+  let smallestOversizedCandidateCount = snapshot.messages.length + 1;
+  let range: ReturnType<typeof selectLongTermMemoryRange> = null;
+  for (;;) {
+    const candidate = snapshot.messages.slice(0, candidateCount);
+    try {
+      const sources = await projectedSourceMessages(context, {
+        threadId: message.threadId,
+        participantId: owner.id,
+        messages: candidate,
+        allMessages: snapshot.messages,
+        byteLimit: sourceByteLimit,
+      });
+      range = selectLongTermMemoryRange({
+        messages: options.force
+          ? sources.map((item) =>
+            item.id === message.id ? { ...item, pendingDependency: true } : item
+          )
+          : sources,
+        triggerMessageId: sources.at(-1)?.id ?? message.id,
+        triggerEstimatedTokens: options.force
+          ? 0
+          : config.triggerEstimatedTokens,
+        retainRecentEstimatedTokens: options.force
+          ? Math.min(
+            config.retainRecentEstimatedTokens,
+            Math.floor(maxSourceEstimatedTokens / 4),
+          )
+          : config.retainRecentEstimatedTokens,
+        maxSourceEstimatedTokens,
+      });
+    } catch (error) {
+      if (!isContentByteLimitError(error)) throw error;
+      smallestOversizedCandidateCount = Math.min(
+        smallestOversizedCandidateCount,
+        candidateCount,
+      );
+      if (!largestSafeCandidateCount && candidateCount === 1) {
+        throw new Error(
+          "The first complete memory source unit exceeds the maintenance content budget.",
+          { cause: error },
+        );
+      }
+      if (range) break;
+      if (!largestSafeCandidateCount) {
+        candidateCount = Math.max(1, Math.floor(candidateCount / 2));
+        continue;
+      }
+      if (smallestOversizedCandidateCount - largestSafeCandidateCount > 1) {
+        candidateCount = Math.floor(
+          (smallestOversizedCandidateCount + largestSafeCandidateCount) / 2,
+        );
+        continue;
+      }
+      throw new Error(
+        "No complete memory source prefix large enough for background consolidation fits the maintenance content budget.",
+        { cause: error },
+      );
+    }
+    largestSafeCandidateCount = candidateCount;
+    if (range || candidateCount === snapshot.messages.length) break;
+    if (smallestOversizedCandidateCount - candidateCount <= 1) {
+      throw new Error(
+        "No complete memory source prefix large enough for background consolidation fits the maintenance content budget.",
+      );
+    }
+    candidateCount = Math.min(
+      snapshot.messages.length,
+      Math.min(
+        smallestOversizedCandidateCount - 1,
+        candidateCount + 16,
       ),
-  });
+    );
+  }
   if (!range) return null;
   const writable = spaces.filter((space) => space.access === "read_write");
   const defaultSpace = spaces.find((space) => space.defaultWrite);
@@ -3768,16 +3874,24 @@ export function createMemoryContextResource(
         },
       );
       if (!checkpoint) return false;
-      const deadline = Date.now() + 45_000;
-      while (Date.now() < deadline) {
+      let pollDelayMs = 50;
+      for (;;) {
         input.signal.throwIfAborted();
         const current = await context.collections.longTermMemory.get({
           id: checkpoint.id,
         });
-        if (
-          !current || current.status === "failed" ||
-          current.status === "cancelled"
-        ) return false;
+        if (!current) {
+          throw new Error(
+            "Memory checkpoint '" + checkpoint.id + "' disappeared.",
+          );
+        }
+        if (current.status === "failed" || current.status === "cancelled") {
+          const detail = optionalText(record(current.error).message);
+          throw new Error(
+            "Memory checkpoint '" + checkpoint.id + "' " + current.status +
+              (detail ? ": " + detail : "."),
+          );
+        }
         if (current.status === "ready") {
           const thread = await loadThreadRecord(context, input.thread.id);
           const boundary = thread && certifiedHistoryBoundary(current, {
@@ -3785,7 +3899,13 @@ export function createMemoryContextResource(
             participantId: input.participant.id,
             thread,
           });
-          return Boolean(boundary && boundary !== input.historyAfterMessageId);
+          if (!boundary) {
+            throw new Error(
+              "Memory checkpoint '" + checkpoint.id +
+                "' became ready without certified coverage.",
+            );
+          }
+          return boundary !== input.historyAfterMessageId;
         }
         await new Promise<void>((resolve, reject) => {
           const abort = () => {
@@ -3795,12 +3915,12 @@ export function createMemoryContextResource(
           const timer = setTimeout(() => {
             input.signal.removeEventListener("abort", abort);
             resolve();
-          }, 50);
+          }, pollDelayMs);
           input.signal.addEventListener("abort", abort, { once: true });
           if (input.signal.aborted) abort();
         });
+        pollDelayMs = Math.min(pollDelayMs * 2, 1_000);
       }
-      return false;
     },
     async contribute(input) {
       if (!enabled) return null;
