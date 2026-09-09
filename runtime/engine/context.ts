@@ -413,6 +413,30 @@ export function createProcessorContext(
     return result.value;
   };
 
+  const readSnapshot: ProcessorContext["readSnapshot"] = async (execute) => {
+    return await options.collections.readSnapshot(
+      { namespace },
+      async ({ collections: byName }) => {
+        const snapshotCollections = Object.freeze(Object.fromEntries(
+          Object.entries(options.registry.collections).map(
+            ([alias, definition]) => {
+              const collection = byName[definition.name];
+              if (!collection) {
+                throw new Error(
+                  `Collection '${definition.name}' for alias '${alias}' is not bound.`,
+                );
+              }
+              return [alias, collection];
+            },
+          ),
+        ));
+        return await execute(
+          Object.freeze({ collections: snapshotCollections }),
+        );
+      },
+    );
+  };
+
   const contextIdentity = Object.freeze({
     ...(options.base.event.durable
       ? { causationId: options.base.event.id }
@@ -439,6 +463,7 @@ export function createProcessorContext(
         }),
     },
     signal: options.base.signal,
+    invocationScope: processorOperationKey,
     createInvocationKey: (actionId) =>
       `${processorOperationKey}:action:${++rootActionIndex}:${actionId}`,
     identity: contextIdentity,
@@ -466,6 +491,7 @@ export function createProcessorContext(
     signal: options.base.signal,
     now: options.now ?? (() => new Date()),
     transaction,
+    readSnapshot,
   }, options.protectedEventResolver);
   const context: ProcessorContext = Object.freeze(contextValue);
   return context;

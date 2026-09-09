@@ -1,5 +1,7 @@
 /** Provider-wire to LLM Adapter bridge. @module */
 
+import { projectPreparedRequest } from "../../internal/prepared-request.ts";
+
 import { bytesToBase64, toDataUrl } from "@copilotz/copilotz/content";
 
 import {
@@ -14,6 +16,7 @@ import {
   type LlmJsonObject,
   type LlmJsonValue,
   type LlmMode,
+  type LlmRequest,
   type LlmToolCall,
   type LlmToolDefinition,
   type LlmToolPipeline,
@@ -21,7 +24,12 @@ import {
   type LlmUsage,
 } from "../../internal/contracts.ts";
 import { LLMProviderError } from "../../internal/errors.ts";
+import { toLLMConfig } from "../../internal/config.ts";
 import { chat } from "../../internal/orchestrator.ts";
+import {
+  assertEstimatedInputLimit,
+  formatMessagesDetailed,
+} from "../../internal/utils.ts";
 import type {
   ChatContentPart,
   ChatMessage,
@@ -237,7 +245,10 @@ function adapterPartToChatPart(
   }
 }
 
-function toolInvocation(call: LlmToolCall): ToolInvocation {
+function toolInvocation(
+  call: LlmToolCall,
+  toolPlanId?: string,
+): ToolInvocation {
   const pipeline = toolPipelineInvocation(call);
   const root = pipeline.stages[0];
   if (root.type !== "tool") {
@@ -248,6 +259,7 @@ function toolInvocation(call: LlmToolCall): ToolInvocation {
     tool: root.tool,
     args: root.args,
     pipeline,
+    ...(toolPlanId ? { planId: toolPlanId } : {}),
   };
 }
 
@@ -278,6 +290,7 @@ function toolPipelineInvocation(
 
 function adapterMessageToChatMessage(
   message: LlmAdapterCallInput["request"]["messages"][number],
+  toolName?: string,
 ): ChatMessage {
   const content = message.content.map(adapterPartToChatPart);
   const common = {
@@ -293,18 +306,42 @@ function adapterMessageToChatMessage(
       ...common,
       ...(message.reasoning ? { reasoning: message.reasoning } : {}),
       ...(message.toolCalls
-        ? { toolCalls: message.toolCalls.map(toolInvocation) }
+        ? {
+          toolCalls: message.toolCalls.map((call) =>
+            toolInvocation(call, message.toolPlanId)
+          ),
+        }
         : {}),
+      ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
     };
   }
   if (message.role === "tool") {
+    const toolCalls = message.toolPlanId && toolName
+      ? [{
+        id: message.toolCallId,
+        planId: message.toolPlanId,
+        tool: { id: toolName },
+        args: "{}",
+        output: toolResultOutput(content),
+      }]
+      : undefined;
     return {
       role: "tool_result",
       ...common,
+      ...(toolCalls ? { content: "", toolCalls } : {}),
       tool_call_id: message.toolCallId,
+      ...(message.toolPlanId ? { toolPlanId: message.toolPlanId } : {}),
     };
   }
   return { role: message.role, ...common };
+}
+
+function toolResultOutput(content: ChatContentPart[]): unknown {
+  // The historical text result stays a scalar in the wire JSON. Preserve
+  // multimodal entries as structured output so attachments are not discarded.
+  return content.every((part) => part.type === "text")
+    ? content.map((part) => part.text).join("\n")
+    : content;
 }
 
 function toolDefinition(definition: LlmToolDefinition): ToolDefinition {
@@ -324,7 +361,21 @@ function createChatRequest(
   input: LlmAdapterCallInput,
   signal: AbortSignal,
 ) {
-  const messages = input.request.messages.map(adapterMessageToChatMessage);
+  const planTools = new Map<string, string>();
+  for (const message of input.request.messages) {
+    if (message.role !== "assistant" || !message.toolPlanId) continue;
+    for (const call of message.toolCalls ?? []) {
+      planTools.set(`${message.toolPlanId}\u0000${call.id}`, call.action);
+    }
+  }
+  const messages = input.request.messages.map((message) =>
+    adapterMessageToChatMessage(
+      message,
+      message.role === "tool" && message.toolPlanId
+        ? planTools.get(`${message.toolPlanId}\u0000${message.toolCallId}`)
+        : undefined,
+    )
+  );
   return {
     messages: input.request.instructions
       ? [
@@ -337,6 +388,47 @@ function createChatRequest(
       : {}),
     signal,
   };
+}
+
+/**
+ * Formats a durable request through the same bridge used by provider attempts
+ * and returns its exact input estimate without contacting a provider.
+ */
+export function preflightLlmRequest(
+  request: LlmRequest,
+  config:
+    & Pick<
+      ProviderConfig,
+      | "model"
+      | "limitEstimatedInputTokens"
+      | "toolSystemPromptVariant"
+      | "reasoningEffort"
+    >
+    & Partial<Pick<ProviderConfig, "provider">>,
+  namespace = "",
+): Readonly<{
+  estimatedInputTokens: number;
+  limitEstimatedInputTokens?: number;
+}> {
+  const chatRequest = createChatRequest(
+    {
+      request: projectPreparedRequest(request, namespace),
+    } as LlmAdapterCallInput,
+    new AbortController().signal,
+  );
+  const resolved = toLLMConfig(config);
+  const formatted = formatMessagesDetailed({
+    messages: chatRequest.messages,
+    ...(chatRequest.tools ? { tools: chatRequest.tools } : {}),
+    config: resolved,
+  });
+  assertEstimatedInputLimit(formatted.estimate, resolved);
+  return Object.freeze({
+    estimatedInputTokens: formatted.estimate.estimatedTokens,
+    ...(typeof resolved.limitEstimatedInputTokens === "number"
+      ? { limitEstimatedInputTokens: resolved.limitEstimatedInputTokens }
+      : {}),
+  });
 }
 
 function plainJsonObject(value: unknown, field: string): LlmJsonObject {
@@ -673,6 +765,9 @@ function providerConfig(
     runtimeDiagnostics: captured.runtimeDiagnostics
       ? { ...captured.runtimeDiagnostics }
       : undefined,
+    executionIdentity: captured.executionIdentity
+      ? { ...captured.executionIdentity }
+      : undefined,
     fallbacks: undefined,
   };
 }
@@ -693,6 +788,9 @@ export function createProviderAdapter(
     extraHeaders: cloneStringRecord(configuration.extraHeaders),
     runtimeDiagnostics: configuration.runtimeDiagnostics
       ? Object.freeze({ ...configuration.runtimeDiagnostics })
+      : undefined,
+    executionIdentity: configuration.executionIdentity
+      ? Object.freeze({ ...configuration.executionIdentity })
       : undefined,
     options,
   });

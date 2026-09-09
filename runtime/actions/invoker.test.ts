@@ -465,3 +465,241 @@ Deno.test("invalid Action metadata is rejected before invoked is emitted", async
   assertEquals(executions, 0);
   assertEquals(emitted, []);
 });
+
+Deno.test("prepared Action skips its factory for invoked and terminal receipts", async () => {
+  const { lifecycle } = recordingLifecycle();
+  let executions = 0;
+  let preparations = 0;
+  const action = defineAction({
+    id: "test.prepare.receipts",
+    execute(input: Readonly<{ value: string }>) {
+      executions += 1;
+      return { value: input.value };
+    },
+  });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "run-prepared-receipts",
+    createContext: invocationContext,
+  });
+  const factory = () => {
+    preparations += 1;
+    return { input: { value: "captured" }, metadata: { source: "latest" } };
+  };
+  assertEquals(
+    await actions.action.prepare(factory, { operationKey: "latest" }),
+    { value: "captured" },
+  );
+  assertEquals(preparations, 1);
+  assertEquals(executions, 1);
+  assertEquals(
+    await actions.action.prepare(factory, { operationKey: "latest" }),
+    { value: "captured" },
+  );
+  assertEquals(preparations, 1);
+  assertEquals(executions, 1);
+});
+
+Deno.test("prepared Action reuses its first capture without calling an unstable host key", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let hostCalls = 0;
+  let preparations = 0;
+  let executions = 0;
+  const action = defineAction({
+    id: "test.prepare.retry",
+    execute(input: Readonly<{ value: string }>) {
+      executions += 1;
+      return input;
+    },
+  });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    invocationScope: "delivery:stable",
+    createInvocationKey: () => `unstable:${++hostCalls}`,
+    createContext: invocationContext,
+  });
+  const factory = () => {
+    preparations += 1;
+    return { input: { value: "captured" } };
+  };
+  assertEquals(
+    await actions.action.prepare(factory, { operationKey: "route:message" }),
+    { value: "captured" },
+  );
+  assertEquals(
+    await actions.action.prepare(factory, { operationKey: "route:message" }),
+    { value: "captured" },
+  );
+  assertEquals(preparations, 1);
+  assertEquals(executions, 1);
+  assertEquals(hostCalls, 0);
+  assertEquals(
+    emitted.filter((event) => event.status === "invoked").map((event) =>
+      event.actionRunId
+    ),
+    ["delivery:stable:action:test.prepare.retry:route:message"],
+  );
+});
+
+Deno.test("prepared Actions with the same key retain distinct parent scopes", async () => {
+  const { lifecycle, emitted } = recordingLifecycle();
+  let executions = 0;
+  const child = defineAction({
+    id: "test.prepare.child",
+    execute(input: Readonly<{ owner: string }>) {
+      executions += 1;
+      return input;
+    },
+  });
+  const parent = (id: string, owner: string) =>
+    defineAction({
+      id,
+      async execute(_input: unknown, context: ActionContext) {
+        return await context.actions.child.prepare(
+          () => ({ input: { owner } }),
+          { operationKey: "shared" },
+        );
+      },
+    });
+  const actions = createActionCallers({
+    first: parent("test.prepare.parent.first", "first"),
+    second: parent("test.prepare.parent.second", "second"),
+    child,
+  }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    invocationScope: "delivery:stable",
+    createContext: invocationContext,
+  });
+  assertEquals(await actions.first({}, { operationKey: "first" }), {
+    owner: "first",
+  });
+  assertEquals(await actions.second({}, { operationKey: "second" }), {
+    owner: "second",
+  });
+  assertEquals(executions, 2);
+  assertEquals(
+    emitted.filter((event) =>
+      event.actionId === "test.prepare.child" && event.status === "invoked"
+    ).map((event) => event.actionRunId),
+    [
+      "first/action:test.prepare.parent.first/action:test.prepare.child:shared",
+      "second/action:test.prepare.parent.second/action:test.prepare.child:shared",
+    ],
+  );
+});
+
+Deno.test("prepared Action reloads the first durable invoked capture after a race", async () => {
+  const invoked = new Map<string, ActionInvokedData>();
+  let first = true;
+  const lifecycle: ActionLifecycleEmitter = {
+    async emit(event) {
+      if (event.status === "invoked") {
+        if (first) {
+          first = false;
+          invoked.set(event.actionRunId, {
+            actionRunId: event.actionRunId,
+            actionId: event.actionId,
+            metadata: { winner: true },
+            status: "invoked",
+            input: { value: "winner" },
+          });
+          throw new Error("duplicate invoked receipt");
+        }
+      }
+      return undefined as never;
+    },
+    invoked: async (id) => invoked.get(id) ?? null,
+    terminal: async () => null,
+  };
+  let executed: unknown;
+  const action = defineAction({
+    id: "test.prepare.race",
+    execute(input: unknown, context: ActionContext) {
+      executed = { input, metadata: context.action.metadata };
+      return input;
+    },
+  });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "run-prepared-race",
+    createContext: invocationContext,
+  });
+  assertEquals(
+    await actions.action.prepare(
+      () => ({ input: { value: "loser" }, metadata: { winner: false } }),
+      { operationKey: "latest" },
+    ),
+    { value: "winner" },
+  );
+  assertEquals(executed, {
+    input: { value: "winner" },
+    metadata: { winner: true },
+  });
+});
+
+Deno.test("prepared Action replays hydrated secret input without evaluating a newer factory", async () => {
+  const receipt: ActionInvokedData = {
+    actionRunId: "lifecycle:action:test.prepare.secret:latest",
+    actionId: "test.prepare.secret",
+    status: "invoked",
+    metadata: { source: "captured" },
+    // The real protected lifecycle loader hydrates this value before it reaches
+    // the invoker; the prepared path must keep it intact and never call factory.
+    input: { token: "hydrated-secret" },
+  };
+  const { lifecycle } = recordingLifecycle(receipt);
+  let factoryCalls = 0;
+  let executed: unknown;
+  const action = defineAction({
+    id: "test.prepare.secret",
+    inputSchema: {
+      type: "object",
+      properties: {
+        token: { type: "string", "x-copilotz-secret": true },
+      },
+      required: ["token"],
+    },
+    execute(input: unknown) {
+      executed = input;
+      return "ok";
+    },
+  });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createInvocationKey: () => "run-prepared-secret",
+    createContext: invocationContext,
+  });
+  assertEquals(
+    await actions.action.prepare(() => {
+      factoryCalls += 1;
+      return { input: { token: "new-secret" } };
+    }, { operationKey: "latest" }),
+    "ok",
+  );
+  assertEquals(factoryCalls, 0);
+  assertEquals(executed, { token: "hydrated-secret" });
+});
+
+Deno.test("prepared Action requires a stable non-empty operation key", async () => {
+  const { lifecycle } = recordingLifecycle();
+  const action = defineAction({ id: "test.prepare.key", execute: () => null });
+  const actions = createActionCallers({ action }, {
+    actionLifecycle: lifecycle,
+    signal: new AbortController().signal,
+    createContext: invocationContext,
+  });
+  await assertRejects(
+    () =>
+      actions.action.prepare(
+        () => ({ input: {} }),
+        { operationKey: " " } as never,
+      ),
+    TypeError,
+    "operationKey",
+  );
+});

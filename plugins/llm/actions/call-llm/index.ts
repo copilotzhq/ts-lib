@@ -1,6 +1,12 @@
 /** Provider-neutral durable LLM Action. @module */
 
 import {
+  type PreparedEntry,
+  projectPreparedRequest,
+} from "../../internal/prepared-request.ts";
+import { preflightLlmRequest } from "../../adapters/bridge/index.ts";
+
+import {
   type ActionContext,
   type ActionDefinition,
   defineAction,
@@ -12,15 +18,12 @@ import type {
   ContentSequence,
   PreparedContent,
 } from "@copilotz/copilotz/content";
-import { adoptPreparedBody, formatAssetRef } from "@copilotz/copilotz/content";
+import { adoptPreparedBody } from "@copilotz/copilotz/content";
 import {
   type LlmAdapter,
   type LlmAdapterAttempt,
   LlmAdapterCallError,
-  type LlmAdapterContentPart,
   type LlmAdapterFrame,
-  type LlmAdapterMessage,
-  type LlmAdapterRequest,
   type LlmAdapterResult,
   type LlmAttemptUsage,
   type LlmAuthResolution,
@@ -42,6 +45,7 @@ import {
 } from "../../internal/contracts.ts";
 import { materializeBuiltinModel } from "../../adapters/index.ts";
 import { createLlmAdapter } from "../../authoring/custom-adapter/index.ts";
+import { deriveChatGptCodexCacheKey } from "../../internal/internal-cache-key.ts";
 
 export const LLM_CALL_ACTION_ID = "llm.call";
 export const LLM_CALL_ACTION_ALIAS = "callLlm";
@@ -482,6 +486,52 @@ function stringHeaders(
   );
 }
 
+type TrustedApplicationSessionMetadata = Readonly<{
+  threadId: string;
+  agentId: string;
+}>;
+
+/**
+ * This closed metadata shape is accepted only from trusted application Action
+ * metadata. It is never read from durable request options or message content.
+ */
+function trustedApplicationSessionMetadata(
+  context: LlmActionContext,
+): TrustedApplicationSessionMetadata | undefined {
+  const metadata = context.action.metadata;
+  const value = metadata.llmSession;
+  if (!isRecord(value) || Object.keys(value).length !== 3) return undefined;
+  if (value.schema !== "copilotz.llm-session.v1") return undefined;
+  const threadId = typeof value.threadId === "string" ? value.threadId : "";
+  const agentId = typeof value.agentId === "string" ? value.agentId : "";
+  return threadId.trim() && agentId.trim()
+    ? Object.freeze({ threadId, agentId })
+    : undefined;
+}
+
+function headerValue(
+  headers: Readonly<Record<string, string>> | undefined,
+  name: string,
+): string | undefined {
+  const entry = Object.entries(headers ?? {}).find(([key]) =>
+    key.toLowerCase() === name
+  );
+  const value = entry?.[1];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function isChatGptCodexConnection(candidate: ResolvedModel): boolean {
+  if (candidate.connection.provider !== "openai") return false;
+  try {
+    const url = new URL(candidate.connection.baseUrl ?? "");
+    return url.protocol === "https:" && url.hostname === "chatgpt.com" &&
+      (url.pathname.replace(/\/+$/, "") === "/backend-api/codex" ||
+        url.pathname.startsWith("/backend-api/codex/"));
+  } catch {
+    return false;
+  }
+}
+
 async function attemptModel(
   candidate: ResolvedModel,
   input: LlmCallInput,
@@ -549,148 +599,29 @@ async function attemptModel(
       : {}),
     ...authFields,
   };
+  const session = trustedApplicationSessionMetadata(context);
+  const accountId = headerValue(authFields.extraHeaders, "chatgpt-account-id");
+  const executionIdentity =
+    session && accountId && isChatGptCodexConnection(candidate)
+      ? {
+        cacheKey: await deriveChatGptCodexCacheKey(
+          accountId,
+          context.namespace,
+          session.threadId,
+          session.agentId,
+        ),
+      }
+      : undefined;
   return Object.freeze({
     kind: "ready",
     candidate: Object.freeze({
       ...candidate,
       adapter: materializeBuiltinModel(
-        resource,
+        { ...resource, ...(executionIdentity ? { executionIdentity } : {}) },
         input.mode,
         candidate.selection.options ?? Object.freeze({}),
       ),
     }),
-  });
-}
-
-function contentFields(ref: ContentRef): Readonly<Record<string, unknown>> {
-  return {
-    role: ref.role,
-    mediaType: ref.mediaType,
-    ...(ref.name ? { name: ref.name } : {}),
-    ...(ref.alt ? { alt: ref.alt } : {}),
-    ...(ref.language ? { language: ref.language } : {}),
-    ...(ref.disposition ? { disposition: ref.disposition } : {}),
-    ...(ref.metadata ? { metadata: structuredClone(ref.metadata) } : {}),
-  };
-}
-
-type PreparedEntry = ContentRef & { value?: unknown; resolve?: false };
-
-function preparedPart(ref: PreparedEntry): LlmAdapterContentPart {
-  const fields = contentFields(ref);
-  if (ref.kind === "text") {
-    return {
-      type: "text",
-      text: ref.value as string,
-      ...fields,
-    } as LlmAdapterContentPart;
-  }
-  if (ref.kind === "json") {
-    return {
-      type: "json",
-      value: structuredClone(ref.value),
-      ...fields,
-    } as LlmAdapterContentPart;
-  }
-  return {
-    type: ref.kind,
-    bytes: (ref.value as Uint8Array).slice(),
-    ...fields,
-  } as LlmAdapterContentPart;
-}
-
-/**
- * Attachment bodies remain application-owned. Adapters receive only this
- * provider-neutral notice, so an Agent can deliberately use an asset Tool
- * instead of silently inlining a potentially large or sensitive body.
- */
-function attachmentPart(
-  ref: ContentRef,
-  namespace: string,
-): LlmAdapterContentPart {
-  const descriptor = JSON.stringify({
-    name: ref.name ?? ref.assetId,
-    mediaType: ref.mediaType,
-    assetRef: formatAssetRef(namespace, ref.assetId),
-  });
-  return Object.freeze({
-    type: "text",
-    text:
-      `Copilotz attachment ${descriptor}. Use an asset tool to retrieve or inspect this attachment; its body is not included in this LLM request.`,
-    role: ref.role,
-    mediaType: "text/plain; charset=utf-8",
-    ...(ref.name ? { name: ref.name } : {}),
-  }) as LlmAdapterContentPart;
-}
-
-function projectPreparedMessage(
-  message: LlmMessage,
-  context: LlmActionContext,
-): LlmAdapterMessage {
-  const content = Object.freeze(
-    (message.content as readonly PreparedEntry[]).map((ref) =>
-      ref.resolve === false
-        ? attachmentPart(ref, context.namespace)
-        : preparedPart(ref)
-    ),
-  );
-  const common = {
-    content,
-    ...(message.name ? { name: message.name } : {}),
-    ...(message.metadata
-      ? { metadata: structuredClone(message.metadata) }
-      : {}),
-  };
-  if (message.role === "assistant") {
-    return Object.freeze({
-      role: message.role,
-      ...common,
-      ...(message.reasoning?.length
-        ? {
-          reasoning: message.reasoning.map((entry) => {
-            const ref = entry as PreparedEntry;
-            if (
-              ref.kind !== "text" || typeof ref.value !== "string"
-            ) {
-              throw new TypeError("LLM reasoning must contain prepared text.");
-            }
-            return ref.value;
-          }).join("\n"),
-        }
-        : {}),
-      ...(message.toolCalls
-        ? { toolCalls: structuredClone(message.toolCalls) }
-        : {}),
-    });
-  }
-  if (message.role === "tool") {
-    return Object.freeze({
-      role: message.role,
-      ...common,
-      toolCallId: requiredText(message.toolCallId, "LLM tool-call ID"),
-    });
-  }
-  return Object.freeze({ role: message.role, ...common });
-}
-
-function projectPreparedRequest(
-  input: LlmCallInput,
-  context: LlmActionContext,
-): LlmAdapterRequest {
-  if (!isRecord(input.request) || !Array.isArray(input.request.messages)) {
-    throw new TypeError("LLM request.messages must be an array.");
-  }
-  const messages = input.request.messages.map((message) =>
-    projectPreparedMessage(message, context)
-  );
-  return Object.freeze({
-    messages: Object.freeze(messages),
-    ...(input.request.tools
-      ? { tools: Object.freeze(structuredClone(input.request.tools)) }
-      : {}),
-    ...(input.request.instructions !== undefined
-      ? { instructions: input.request.instructions }
-      : {}),
   });
 }
 
@@ -1031,9 +962,9 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
   const role = requiredText(record.role, `${path}.role`);
   const commonKeys = ["role", "content", "name", "metadata"];
   const allowed = role === "assistant"
-    ? new Set([...commonKeys, "toolCalls", "reasoning"])
+    ? new Set([...commonKeys, "toolCalls", "reasoning", "toolPlanId"])
     : role === "tool"
-    ? new Set([...commonKeys, "toolCallId"])
+    ? new Set([...commonKeys, "toolCallId", "toolPlanId"])
     : new Set(commonKeys);
   exactKeys(record, allowed, path);
   if (!["system", "user", "assistant", "tool"].includes(role)) {
@@ -1060,6 +991,9 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
       role,
       ...common,
       ...(toolCalls ? { toolCalls } : {}),
+      ...(record.toolPlanId === undefined ? {} : {
+        toolPlanId: requiredText(record.toolPlanId, `${path}.toolPlanId`),
+      }),
       ...(record.reasoning !== undefined
         ? {
           reasoning: normalizedPreparedSequence(
@@ -1075,6 +1009,9 @@ function normalizedMessage(value: unknown, index: number): LlmMessage {
       role,
       ...common,
       toolCallId: requiredText(record.toolCallId, `${path}.toolCallId`),
+      ...(record.toolPlanId === undefined ? {} : {
+        toolPlanId: requiredText(record.toolPlanId, `${path}.toolPlanId`),
+      }),
     });
   }
   return Object.freeze({ role, ...common }) as LlmMessage;
@@ -2319,7 +2256,7 @@ async function executeLlmCall(
 ): Promise<LlmCallOutput> {
   const input = normalizedCallInput(rawInput);
   const plan = modelPlan(input.models, input.mode, context);
-  const request = projectPreparedRequest(input, context);
+  const request = projectPreparedRequest(input.request, context.namespace);
   const attempts: LlmAttemptUsage[] = [];
   const credentialMemo = new Map<
     string,
@@ -2382,6 +2319,14 @@ async function executeLlmCall(
     let attemptInput: ManagedInput | undefined;
     let result: LlmAdapterResult;
     try {
+      // The same guard applies to custom adapters and replayed prepared inputs.
+      preflightLlmRequest(input.request, {
+        ...candidate.selection.options,
+        model: candidate.selection.model,
+        ...(candidate.connection.provider
+          ? { provider: candidate.connection.provider }
+          : {}),
+      }, context.namespace);
       const inputFollower = input.inputStreamId
         ? await context.streams.follow({
           id: requiredText(input.inputStreamId, "LLM input stream ID"),

@@ -227,6 +227,27 @@ export class LLMTranscriptError extends Error {
   }
 }
 
+/** The complete formatted prompt exceeds its configured input budget. */
+export class ContextInputLimitError extends Error {
+  readonly estimatedInputTokens: number;
+  readonly limitEstimatedInputTokens: number;
+
+  constructor(estimatedInputTokens: number, limitEstimatedInputTokens: number) {
+    super(
+      `LLM input estimate ${estimatedInputTokens} exceeds the configured limit ${limitEstimatedInputTokens}.`,
+    );
+    this.name = "ContextInputLimitError";
+    this.estimatedInputTokens = estimatedInputTokens;
+    this.limitEstimatedInputTokens = limitEstimatedInputTokens;
+  }
+}
+
+export function isContextInputLimitError(
+  error: unknown,
+): error is ContextInputLimitError {
+  return error instanceof ContextInputLimitError;
+}
+
 export function classifyLLMError(
   error: unknown,
 ): ProviderFallbackReason | null {

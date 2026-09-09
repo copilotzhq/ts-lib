@@ -14,6 +14,7 @@ import type { ApplicationOutput } from "../streams/index.ts";
 import type { ActionSchema } from "../actions/index.ts";
 import type { CopilotzEngineMaintenanceResult } from "../engine/index.ts";
 import type { OperationState } from "../streams/catalog.ts";
+import type { DeliveryDiagnosticSink } from "../execution/index.ts";
 
 export type { ApplicationOutput } from "../streams/index.ts";
 
@@ -27,6 +28,8 @@ export type CreateCopilotzApplicationOptions =
     adapters?: PluginAdapters;
     /** Canonical asset body policy shared by every database scope. */
     assets?: BodyStorageOptions;
+    /** Disabled by default; receives allowlisted runtime-local delivery timing. */
+    onDeliveryDiagnostic?: DeliveryDiagnosticSink;
     engine?: Omit<
       CreateCopilotzEngineOptions,
       | "session"

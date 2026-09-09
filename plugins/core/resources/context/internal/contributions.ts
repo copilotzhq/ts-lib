@@ -35,6 +35,7 @@ export async function collectContextContributions(
     agent: AgentResource;
     participant: Participant;
     thread: ConversationThread;
+    historyScopeId?: string;
     sourceRange?: Readonly<{
       startMessageId: string;
       endMessageId: string;

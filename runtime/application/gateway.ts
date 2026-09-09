@@ -146,6 +146,7 @@ export async function createCopilotzGateway(
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,
+      onDeliveryDiagnostic: options.onDeliveryDiagnostic,
       database: persistence.database,
       engine: {
         ...(options.engine ?? {}),

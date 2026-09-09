@@ -359,6 +359,14 @@ export async function createCopilotzApplication(
   try {
     engine = await createCopilotzEngine({
       ...(options.engine ?? {}),
+      ...(options.onDeliveryDiagnostic
+        ? {
+          execution: {
+            ...(options.engine?.execution ?? {}),
+            onDiagnostic: options.onDeliveryDiagnostic,
+          },
+        }
+        : {}),
       session: persistence.session,
       registry,
       defaultDatabaseSchema: databaseSchema,

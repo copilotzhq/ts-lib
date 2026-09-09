@@ -19,6 +19,7 @@ import {
 } from "../capabilities/index.ts";
 import {
   collectContextContributions,
+  type CollectedContextContribution,
   prepareContextContributions,
   renderContextContent,
 } from "../../resources/context/index.ts";
@@ -30,7 +31,6 @@ type RenderedContext = Readonly<{
   title: string;
   role: "context" | "evidence";
   text: string;
-  historyAfterMessageId?: string;
 }>;
 
 type RenderedPromptInstruction = Readonly<{
@@ -216,25 +216,6 @@ function systemPrompt(
   return sections.filter(Boolean).join("\n\n");
 }
 
-function historyIdsAfterContext(
-  ids: readonly string[],
-  history: readonly ConversationMessage[],
-  contributions: readonly RenderedContext[],
-): readonly string[] {
-  const positions = new Map(
-    history.map((message, index) => [message.id, index]),
-  );
-  let boundary = -1;
-  for (const contribution of contributions) {
-    if (!contribution.historyAfterMessageId) continue;
-    const position = positions.get(contribution.historyAfterMessageId);
-    if (position !== undefined) boundary = Math.max(boundary, position);
-  }
-  return boundary < 0
-    ? ids
-    : Object.freeze(ids.filter((id) => (positions.get(id) ?? -1) > boundary));
-}
-
 function llmTools(
   tools: readonly CoreToolEntry[],
 ): readonly LlmToolDefinition[] {
@@ -261,9 +242,11 @@ export async function buildCoreLlmRequest(
     agent: AgentResource;
     participant: CollectionRecord;
     thread: ConversationThread;
+    historyScopeId?: string;
     history: readonly ConversationMessage[];
     messageIds: readonly string[];
     tools: readonly CoreToolEntry[];
+    contributions?: readonly CollectedContextContribution[];
   }>,
 ): Promise<LlmRequest> {
   const participant = mapParticipantRecord(input.participant);
@@ -273,12 +256,14 @@ export async function buildCoreLlmRequest(
   );
   const userMetadata = human ? visibleMetadata(human.metadata) : undefined;
   const rawHistory = input.history;
-  const contributions = await collectContextContributions(context, {
-    purpose: "conversation",
-    agent: input.agent,
-    participant,
-    thread,
-  });
+  const contributions = input.contributions ??
+    await collectContextContributions(context, {
+      purpose: "conversation",
+      agent: input.agent,
+      participant,
+      thread,
+      ...(input.historyScopeId ? { historyScopeId: input.historyScopeId } : {}),
+    });
   const prepared = await prepareContextContributions(context, contributions);
   const rendered: readonly RenderedContext[] = Object.freeze(
     prepared.map((contribution) =>
@@ -286,24 +271,16 @@ export async function buildCoreLlmRequest(
         title: contribution.title,
         role: contribution.role,
         text: renderContextContent(contribution.content),
-        ...(contribution.historyAfterMessageId
-          ? { historyAfterMessageId: contribution.historyAfterMessageId }
-          : {}),
       })
     ),
   );
   const promptInstructions = collectPromptInstructions(
     context.resources.promptInstructions,
   );
-  const messageIds = historyIdsAfterContext(
-    input.messageIds,
-    rawHistory,
-    rendered,
-  );
   const messages = await prepareLlmTranscript(context, {
     threadId: thread.id,
     history: rawHistory,
-    messageIds,
+    messageIds: input.messageIds,
     participantId: participant.id,
   });
   const agents = Object.values(context.resources.agents ?? {}).filter(

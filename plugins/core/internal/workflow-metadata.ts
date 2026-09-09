@@ -62,6 +62,8 @@ export type CoreAgentTurnMetadata = Readonly<{
   ownerParticipantId: string;
   /** Successful matching Action stops this turn only. */
   completeOn?: Readonly<{ action: string }>;
+  /** Bounded maintenance tasks may supply their entire source in their own scope. */
+  history?: "scope";
 }>;
 
 /** Durable Core provenance attached to one provider-neutral `llm.call`. */
@@ -80,6 +82,10 @@ export type CoreLlmCallMetadata = Readonly<{
   agentTurn?: CoreAgentTurnMetadata;
   /** Optional opaque prompt-policy revision, never resolved instructions. */
   instructionRevision?: string;
+  /** Internal provider-session provenance; no provider account data is durable. */
+  llmSession?: Readonly<
+    { schema: "copilotz.llm-session.v1"; threadId: string; agentId: string }
+  >;
 }>;
 
 /** Safe public receipt for a terminal ordinary Agent LLM failure. */
@@ -315,6 +321,7 @@ const AGENT_TURN_KEYS = new Set([
   "id",
   "ownerParticipantId",
   "completeOn",
+  "history",
 ]);
 
 function validCoreAgentTurnMetadata(
@@ -327,6 +334,9 @@ function validCoreAgentTurnMetadata(
     !optionalMetadataText(candidate.id) ||
     !optionalMetadataText(candidate.ownerParticipantId)
   ) return null;
+  if (candidate.history !== undefined && candidate.history !== "scope") {
+    return null;
+  }
   if (candidate.completeOn !== undefined) {
     const completeOn = record(candidate.completeOn);
     if (
@@ -555,6 +565,7 @@ const CORE_LLM_CALL_KEYS = new Set([
   "ask",
   "agentTurn",
   "instructionRevision",
+  "llmSession",
 ]);
 
 /** Reads the self-contained provenance of a Core-owned `llm.call`. */
@@ -568,6 +579,15 @@ export function coreLlmCallMetadata(
       typeof key !== "string" || !CORE_LLM_CALL_KEYS.has(key)
     )
   ) return null;
+  if (candidate.llmSession !== undefined) {
+    const session = record(candidate.llmSession);
+    if (
+      Object.keys(session).length !== 3 ||
+      session.schema !== "copilotz.llm-session.v1" ||
+      session.threadId !== candidate.threadId ||
+      session.agentId !== candidate.agentId
+    ) return null;
+  }
   const required = [
     "threadId",
     "triggerMessageId",
@@ -624,6 +644,9 @@ export function defineCoreLlmCallMetadata(
     ...(validated.ask ? { ask: Object.freeze(validated.ask) } : {}),
     ...(validated.agentTurn
       ? { agentTurn: Object.freeze(structuredClone(validated.agentTurn)) }
+      : {}),
+    ...(validated.llmSession
+      ? { llmSession: Object.freeze({ ...validated.llmSession }) }
       : {}),
   });
 }

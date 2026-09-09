@@ -220,6 +220,35 @@ function isChatGPTCodexTransport(config: ProviderConfig): boolean {
   }
 }
 
+function chatGptCodexHeaders(config: ProviderConfig): Record<string, string> {
+  const identity = config.executionIdentity;
+  if (!isChatGPTCodexTransport(config) || !identity) return {};
+  return {
+    "session-id": identity.cacheKey,
+    "thread-id": identity.cacheKey,
+    "x-client-request-id": identity.cacheKey,
+    "x-codex-routing-hint": `model=${config.model ?? ""}`,
+  };
+}
+
+const CHATGPT_CODEX_ROUTING_HEADER_NAMES = new Set([
+  "session-id",
+  "thread-id",
+  "x-client-request-id",
+  "x-codex-routing-hint",
+]);
+
+function transportHeaders(config: ProviderConfig): Record<string, string> {
+  const generated = chatGptCodexHeaders(config);
+  const extraHeaders = Object.fromEntries(
+    Object.entries(config.extraHeaders ?? {}).filter(([name]) =>
+      Object.keys(generated).length === 0 ||
+      !CHATGPT_CODEX_ROUTING_HEADER_NAMES.has(name.toLowerCase())
+    ),
+  );
+  return { ...extraHeaders, ...generated };
+}
+
 function supportsChatCompletionsFileInput(model: string): boolean {
   const normalized = model.toLowerCase().replace(/^openai\//, "");
   const version = /^gpt-(\d+)\.(\d+)(?:-|$)/.exec(normalized);
@@ -431,7 +460,9 @@ function buildChatCompletionsBody(
   if (typeof maxComp === "number") {
     bodyConfig.max_completion_tokens = maxComp;
   }
-  const promptCacheKey = readInternalPromptCacheKey(config);
+  const promptCacheKey = isChatGPTCodexTransport(config)
+    ? config.executionIdentity?.cacheKey ?? readInternalPromptCacheKey(config)
+    : readInternalPromptCacheKey(config);
   if (promptCacheKey) bodyConfig.prompt_cache_key = promptCacheKey;
 
   return bodyConfig;
@@ -461,7 +492,9 @@ function buildResponsesBody(
   if (!chatGPTCodex && typeof maxOutput === "number") {
     bodyConfig.max_output_tokens = maxOutput;
   }
-  const promptCacheKey = readInternalPromptCacheKey(config);
+  const promptCacheKey = chatGPTCodex
+    ? config.executionIdentity?.cacheKey ?? readInternalPromptCacheKey(config)
+    : readInternalPromptCacheKey(config);
   if (promptCacheKey) bodyConfig.prompt_cache_key = promptCacheKey;
 
   if (config.seed !== undefined) bodyConfig.seed = config.seed;
@@ -583,7 +616,7 @@ export const openaiProvider: ProviderFactory = (config: ProviderConfig) => {
     endpoint: openAIEndpoint(config, apiMode),
 
     headers: (config: ProviderConfig) => ({
-      ...(config.extraHeaders ?? {}),
+      ...transportHeaders(config),
       "Content-Type": "application/json",
       "Authorization": `Bearer ${config.apiKey}`,
     }),

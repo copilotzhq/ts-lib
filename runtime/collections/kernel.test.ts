@@ -317,6 +317,106 @@ Deno.test("defineCollection rejects names that cannot form events", () => {
   );
 });
 
+Deno.test("read snapshots expose only scoped reads and close before later work", async () => {
+  const fixture = await createFixture(":memory:", "snapshot_reads");
+  try {
+    const created = await fixture.jobs.create({
+      id: "snapshot-job",
+      externalId: "snapshot-job",
+      title: "Snapshot job",
+    }, { namespace: "tenant-snapshot" });
+    await settle(created);
+    let escaped!: (input: { id: string }) => Promise<CollectionRecord | null>;
+    await fixture.runtime.readSnapshot(
+      { namespace: "tenant-snapshot" },
+      async ({ collections }) => {
+        const jobs = collections.job;
+        assertEquals("create" in jobs, false);
+        assertEquals(
+          (await jobs.get({ id: "snapshot-job" }))?.title,
+          "Snapshot job",
+        );
+        await assertRejects(
+          async () => await jobs.get({ id: "snapshot-job" }, { content: true }),
+          Error,
+          "Content resolution is not allowed inside a read snapshot",
+        );
+        escaped = jobs.get;
+        await assertRejects(
+          () =>
+            fixture.runtime.transaction({
+              operationKey: "blocked-snapshot-write",
+              namespace: "tenant-snapshot",
+              execute: async () => undefined,
+            }),
+          Error,
+          "not allowed inside a read snapshot",
+        );
+      },
+    );
+    await assertRejects(
+      () => escaped({ id: "snapshot-job" }),
+      Error,
+      "snapshot access has already closed",
+    );
+  } finally {
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test({
+  name:
+    "managed PostgreSQL snapshots retain the first record version across a concurrent commit",
+  ignore: !POSTGRES_URL,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  async fn() {
+    const schema = `snapshot_pg_${crypto.randomUUID().replaceAll("-", "")}`;
+    const fixture = await createFixture(POSTGRES_URL!, schema);
+    const writer = await createTestDatabase({ url: POSTGRES_URL! });
+    try {
+      const created = await fixture.jobs.create({
+        id: "snapshot-job",
+        externalId: "snapshot-job",
+        title: "Before concurrent update",
+      }, { namespace: "tenant-snapshot" });
+      await settle(created);
+      await fixture.runtime.readSnapshot(
+        { namespace: "tenant-snapshot" },
+        async ({ collections }) => {
+          assertEquals(
+            (await collections.job.get({ id: "snapshot-job" }))?.title,
+            "Before concurrent update",
+          );
+          await writer.query(
+            `UPDATE ${fixture.store.tables.nodes}
+                SET data = jsonb_set(data, '{title}', $1::jsonb)
+              WHERE namespace = $2 AND id = $3`,
+            [
+              JSON.stringify("After concurrent update"),
+              "tenant-snapshot",
+              "snapshot-job",
+            ],
+          );
+          assertEquals(
+            (await collections.job.get({ id: "snapshot-job" }))?.title,
+            "Before concurrent update",
+          );
+        },
+      );
+      assertEquals(
+        (await fixture.jobs.get("snapshot-job", "tenant-snapshot"))?.title,
+        "After concurrent update",
+      );
+    } finally {
+      await writer.close();
+      await fixture.session.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+        .catch(() => undefined);
+      await closeFixture(fixture);
+    }
+  },
+});
+
 Deno.test("named queries validate schemas for direct invocation", async () => {
   const fixture = await createFixture(
     ":memory:",

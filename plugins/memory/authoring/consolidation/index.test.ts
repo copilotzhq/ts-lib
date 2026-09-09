@@ -30,6 +30,7 @@ function options() {
 Deno.test("consolidation validates forms, kinds, provenance, references, and temporal meaning", () => {
   const parsed = parseConsolidateMemoryInput({
     outcome: "changes",
+    continuity: "Continue the migration and preserve provenance.",
     entities: [{
       localId: "project",
       kind: "entity.project",
@@ -80,15 +81,20 @@ Deno.test("consolidation validates forms, kinds, provenance, references, and tem
 
 Deno.test("no_changes is explicit and cannot conceal mutations", () => {
   assertEquals(
-    parseConsolidateMemoryInput({ outcome: "no_changes" }, options()),
+    parseConsolidateMemoryInput({
+      outcome: "no_changes",
+      continuity: "No outstanding work.",
+    }, options()),
     {
       outcome: "no_changes",
+      continuity: "No outstanding work.",
     },
   );
   assertThrows(
     () =>
       parseConsolidateMemoryInput({
         outcome: "no_changes",
+        continuity: "No outstanding work.",
         entities: [{
           localId: "hidden",
           kind: "entity.project",
@@ -101,7 +107,11 @@ Deno.test("no_changes is explicit and cannot conceal mutations", () => {
     "cannot contain changes",
   );
   assertThrows(
-    () => parseConsolidateMemoryInput({ outcome: "changes" }, options()),
+    () =>
+      parseConsolidateMemoryInput({
+        outcome: "changes",
+        continuity: "Continue.",
+      }, options()),
     TypeError,
     "at least one change",
   );
@@ -110,6 +120,7 @@ Deno.test("no_changes is explicit and cannot conceal mutations", () => {
 Deno.test("omitted record sources inherit the bounded trusted catalogue", () => {
   const parsed = parseConsolidateMemoryInput({
     outcome: "changes",
+    continuity: "Keep the active project context.",
     entities: [{
       localId: "project",
       kind: "entity.project",
@@ -128,6 +139,7 @@ Deno.test("omitted record sources inherit the bounded trusted catalogue", () => 
 Deno.test("unauthorized, stale, and context-only sources are rejected", () => {
   const entity = (sources: unknown[]) => ({
     outcome: "changes",
+    continuity: "Keep the active project context.",
     entities: [{
       localId: "project",
       kind: "entity.project",
@@ -187,6 +199,7 @@ Deno.test("duplicate local IDs and invisible references are rejected before muta
     () =>
       parseConsolidateMemoryInput({
         outcome: "changes",
+        continuity: "Resolve duplicate records.",
         entities: ["a", "b"].map((name) => ({
           localId: "duplicate",
           kind: "entity.project",
@@ -202,6 +215,7 @@ Deno.test("duplicate local IDs and invisible references are rejected before muta
     () =>
       parseConsolidateMemoryInput({
         outcome: "changes",
+        continuity: "Resolve the target state.",
         assertions: [{
           localId: "assertion",
           kind: "assertion.state",
@@ -234,6 +248,131 @@ Deno.test("range reservation retains tool-result units and remains deterministic
   });
   assertEquals(selected?.sourceStartMessageId, "m1");
   assertEquals(selected?.sourceEndMessageId, "m3");
+});
+
+Deno.test("retained tail does not split an interleaved dependency group", () => {
+  const selected = selectLongTermMemoryRange({
+    messages: [
+      { id: "boundary", senderType: "agent", senderId: "a", text: "old" },
+      { id: "before", senderType: "human", senderId: "u", text: "before" },
+      {
+        id: "ask-plan",
+        senderType: "agent",
+        senderId: "a",
+        text: "ask",
+        dependencyIds: ["ask-1"],
+      },
+      {
+        id: "peer-message",
+        senderType: "human",
+        senderId: "u",
+        text: "peer ".repeat(40),
+      },
+      {
+        id: "ask-result",
+        senderType: "tool",
+        senderId: "tool",
+        text: "result ".repeat(40),
+        dependencyIds: ["ask-1"],
+      },
+      { id: "trigger", senderType: "agent", senderId: "a", text: "done" },
+    ],
+    triggerMessageId: "trigger",
+    previousBoundaryMessageId: "boundary",
+    triggerEstimatedTokens: 1,
+    retainRecentEstimatedTokens: 10,
+  });
+
+  // The retained result also retains its plan and the interleaved peer message,
+  // because history replacement must remain a contiguous prefix.
+  assertEquals(selected?.messages.map((message) => message.id), ["before"]);
+});
+
+Deno.test("an unfinished dependency group is retained with everything after it", () => {
+  const selected = selectLongTermMemoryRange({
+    messages: [
+      { id: "boundary", senderType: "agent", senderId: "a", text: "old" },
+      { id: "before", senderType: "human", senderId: "u", text: "before" },
+      {
+        id: "pending-plan",
+        senderType: "agent",
+        senderId: "a",
+        text: "pending",
+        dependencyIds: ["ask-2"],
+        pendingDependency: true,
+      },
+      {
+        id: "later",
+        senderType: "human",
+        senderId: "u",
+        text: "later",
+        dependencyIds: ["ask-2"],
+      },
+      { id: "trigger", senderType: "agent", senderId: "a", text: "done" },
+    ],
+    triggerMessageId: "trigger",
+    previousBoundaryMessageId: "boundary",
+    triggerEstimatedTokens: 1,
+  });
+
+  assertEquals(selected?.messages.map((message) => message.id), ["before"]);
+});
+
+Deno.test("an oversized first dependency group does not silently truncate history", () => {
+  const selected = selectLongTermMemoryRange({
+    messages: [
+      {
+        id: "plan",
+        senderType: "agent",
+        senderId: "a",
+        text: "large ".repeat(200),
+        dependencyIds: ["ask-3"],
+      },
+      {
+        id: "result",
+        senderType: "tool",
+        senderId: "tool",
+        text: "large ".repeat(200),
+        dependencyIds: ["ask-3"],
+      },
+      { id: "trigger", senderType: "agent", senderId: "a", text: "done" },
+    ],
+    triggerMessageId: "trigger",
+    triggerEstimatedTokens: 1,
+    maxSourceEstimatedTokens: 10,
+  });
+
+  assertEquals(selected, null);
+});
+
+Deno.test("range reservation is a safe no-op when its prior boundary is absent", () => {
+  const selected = selectLongTermMemoryRange({
+    messages: [
+      { id: "m1", senderType: "human", senderId: "u", text: "one" },
+      { id: "m2", senderType: "agent", senderId: "a", text: "two" },
+    ],
+    triggerMessageId: "m2",
+    previousBoundaryMessageId: "missing-boundary",
+    triggerEstimatedTokens: 1,
+  });
+
+  assertEquals(selected, null);
+});
+
+Deno.test("first checkpoint reserves the contiguous eligible prefix", () => {
+  const selected = selectLongTermMemoryRange({
+    messages: Array.from({ length: 10 }, (_, index) => ({
+      id: `m${index}`,
+      senderType: "human" as const,
+      senderId: "u",
+      text: "x",
+    })),
+    triggerMessageId: "m9",
+    triggerEstimatedTokens: 1,
+  });
+
+  assertEquals(selected?.sourceStartMessageId, "m0");
+  assertEquals(selected?.sourceEndMessageId, "m9");
 });
 
 Deno.test("derived continuity is rendered from ordinary records", () => {
@@ -284,6 +423,8 @@ Deno.test("maintenance instruction names the only valid action and registered ta
       senderType: "human",
       senderId: "user",
       text: "remember this",
+      toolCalls: [{ name: "lookup", arguments: { id: "a" } }],
+      reasoning: "This is durable.",
     }],
     kinds: CORE_MEMORY_KINDS,
     previousRecords: [],
@@ -292,4 +433,7 @@ Deno.test("maintenance instruction names the only valid action and registered ta
   assertStringIncludes(instruction, "Call consolidate_memory exactly once");
   assertStringIncludes(instruction, "no_changes");
   assertStringIncludes(instruction, "assertion.state");
+  assertStringIncludes(instruction, "remember this");
+  assertStringIncludes(instruction, "This is durable.");
+  assertStringIncludes(instruction, "complete reserved source range");
 });

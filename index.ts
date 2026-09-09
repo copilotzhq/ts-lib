@@ -15,4 +15,6 @@ export type {
   CopilotzApplication,
   CopilotzApplicationObservation,
   CopilotzInputEnvelope,
+  DeliveryDiagnostic,
+  DeliveryDiagnosticSink,
 } from "./runtime/application/public.ts";

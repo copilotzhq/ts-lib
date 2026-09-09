@@ -6,19 +6,35 @@ type InternalProviderConfig = ProviderConfig & {
   [INTERNAL_PROMPT_CACHE_KEY]?: string;
 };
 
+async function sha256Hex(parts: readonly string[]): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(parts)),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export async function deriveInternalPromptCacheKey(
   namespace: string,
   threadId: string,
   agentId: string,
 ): Promise<string> {
-  const source = JSON.stringify([namespace, threadId, agentId]);
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(source),
-  );
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return await sha256Hex([namespace, threadId, agentId]);
+}
+
+/**
+ * ChatGPT Codex cache identity. Account isolation is intentionally part of the
+ * digest; model selection and request content are deliberately absent.
+ */
+export async function deriveChatGptCodexCacheKey(
+  accountId: string,
+  namespace: string,
+  threadId: string,
+  agentId: string,
+): Promise<string> {
+  return await sha256Hex([accountId, namespace, threadId, agentId]);
 }
 
 export function withInternalPromptCacheKey(

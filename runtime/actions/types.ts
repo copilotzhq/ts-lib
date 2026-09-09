@@ -6,6 +6,7 @@ import type {
   CollectionTransactionRelations,
   ScopedCollection,
   ScopedCollections,
+  SnapshotCollection,
   TransactionCollection,
 } from "../collections/kernel.ts";
 import type { ContentStreamRuntime } from "../streams/index.ts";
@@ -29,6 +30,18 @@ export type RuntimeContextNamespaces = Readonly<
 
 export type RuntimeCollections = ScopedCollections;
 
+export type RuntimeSnapshotCollections<
+  TCollections extends RuntimeCollections = RuntimeCollections,
+> = Readonly<
+  {
+    [K in keyof TCollections]: TCollections[K] extends ScopedCollection<
+      infer TSelect,
+      infer TInsert
+    > ? SnapshotCollection<TSelect, TInsert>
+      : SnapshotCollection;
+  }
+>;
+
 export type RuntimeTransactionCollections<
   TCollections extends RuntimeCollections = RuntimeCollections,
 > = Readonly<
@@ -44,7 +57,13 @@ export type RuntimeTransactionCollections<
 export type RuntimeActionCallers = Readonly<
   Record<
     string,
-    (input: unknown, options?: ActionCallOptions) => Promise<unknown>
+    & ((input: unknown, options?: ActionCallOptions) => Promise<unknown>)
+    & Readonly<{
+      prepare(
+        factory: ActionPrepareFactory,
+        options: ActionPrepareOptions,
+      ): Promise<unknown>;
+    }>
   >
 >;
 
@@ -94,6 +113,21 @@ export type ActionCallOptions = Readonly<{
   signal?: AbortSignal;
 }>;
 
+/** Values captured together by a deferred Action invocation. */
+export type ActionPreparedCall<I = unknown> = Readonly<{
+  input: I;
+  metadata?: ActionInvocationMetadata;
+}>;
+
+/** Stable identity for an Action input that is prepared only when needed. */
+export type ActionPrepareOptions =
+  & Omit<ActionCallOptions, "metadata" | "operationKey">
+  & Readonly<{ operationKey: string }>;
+
+export type ActionPrepareFactory<I = unknown> = () =>
+  | ActionPreparedCall<I>
+  | Promise<ActionPreparedCall<I>>;
+
 export type ActionTransactionOptions = Readonly<{
   operationKey?: string;
   identity?:
@@ -141,6 +175,17 @@ export interface RuntimeContext<
       context: ActionTransactionContext<TCollections>,
     ) => T | Promise<T>,
     options?: ActionTransactionOptions,
+  ): Promise<T>;
+  /**
+   * Captures a short repeatable, read-only database snapshot for metadata
+   * selection. Finish it before resolving remote content or calling providers.
+   */
+  readSnapshot<T>(
+    execute: (
+      context: Readonly<{
+        collections: RuntimeSnapshotCollections<TCollections>;
+      }>,
+    ) => T | Promise<T>,
   ): Promise<T>;
 }
 
@@ -240,9 +285,23 @@ export type ActionCaller<A extends AnyActionDefinition> = (
   options?: ActionCallOptions,
 ) => Promise<ActionOutput<A>>;
 
+/** A runtime-bound Action caller, including deferred input capture. */
+export type BoundActionCaller<A extends AnyActionDefinition> =
+  & ActionCaller<A>
+  & Readonly<{
+    /**
+     * Captures dynamic input and metadata once under `operationKey`. Existing
+     * Action receipts are restored before the factory is evaluated.
+     */
+    prepare(
+      factory: ActionPrepareFactory<ActionInput<A>>,
+      options: ActionPrepareOptions,
+    ): Promise<ActionOutput<A>>;
+  }>;
+
 export type ActionCallers<TActions extends ActionMap = ActionMap> = Readonly<
   {
-    [K in keyof TActions]: ActionCaller<TActions[K]>;
+    [K in keyof TActions]: BoundActionCaller<TActions[K]>;
   }
 >;
 

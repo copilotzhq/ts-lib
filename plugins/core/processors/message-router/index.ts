@@ -1,5 +1,9 @@
 /** Routes canonical Messages into agent LLM calls. @module */
 
+import {
+  isContextInputLimitError,
+  preflightLlmRequest,
+} from "@copilotz/copilotz/llm";
 import { isSettledActionError } from "@copilotz/copilotz/actions";
 import {
   agentAskMetadata,
@@ -14,6 +18,10 @@ import {
 import { defineProcessor, type Processor } from "@copilotz/copilotz/plugins";
 import type { CollectionRecord } from "@copilotz/copilotz/collections";
 import { buildCoreLlmRequest } from "../../internal/agents/prompt.ts";
+import {
+  collectContextContributions,
+  isContextResource,
+} from "../../resources/context/index.ts";
 import type {
   AgentInstructionContext,
   AgentInstructionExecution,
@@ -33,11 +41,14 @@ import {
   asRecord,
   collectionEventRecord,
   loadCoreThreadMessageSnapshot,
+  loadCoreThreadMetadata,
   participantAgentId,
   requiredText,
   stringArray,
   toolsForAgent,
 } from "../internal/helpers.ts";
+
+class SupersededMessageError extends Error {}
 
 function modelsFor(agent: AgentResource): Readonly<{
   models: AgentModelSelection;
@@ -201,91 +212,243 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
         workflow?.continuation === "realtime" ||
         workflow?.continuation === "none"
       ) return;
-      const snapshot = await loadCoreThreadMessageSnapshot(
-        context,
-        String(record.threadId),
-        record,
-        agentTurn ? { historyScopeId: agentTurn.id } : undefined,
-      );
-      // A revision can supersede an already-enqueued Message before its
-      // Processor runs. Inactive anchors are intentionally ignored.
-      if (!snapshot.active) return;
-      const participants = new Map(
-        snapshot.participantRecords.map((participant) => [
-          String(participant.id),
-          participant,
-        ]),
-      );
-      const sender = participants.get(String(record.senderId));
-      if (!sender) {
-        throw new Error(`Message '${record.id}' sender was not found.`);
-      }
-      const historyIds = Object.freeze(
-        snapshot.records.map((item) => String(item.id)),
-      );
       for (const recipientId of new Set(stringArray(record.recipientIds))) {
-        const participant = participants.get(recipientId);
-        if (!participant || participant.participantType !== "agent") continue;
-        const agentId = participantAgentId(participant);
-        const agent = coreAgent(context.resources, agentId);
-        if (!agent) continue;
-        const availableTools = toolsForAgent(context, agent);
-        const availableToolIds = Object.freeze(
-          availableTools.map((tool) => tool.alias),
-        );
-        const resolved = await resolvedAgentInstructions(context, agent, {
-          agentParticipant: participant,
-          thread: snapshot.thread,
-          triggerMessage: record,
-          triggerSender: sender,
-        });
-        const request = await buildCoreLlmRequest(context, {
-          agent: resolved.agent,
-          participant,
-          thread: snapshot.thread,
-          history: snapshot.messages,
-          messageIds: historyIds,
-          tools: availableTools,
-        });
         const continuationKey = workflow?.kind === "tool_result"
           ? `${requiredText(toolCursor?.planId, "Tool plan id")}:${recipientId}`
           : `${record.id}:${recipientId}`;
-        const metadata = defineCoreLlmCallMetadata({
-          schema: CORE_LLM_CALL_METADATA_SCHEMA,
-          threadId: String(record.threadId),
-          triggerMessageId: String(record.id),
-          agentId,
-          agentParticipantId: String(participant.id),
-          initiatorParticipantId: toolCursor?.initiatorParticipantId ??
-            ask?.origin.initiatorParticipantId ??
-            workflow?.initiatorParticipantId ??
-            String(sender.id),
-          availableToolIds,
-          responseVisibility: structuredClone(
-            toolCursor?.responseVisibility ?? event.visibility,
-          ),
-          ...(toolCursor?.parentLlmActionRunId ??
-              workflow?.parentLlmAttemptId ?? ask?.callingAttemptId
-            ? {
-              parentActionRunId: toolAction?.parentLlmActionRunId ??
-                workflow?.parentLlmAttemptId ?? ask?.callingAttemptId,
-            }
-            : {}),
-          ...(ask ? { ask: structuredClone(ask) } : {}),
-          ...(agentTurn ? { agentTurn: structuredClone(agentTurn) } : {}),
-          ...(resolved.instructionRevision
-            ? { instructionRevision: resolved.instructionRevision }
-            : {}),
-        });
-        const selection = modelsFor(agent);
         try {
-          await context.actions.callLlm({
-            models: selection.models,
-            mode: selection.mode,
-            request,
-            stream: {
-              metadata: coreLlmStreamMetadata(agent, ask ?? undefined),
-            },
+          await context.actions.callLlm.prepare(async () => {
+            for (let preparation = 0;; preparation += 1) {
+              context.signal.throwIfAborted();
+              const captured = await context.readSnapshot(
+                async ({ collections }) => {
+                  const metadata = await loadCoreThreadMetadata(
+                    { collections } as typeof context,
+                    String(record.threadId),
+                  );
+                  const participant = metadata.participantRecords.find((
+                    candidate,
+                  ) => String(candidate.id) === recipientId);
+                  const agent =
+                    participant && participant.participantType === "agent"
+                      ? coreAgent(
+                        context.resources,
+                        participantAgentId(participant),
+                      )
+                      : undefined;
+                  const contributions = participant && agent
+                    ? await collectContextContributions(
+                      { ...context, collections } as typeof context,
+                      {
+                        purpose: "conversation",
+                        agent,
+                        participant: mapParticipantRecord(participant),
+                        thread: metadata.thread,
+                        ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
+                      },
+                    )
+                    : [];
+                  const afterMessageId = contributions.map((entry) =>
+                    entry.historyAfterMessageId
+                  )
+                    .filter((id): id is string => Boolean(id)).at(-1);
+                  const snapshot = await loadCoreThreadMessageSnapshot(
+                    { collections } as typeof context,
+                    String(record.threadId),
+                    record,
+                    {
+                      ...(agentTurn
+                        ? {
+                          historyScopeId: agentTurn.id,
+                          internalOnly: agentTurn.history === "scope",
+                        }
+                        : {}),
+                      viewerIds: [recipientId],
+                      ...(afterMessageId ? { afterMessageId } : {}),
+                    },
+                  );
+                  return { snapshot, contributions };
+                },
+              );
+              const snapshot = captured.snapshot;
+              if (!snapshot.active) {
+                throw new SupersededMessageError(
+                  `Message '${record.id}' is no longer active.`,
+                );
+              }
+              if (
+                !snapshot.thread.participants.some((item) =>
+                  item.id === recipientId
+                )
+              ) {
+                throw new SupersededMessageError(
+                  "Message recipient is no longer in the thread.",
+                );
+              }
+              const participants = new Map(snapshot.participantRecords.map(
+                (candidate) => [String(candidate.id), candidate],
+              ));
+              const sender = participants.get(String(record.senderId));
+              const participant = participants.get(recipientId);
+              if (!sender) {
+                throw new Error(
+                  `Message '${record.id}' sender was not found.`,
+                );
+              }
+              if (!participant || participant.participantType !== "agent") {
+                throw new SupersededMessageError(
+                  "Message recipient is no longer an Agent.",
+                );
+              }
+              const agentId = participantAgentId(participant);
+              const agent = coreAgent(context.resources, agentId);
+              if (!agent) {
+                throw new SupersededMessageError(
+                  `Agent '${agentId}' is no longer available.`,
+                );
+              }
+              const availableTools = toolsForAgent(context, agent);
+              const availableToolIds = Object.freeze(
+                availableTools.map((tool) => tool.alias),
+              );
+              const resolved = await resolvedAgentInstructions(context, agent, {
+                agentParticipant: participant,
+                thread: snapshot.thread,
+                triggerMessage: record,
+                triggerSender: sender,
+              });
+              const request = await buildCoreLlmRequest(context, {
+                agent: resolved.agent,
+                participant,
+                thread: snapshot.thread,
+                ...(agentTurn ? { historyScopeId: agentTurn.id } : {}),
+                history: snapshot.messages,
+                messageIds: Object.freeze(
+                  snapshot.records.map((item) => String(item.id)),
+                ),
+                tools: availableTools,
+                contributions: captured.contributions,
+              });
+              const currentThread = await context.collections.thread.get({
+                id: snapshot.thread.id,
+              });
+              if (
+                !currentThread ||
+                !stringArray(currentThread.participantIds).includes(recipientId)
+              ) {
+                throw new SupersededMessageError(
+                  "Message recipient is no longer in the thread.",
+                );
+              }
+              if (
+                JSON.stringify(currentThread.activeMessageBranch ?? null) !==
+                  JSON.stringify(snapshot.thread.activeMessageBranch ?? null)
+              ) {
+                throw new Error(
+                  "Conversation branch changed during input preparation.",
+                );
+              }
+              const metadata = defineCoreLlmCallMetadata({
+                schema: CORE_LLM_CALL_METADATA_SCHEMA,
+                threadId: String(record.threadId),
+                triggerMessageId: String(record.id),
+                agentId,
+                agentParticipantId: String(participant.id),
+                initiatorParticipantId: toolCursor?.initiatorParticipantId ??
+                  ask?.origin.initiatorParticipantId ??
+                  workflow?.initiatorParticipantId ??
+                  String(sender.id),
+                availableToolIds,
+                responseVisibility: structuredClone(
+                  toolCursor?.responseVisibility ?? event.visibility,
+                ),
+                ...(toolCursor?.parentLlmActionRunId ??
+                    workflow?.parentLlmAttemptId ?? ask?.callingAttemptId
+                  ? {
+                    parentActionRunId: toolAction?.parentLlmActionRunId ??
+                      workflow?.parentLlmAttemptId ?? ask?.callingAttemptId,
+                  }
+                  : {}),
+                ...(ask ? { ask: structuredClone(ask) } : {}),
+                ...(agentTurn ? { agentTurn: structuredClone(agentTurn) } : {}),
+                ...(resolved.instructionRevision
+                  ? { instructionRevision: resolved.instructionRevision }
+                  : {}),
+                llmSession: {
+                  schema: "copilotz.llm-session.v1",
+                  threadId: String(record.threadId),
+                  agentId,
+                },
+              });
+              const selection = modelsFor(resolved.agent);
+              try {
+                for (const model of selection.models) {
+                  const connection =
+                    context.resources.llmConnections[model.connection];
+                  if (!connection) {
+                    throw new Error(
+                      `Unknown LLM connection '${model.connection}'.`,
+                    );
+                  }
+                  preflightLlmRequest(request, {
+                    ...model.options,
+                    model: model.model,
+                    ...(connection.provider
+                      ? { provider: connection.provider }
+                      : {}),
+                  }, context.namespace);
+                }
+              } catch (error) {
+                if (!isContextInputLimitError(error)) throw error;
+                // Maintenance turns already contain a bounded source segment. Never
+                // recursively compact them. The durable LLM Action records a terminal
+                // overflow if no certified boundary can advance within this budget.
+                let advanced = false;
+                if (!agentTurn && preparation < 8) {
+                  for (
+                    const resource of Object.values(
+                      context.resources.promptContext ?? {},
+                    )
+                  ) {
+                    if (!isContextResource(resource) || !resource.compact) {
+                      continue;
+                    }
+                    advanced = await resource.compact({
+                      purpose: "conversation",
+                      agent: resolved.agent,
+                      participant: mapParticipantRecord(participant),
+                      thread: snapshot.thread,
+                      collections: context.collections,
+                      context,
+                      triggerMessageId: String(record.id),
+                      historyAfterMessageId: captured.contributions.map((
+                        item,
+                      ) => item.historyAfterMessageId).filter(Boolean).at(-1),
+                      signal: context.signal,
+                      idempotencyKey:
+                        `${context.operationKey}:compact:${recipientId}:${preparation}`,
+                      estimatedTokens: error.estimatedInputTokens,
+                      limitEstimatedTokens: error.limitEstimatedInputTokens,
+                    }) || advanced;
+                  }
+                }
+                if (advanced) continue;
+              }
+              return {
+                input: {
+                  models: selection.models,
+                  mode: selection.mode,
+                  request,
+                  stream: {
+                    metadata: coreLlmStreamMetadata(
+                      resolved.agent,
+                      ask ?? undefined,
+                    ),
+                  },
+                },
+                metadata,
+              };
+            }
           }, {
             operationKey: `route:${continuationKey}`,
             identity: {
@@ -293,10 +456,10 @@ export const messageRouterProcessor: Processor<CoreProcessorContext> =
               causationId: event.id,
               settlementScopeId: context.identity.settlementScopeId,
             },
-            metadata,
             signal: context.signal,
           });
         } catch (error) {
+          if (error instanceof SupersededMessageError) continue;
           if (!isSettledActionError(error)) throw error;
         }
       }

@@ -17,6 +17,10 @@ export type {
   CreateCopilotzApplicationOptions,
 } from "./types.ts";
 export type {
+  DeliveryDiagnostic,
+  DeliveryDiagnosticSink,
+} from "../execution/index.ts";
+export type {
   CreateCopilotzGatewayOptions,
   InternalCopilotzGateway,
 } from "./gateway.ts";

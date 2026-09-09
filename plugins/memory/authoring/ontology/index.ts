@@ -268,6 +268,8 @@ export type MemoryLifecycleDraft = Readonly<{
 
 export type ConsolidateMemoryInput = Readonly<{
   outcome: "changes" | "no_changes";
+  /** Carry-forward task state required to replace the compacted transcript prefix. */
+  continuity: string;
   entities?: readonly EntityMemoryDraft[];
   assertions?: readonly AssertionMemoryDraft[];
   occurrences?: readonly OccurrenceMemoryDraft[];

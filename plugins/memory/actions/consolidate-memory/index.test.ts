@@ -91,6 +91,7 @@ Deno.test("consolidate schema is executable and matches required parser fields",
 
   assert(validate({
     outcome: "changes",
+    continuity: "The schema improvement remains active work.",
     intents: [{
       localId: "ship",
       kind: "intent.action",
@@ -98,10 +99,14 @@ Deno.test("consolidate schema is executable and matches required parser fields",
       status: "active",
     }],
   }));
-  assertEquals(validate({ outcome: "changes" }), false);
+  assertEquals(
+    validate({ outcome: "changes", continuity: "No draft was provided." }),
+    false,
+  );
   assertEquals(
     validate({
       outcome: "no_changes",
+      continuity: "The concealed mutation has no valid continuity.",
       entities: [{
         localId: "hidden",
         kind: "entity.project",
@@ -111,10 +116,15 @@ Deno.test("consolidate schema is executable and matches required parser fields",
     }),
     false,
   );
-  assert(validate({ outcome: "no_changes", entities: [] }));
+  assert(validate({
+    outcome: "no_changes",
+    continuity: "No durable memory changed in this turn.",
+    entities: [],
+  }));
   assertEquals(
     validate({
       outcome: "changes",
+      continuity: "The relation needs valid evidence before it can persist.",
       relations: [{
         from: { memoryId: "memory-a" },
         type: "about",
@@ -126,6 +136,7 @@ Deno.test("consolidate schema is executable and matches required parser fields",
   );
   assert(validate({
     outcome: "changes",
+    continuity: "The enriched contract remains the active state.",
     lifecycle: [{
       target: {
         match: {
@@ -143,6 +154,7 @@ Deno.test("consolidate schema is executable and matches required parser fields",
   assertEquals(
     validate({
       outcome: "changes",
+      continuity: "The invalid kind must not change the active contract.",
       intents: [{
         localId: "ship",
         kind: "intent.not_registered",
@@ -155,6 +167,7 @@ Deno.test("consolidate schema is executable and matches required parser fields",
   assertEquals(
     validate({
       outcome: "changes",
+      continuity: "The intent needs a valid lifecycle state.",
       intents: [{
         localId: "ship",
         kind: "intent.action",
@@ -166,6 +179,7 @@ Deno.test("consolidate schema is executable and matches required parser fields",
   assertEquals(
     validate({
       outcome: "changes",
+      continuity: "The lifecycle transition needs a recognized status.",
       lifecycle: [{
         target: { memoryId: "memory-a" },
         status: "invented",
@@ -216,6 +230,8 @@ Deno.test("one complete corpus is accepted by both public schema and parser", ()
   const source = { type: "message" as const, id: "message-a" };
   const corpus = {
     outcome: "changes",
+    continuity:
+      "The enriched static memory contract is active and needs validation.",
     entities: [{
       localId: "project",
       kind: "entity.project",
@@ -331,7 +347,10 @@ Deno.test("consolidate output schema publishes the runtime audit bounds", () => 
   ) {
     assertEquals(object(properties[name]).maxItems, 100);
   }
-  assertEquals(object(action.inputSchema).example, { outcome: "no_changes" });
+  assertEquals(object(action.inputSchema).example, {
+    outcome: "no_changes",
+    continuity: "No outstanding work.",
+  });
   assertEquals(
     object(object(object(action.inputSchema).properties).outcome).example,
     "no_changes",

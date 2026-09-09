@@ -16,6 +16,7 @@ export function toLLMConfig(
   const {
     apiKey: _apiKey,
     runtimeDiagnostics: _runtimeDiagnostics,
+    executionIdentity: _executionIdentity,
     fallbacks,
     ...unsafeRest
   } = config;

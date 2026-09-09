@@ -1,4 +1,10 @@
-import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertExists,
+  assertRejects,
+  assertThrows,
+} from "@std/assert";
 import { createHypervisor } from "../../dependencies/oxian-hypervisor.ts";
 import { createWorker } from "../../dependencies/oxian-worker.ts";
 import { createTestDatabase, type TestDatabase } from "../testing/ominipg.ts";
@@ -579,6 +585,166 @@ Deno.test("shared Hypervisors require their explicit event-fabric transport", as
     );
   } finally {
     await hypervisor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("delivery diagnostics correlate placement and worker settlement without affecting a throwing sink", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  const diagnostics: Array<Record<string, unknown>> = [];
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    workerId: "diagnostic-worker",
+    onDiagnostic(diagnostic) {
+      diagnostics.push(diagnostic);
+      if (diagnostic.phase === "placement_accepted") {
+        throw new Error("observation must be isolated");
+      }
+      return Promise.resolve();
+    },
+  });
+  try {
+    const handle = await executor.dispatchDelivery(committed.deliveries[0]);
+    assertEquals((await handle.done).delivery.status, "succeeded");
+    const requested = diagnostics.find((item) =>
+      item.phase === "placement_requested"
+    );
+    const accepted = diagnostics.find((item) =>
+      item.phase === "placement_accepted"
+    );
+    const claimed = diagnostics.find((item) => item.phase === "worker_claimed");
+    const settled = diagnostics.find((item) =>
+      item.phase === "worker_handler_settled"
+    );
+    assertExists(requested);
+    assertExists(accepted);
+    assertExists(claimed);
+    assertExists(settled);
+    assertEquals(requested.eventId, committed.event.id);
+    assertEquals(requested.deliveryId, committed.deliveries[0].id);
+    assertEquals(requested.dispatchAttemptId, accepted.dispatchAttemptId);
+    assertEquals(accepted.operationId, handle.operationId);
+    assertEquals(claimed.workerId, "diagnostic-worker");
+    assertEquals(settled.status, "succeeded");
+    for (const diagnostic of diagnostics) {
+      assertEquals(
+        Object.keys(diagnostic).every((key) =>
+          [
+            "phase",
+            "timestampMs",
+            "eventId",
+            "deliveryId",
+            "consumerId",
+            "dispatchAttemptId",
+            "operationId",
+            "workerId",
+            "databaseSchema",
+            "namespace",
+            "status",
+            "capacity",
+            "activeCount",
+            "queuedCount",
+            "origin",
+          ].includes(key)
+        ),
+        true,
+      );
+    }
+  } finally {
+    await executor.shutdown();
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("delivery diagnostics report placement failure and capacity transitions only when enabled", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  const failed: string[] = [];
+  const failing = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+    dispatcher: { dispatch: () => Promise.reject(new Error("unavailable")) },
+    onDiagnostic: (diagnostic) => {
+      failed.push(diagnostic.phase);
+    },
+  });
+  try {
+    await assertRejects(
+      () => failing.dispatchDelivery(committed.deliveries[0]),
+      Error,
+      "unavailable",
+    );
+    assertEquals(failed, ["placement_requested", "placement_failed"]);
+  } finally {
+    await failing.shutdown();
+  }
+
+  let release!: () => void;
+  let begin!: () => void;
+  let blockFirst = true;
+  const started = new Promise<void>((resolve) => begin = resolve);
+  const blocked: string[] = [];
+  const capacityFixture = await createFixture({
+    handle: () => {
+      if (!blockFirst) return;
+      blockFirst = false;
+      begin();
+      return new Promise<void>((resolve) => release = resolve);
+    },
+  });
+  const first = await appendMessage(capacityFixture);
+  const second = await appendMessage(capacityFixture);
+  const executor = createDeliveryExecutor({
+    store: capacityFixture.store,
+    registry: capacityFixture.registry,
+    createContext: capacityFixture.createContext,
+    workerId: "capacity-worker",
+    capacity: 1,
+    onDiagnostic: (diagnostic) => {
+      blocked.push(diagnostic.phase);
+    },
+  });
+  try {
+    const firstHandle = await executor.dispatchDelivery(first.deliveries[0]);
+    await started;
+    executor.scheduleDelivery(second.deliveries[0]);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    assert(blocked.includes("capacity_blocked"));
+    release();
+    await firstHandle.done;
+    await waitForDeliveryStatus(
+      capacityFixture.store,
+      second.deliveries[0].id,
+      "succeeded",
+    );
+    assert(blocked.includes("capacity_unblocked"));
+  } finally {
+    await executor.shutdown();
+    await closeFixture(capacityFixture);
+    await closeFixture(fixture);
+  }
+});
+
+Deno.test("delivery diagnostics are disabled by default", async () => {
+  const fixture = await createFixture();
+  const committed = await appendMessage(fixture);
+  const executor = createDeliveryExecutor({
+    store: fixture.store,
+    registry: fixture.registry,
+    createContext: fixture.createContext,
+  });
+  try {
+    assertEquals(
+      (await (await executor.dispatchDelivery(committed.deliveries[0])).done)
+        .delivery.status,
+      "succeeded",
+    );
+  } finally {
+    await executor.shutdown();
     await closeFixture(fixture);
   }
 });

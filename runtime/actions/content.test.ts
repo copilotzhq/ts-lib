@@ -147,6 +147,45 @@ Deno.test("Action content preserves bytes while lifecycle stores references and 
   assertEquals(f.reads, 1);
 });
 
+Deno.test("prepared Action replays captured content references without evaluating a newer factory", async () => {
+  const f = fixture();
+  const input: Input = {
+    messages: [{
+      content: [{
+        kind: "text",
+        role: "body",
+        mediaType: "text/plain",
+        value: "captured bytes",
+      }],
+    }],
+  };
+  const first = f.callers(() => "first", "prepared-content");
+  assertEquals(
+    await first.test.prepare(
+      () => ({ input, metadata: { revision: 1 } }),
+      { operationKey: "latest" },
+    ),
+    "first",
+  );
+  // Simulate recovery after the invoked receipt was committed but before its
+  // terminal result became durable.
+  f.events.splice(1);
+  let factoryCalls = 0;
+  const recovered = f.callers((value) => {
+    assertEquals(value.messages[0].content[0].value, "captured bytes");
+    return "recovered";
+  }, "prepared-content");
+  assertEquals(
+    await recovered.test.prepare(() => {
+      factoryCalls += 1;
+      return { input: { messages: [] } };
+    }, { operationKey: "latest" }),
+    "recovered",
+  );
+  assertEquals(factoryCalls, 0);
+  assertEquals(f.reads, 1);
+});
+
 Deno.test("Action content deduplicates literal bodies, preserves per-entry kinds, and does not load descriptors", async () => {
   const f = fixture();
   const descriptor = await f.assets.publish({

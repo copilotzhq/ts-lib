@@ -27,6 +27,8 @@ export type {
   CreateDeliveryWorkloadOptions,
   DeliveryContextBase,
   DeliveryContextFactory,
+  DeliveryDiagnostic,
+  DeliveryDiagnosticSink,
   DeliveryDispatcher,
   DeliveryDispatchFailure,
   DeliveryDispatchMetadata,

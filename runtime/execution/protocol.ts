@@ -40,6 +40,8 @@ export type CopilotzWorkOutputRelay = Readonly<{
 }>;
 
 export type RelayCopilotzWorkHandleOptions = Readonly<{
+  /** Runs after parsing a framed event and before any output processing. */
+  onEventFrame?: (output: RuntimeOutputDescriptor) => void;
   onOutput?: (output: RuntimeOutputDescriptor) => void | Promise<void>;
 }>;
 
@@ -517,7 +519,9 @@ export function relayCopilotzWorkHandle(
       let metadataReceived = false;
       for await (const decoded of decodeFrames(work.output)) {
         if (decoded.kind === EVENT_FRAME) {
-          await options.onOutput?.(parseOutput(decoded.payload));
+          const event = parseOutput(decoded.payload);
+          options.onEventFrame?.(event);
+          await options.onOutput?.(event);
           continue;
         }
         if (decoded.kind === METADATA_FRAME) {

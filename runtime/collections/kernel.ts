@@ -284,6 +284,23 @@ export type ScopedCollection<
 
 export type ScopedCollections = Readonly<Record<string, ScopedCollection>>;
 
+/** The deliberately read-only Collection surface available in a DB snapshot. */
+export type SnapshotCollection<
+  TSelect extends CollectionRecord = CollectionRecord,
+  TInsert extends object = Record<string, unknown>,
+> = Pick<
+  ScopedCollection<TSelect, TInsert>,
+  | "definition"
+  | "get"
+  | "list"
+  | "aggregate"
+  | "search"
+  | "queries"
+  | "relations"
+>;
+
+export type SnapshotCollections = Readonly<Record<string, SnapshotCollection>>;
+
 export type CollectionScope = Readonly<{
   namespace: string;
   createMutationIdentity?: (
@@ -370,6 +387,12 @@ export type CollectionKernel = Readonly<{
     options: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>>;
   withScope(scope: CollectionScope): ScopedCollections;
+  readSnapshot<T>(
+    scope: Pick<CollectionScope, "namespace">,
+    execute: (
+      context: Readonly<{ collections: SnapshotCollections }>,
+    ) => T | Promise<T>,
+  ): Promise<T>;
   verify(
     definition: CollectionDefinition,
     namespace: string,
@@ -794,7 +817,10 @@ export function createCollectionKernel(
     state: "open" | "closing" | "closed";
   };
   const transactions = new AsyncLocalStorage<TransactionScope>();
+  type SnapshotScope = { executor: SqlExecutor; state: "open" | "closed" };
+  const snapshots = new AsyncLocalStorage<SnapshotScope>();
   const activeScope = () => transactions.getStore();
+  const activeSnapshot = () => snapshots.getStore();
 
   const comparePlanOrder = (
     left: PlannedTransactionMutation,
@@ -862,7 +888,14 @@ export function createCollectionKernel(
     return value as T;
   };
 
-  const executor = (): SqlExecutor => options.session;
+  const executor = (): SqlExecutor => {
+    const snapshot = activeSnapshot();
+    if (!snapshot) return options.session;
+    if (snapshot.state !== "open") {
+      throw new Error("Read snapshot access has already closed.");
+    }
+    return snapshot.executor;
+  };
 
   const scopedWriteOptions = (
     writeOptions: CollectionWriteOptions,
@@ -1014,6 +1047,11 @@ export function createCollectionKernel(
       }
     };
     const assertStandaloneWrite = (): void => {
+      if (activeSnapshot()) {
+        throw new Error(
+          "Collection mutations are not allowed inside a read snapshot.",
+        );
+      }
       if (activeScope()) {
         throw new Error(
           `Use transaction.collections.${name} inside context.transaction().`,
@@ -2072,7 +2110,7 @@ export function createCollectionKernel(
 
     const read = (id: string, namespace: string) =>
       loadCollectionRecord(
-        options.session,
+        executor(),
         tables,
         requireText(namespace, "Namespace"),
         name,
@@ -2296,6 +2334,7 @@ export function createCollectionKernel(
       name,
       createCollectionOperations(collection as BoundCollection, {
         activeTransaction: () => Boolean(activeScope()),
+        activeSnapshot: () => Boolean(activeSnapshot()),
         contentResolver: options.contentResolver,
         relations: (namespace, query) =>
           queryCollectionRelations(executor(), tables, namespace, name, query),
@@ -2307,6 +2346,11 @@ export function createCollectionKernel(
   const transaction = async <T>(
     input: CollectionTransactionOptions<T>,
   ): Promise<CollectionTransactionResult<T>> => {
+    if (activeSnapshot()) {
+      throw new Error(
+        "Collection transactions are not allowed inside a read snapshot.",
+      );
+    }
     const execute = input.execute;
     const transactionIdentity = input.identity
       ? deepFreeze(structuredClone(input.identity))
@@ -2959,6 +3003,87 @@ export function createCollectionKernel(
     );
   };
 
+  const readSnapshot = async <T>(
+    scope: Pick<CollectionScope, "namespace">,
+    execute: (
+      context: Readonly<{ collections: SnapshotCollections }>,
+    ) => T | Promise<T>,
+  ): Promise<T> => {
+    if (activeSnapshot()) {
+      throw new Error("Nested read snapshots are not supported.");
+    }
+    if (!options.session.readSnapshot) {
+      throw new Error(
+        "The configured SQL session does not support repeatable read snapshots.",
+      );
+    }
+    return await options.session.readSnapshot(async (executor) => {
+      const snapshot: SnapshotScope = { executor, state: "open" };
+      return await snapshots.run(snapshot, async () => {
+        const closed = () =>
+          Promise.reject(
+            new Error("Read snapshot access has already closed."),
+          );
+        const scoped = withScope({ namespace: scope.namespace });
+        const collections = Object.freeze(Object.fromEntries(
+          Object.entries(scoped).map((
+            [name, collection],
+          ) => [
+            name,
+            Object.freeze({
+              definition: collection.definition,
+              get: (...args: unknown[]) => {
+                if (snapshot.state !== "open") return closed();
+                return (collection.get as (...input: unknown[]) => unknown)(
+                  ...args,
+                );
+              },
+              list: (...args: unknown[]) => {
+                if (snapshot.state !== "open") return closed();
+                return (collection.list as (...input: unknown[]) => unknown)(
+                  ...args,
+                );
+              },
+              aggregate: (...args: unknown[]) => {
+                if (snapshot.state !== "open") return closed();
+                return (collection.aggregate as (
+                  ...input: unknown[]
+                ) => unknown)(...args);
+              },
+              search: (...args: unknown[]) => {
+                if (snapshot.state !== "open") return closed();
+                return (collection.search as (...input: unknown[]) => unknown)(
+                  ...args,
+                );
+              },
+              queries: Object.freeze(Object.fromEntries(
+                Object.entries(collection.queries).map((
+                  [query, call],
+                ) => [query, (...args: unknown[]) => {
+                  if (snapshot.state !== "open") return closed();
+                  return (call as (...input: unknown[]) => unknown)(...args);
+                }]),
+              )),
+              relations: Object.freeze({
+                list: (...args: unknown[]) => {
+                  if (snapshot.state !== "open") return closed();
+                  return (collection.relations.list as (
+                    ...input: unknown[]
+                  ) => unknown)(...args);
+                },
+              }),
+            }),
+          ]),
+        )) as unknown as SnapshotCollections;
+        try {
+          return await execute(Object.freeze({ collections }));
+        } finally {
+          snapshot.state = "closed";
+        }
+      });
+    });
+  };
+
   const runtime: CollectionKernel = Object.freeze({
     bind,
     get: <
@@ -2969,6 +3094,7 @@ export function createCollectionKernel(
     operations: (name: string) => operations.get(name),
     transaction,
     withScope,
+    readSnapshot,
     verify: (definition, namespace) =>
       options.session.transaction(async (transaction) => {
         await transaction.query(
@@ -3034,6 +3160,7 @@ export function createCollectionRuntime(
     },
     get: (name: string) => kernel.operations(name),
     withScope: kernel.withScope,
+    readSnapshot: kernel.readSnapshot,
     transaction: kernel.transaction,
     verify: kernel.verify,
     rebuild: kernel.rebuild,

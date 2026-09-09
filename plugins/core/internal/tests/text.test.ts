@@ -489,6 +489,11 @@ Deno.test("Core invokes llm.call with explicit model selections and connections"
       initiatorParticipantId: "user-a",
       availableToolIds: ["contract_tool"],
       responseVisibility: { kind: "public" },
+      llmSession: {
+        schema: "copilotz.llm-session.v1",
+        threadId: "thread-a",
+        agentId: "north",
+      },
     });
     assertEquals(
       "threadId" in (completed.input as Record<string, unknown>),
@@ -1518,10 +1523,7 @@ Deno.test("pure dynamic instructions survive router delivery retry without anoth
     const root = await startRun(fixture);
     await waitForRun(fixture, root, 2);
     assertEquals(injectedFailures, 1);
-    assertEquals(retriedFacts, [
-      "thread-a:message:user",
-      "thread-a:message:user",
-    ]);
+    assertEquals(retriedFacts, ["thread-a:message:user"]);
     assertEquals(fixture.inputs.length, 1);
     assertStringIncludes(
       fixture.inputs[0].request.instructions ?? "",

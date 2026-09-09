@@ -1,6 +1,6 @@
 import type {
-  ActionCaller,
   ActionContext,
+  BoundActionCaller,
   RuntimeActionCallers,
   RuntimeContextNamespaces,
 } from "@copilotz/copilotz/actions";
@@ -42,8 +42,8 @@ export type CoreComposedContext = Readonly<{
 }>;
 
 export type CoreActionCallers = Readonly<{
-  createThreadMessage: ActionCaller<typeof createThreadMessageAction>;
-  callLlm: ActionCaller<typeof callLlmAction>;
+  createThreadMessage: BoundActionCaller<typeof createThreadMessageAction>;
+  callLlm: BoundActionCaller<typeof callLlmAction>;
 }>;
 
 /** Runtime capabilities plus the composed namespaces used by Core semantics. */

@@ -81,6 +81,42 @@ export type DeliveryWorkloadScheduler = Readonly<{
   cancel(handle: unknown): void;
 }>;
 
+/** Opt-in, process-local delivery timing observation. Never persisted. */
+export type DeliveryDiagnostic = Readonly<{
+  phase:
+    | "child_delivery_scheduled"
+    | "placement_requested"
+    | "placement_accepted"
+    | "placement_failed"
+    | "capacity_blocked"
+    | "capacity_unblocked"
+    | "worker_claimed"
+    | "worker_claim_skipped"
+    | "worker_handler_started"
+    | "worker_handler_settled"
+    | "gateway_event_frame_received"
+    | "recovery_selected";
+  timestampMs: number;
+  eventId?: string;
+  deliveryId?: string;
+  consumerId?: string;
+  dispatchAttemptId?: string;
+  operationId?: string;
+  workerId?: string;
+  databaseSchema?: string;
+  namespace?: string;
+  status?: string;
+  origin?: "direct" | "scheduled" | "recovery";
+  capacity?: number;
+  activeCount?: number;
+  queuedCount?: number;
+}>;
+
+/** Diagnostic sinks are isolated from delivery behavior, including rejections. */
+export type DeliveryDiagnosticSink = (
+  diagnostic: DeliveryDiagnostic,
+) => void | Promise<void>;
+
 export type CreateDeliveryWorkloadOptions = Readonly<{
   store?: EventStore;
   resolveStore?: (databaseSchema: string) => EventStore | Promise<EventStore>;
@@ -89,6 +125,8 @@ export type CreateDeliveryWorkloadOptions = Readonly<{
   leaseMs?: number;
   heartbeatMs?: number;
   scheduler?: DeliveryWorkloadScheduler;
+  workerId?: string;
+  onDiagnostic?: DeliveryDiagnosticSink;
 }>;
 
 export type DeliveryExecutionResult = Readonly<{
@@ -151,6 +189,8 @@ export type CreateDeliveryExecutorOptions = Readonly<{
   continuousRecovery?: boolean;
   scheduler?: DeliveryWorkloadScheduler;
   createDispatchAttemptId?: () => string;
+  /** Disabled by default; receives allowlisted process-local delivery timing. */
+  onDiagnostic?: DeliveryDiagnosticSink;
   /** Relays generic event and stream descriptors from a remote Worker. */
   onOutput?: (
     output: RuntimeOutputDescriptor,

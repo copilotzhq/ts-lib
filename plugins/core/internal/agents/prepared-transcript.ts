@@ -4,6 +4,38 @@ import type { ConversationMessage } from "../../../core-collections/internal/con
 import type { CoreProcessorContext } from "../runtime-context.ts";
 import { buildLlmTranscript } from "./transcript.ts";
 
+function contentReferences(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return entry;
+    }
+    const { value: _value, resolve: _resolve, ...reference } = entry as Record<
+      string,
+      unknown
+    >;
+    return reference;
+  });
+}
+
+/** Resolved reasoning bodies are not part of the persisted message snapshot. */
+function snapshotMetadata(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const { llmReasoning, ...metadata } = value as Record<string, unknown>;
+  return llmReasoning === undefined
+    ? metadata
+    : { ...metadata, llmReasoning: contentReferences(llmReasoning) };
+}
+
+function optionalSnapshotFilter(
+  snapshot: { visibility?: unknown; revision?: unknown },
+  field: "visibility" | "revision",
+) {
+  return Object.hasOwn(snapshot, field)
+    ? { field, jsonEquals: snapshot[field] }
+    : { field, exists: false };
+}
+
 /** Resolve only final model-facing messages, after participant and causal projection. */
 export async function prepareLlmTranscript(
   context: CoreProcessorContext,
@@ -27,11 +59,36 @@ export async function prepareLlmTranscript(
     const ids = [...new Set(sources)].filter((id) =>
       withReasoning.has(id) === reasoning
     );
-    for (let offset = 0; offset < ids.length; offset += 1000) {
+    for (let offset = 0; offset < ids.length; offset += 20) {
       const records = await messages.list({
         where: { threadId: input.threadId },
-        filter: { field: "id", in: ids.slice(offset, offset + 1000) },
-        limit: 1000,
+        // Match the captured record before resolved-read can open any Body.
+        filter: {
+          or: ids.slice(offset, offset + 20).flatMap((id) => {
+            const snapshot = snapshots.get(id);
+            return snapshot
+              ? [{
+                and: [
+                  { field: "id", eq: id },
+                  { field: "senderId", eq: snapshot.sender.id },
+                  { field: "createdAt", eq: snapshot.createdAt },
+                  { field: "updatedAt", eq: snapshot.updatedAt },
+                  {
+                    field: "content",
+                    jsonEquals: contentReferences(snapshot.content),
+                  },
+                  {
+                    field: "metadata",
+                    jsonEquals: snapshotMetadata(snapshot.metadata),
+                  },
+                  optionalSnapshotFilter(snapshot, "visibility"),
+                  optionalSnapshotFilter(snapshot, "revision"),
+                ],
+              }]
+              : [];
+          }),
+        },
+        limit: 20,
       }, {
         content: {
           fields: reasoning
@@ -43,18 +100,7 @@ export async function prepareLlmTranscript(
           }],
         },
       });
-      for (const record of records) {
-        const snapshot = snapshots.get(record.id);
-        if (
-          !snapshot || String(record.updatedAt) !== snapshot.updatedAt ||
-          String(record.senderId) !== snapshot.sender.id
-        ) {
-          throw new Error(
-            "Message history changed during content preparation.",
-          );
-        }
-        resolved.set(record.id, record);
-      }
+      for (const record of records) resolved.set(record.id, record);
     }
   }
   return Object.freeze(transcript.map((message, index) => {

@@ -101,6 +101,7 @@ type FixtureOptions = Readonly<{
   llmConnections: Readonly<
     Record<string, Readonly<Record<string, unknown>> | undefined>
   >;
+  actionMetadata?: Readonly<Record<string, unknown>>;
   adapters?: Readonly<Record<string, LlmAdapter | undefined>>;
   resolved?: Readonly<Record<string, ResolvedContent>>;
   signal?: AbortSignal;
@@ -329,7 +330,7 @@ function fixture(options: FixtureOptions) {
     action: Object.freeze({
       id: LLM_CALL_ACTION_ID,
       runId: "run-a",
-      metadata: Object.freeze({}),
+      metadata: Object.freeze({ ...(options.actionMetadata ?? {}) }),
     }),
     progress(value: unknown) {
       progressCalls += 1;
@@ -450,6 +451,139 @@ Deno.test("llm.call runs a built-in Model without adapters and never returns its
       JSON.stringify(output).includes("https://account.example/v1"),
       false,
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("direct llm.call without trusted application metadata omits ChatGPT session identity", async () => {
+  const originalFetch = globalThis.fetch;
+  let headers = new Headers();
+  globalThis.fetch = (_input, init) => {
+    headers = new Headers(init?.headers);
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+  const test = fixture({
+    llmConnections: {
+      primary: {
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        auth: {
+          apiKey: "test",
+          extraHeaders: { "ChatGPT-Account-ID": "account" },
+        },
+      },
+    },
+  });
+  try {
+    await callLlmAction.execute({
+      ...baseInput,
+      models: [{
+        connection: "primary",
+        model: "public-model",
+        options: { estimateCost: false, openaiApi: "chat_completions" },
+      }],
+    }, test.context);
+    assertEquals(headers.get("session-id"), null);
+    assertEquals(headers.get("thread-id"), null);
+    assertEquals(headers.get("x-client-request-id"), null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("llm.call accepts only a valid trusted application session for ChatGPT routing", async () => {
+  const originalFetch = globalThis.fetch;
+  const observed: Headers[] = [];
+  globalThis.fetch = (_input, init) => {
+    observed.push(new Headers(init?.headers));
+    return Promise.resolve(
+      new Response(
+        [
+          'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+  };
+  const connection = {
+    provider: "openai",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    auth: {
+      apiKey: "test",
+      extraHeaders: { "ChatGPT-Account-ID": "account" },
+    },
+  } as const;
+  const input = {
+    ...baseInput,
+    models: [{
+      connection: "primary",
+      model: "selected-model",
+      options: { estimateCost: false, openaiApi: "chat_completions" },
+    }] as const,
+  } satisfies LlmCallInput;
+  try {
+    const valid = fixture({
+      llmConnections: { primary: connection },
+      actionMetadata: {
+        llmSession: {
+          schema: "copilotz.llm-session.v1",
+          threadId: "thread-a",
+          agentId: "agent-a",
+        },
+      },
+    });
+    await callLlmAction.execute(input, valid.context);
+    assert(typeof observed[0]?.get("session-id") === "string");
+    assertEquals(observed[0]?.get("thread-id"), observed[0]?.get("session-id"));
+    assertEquals(
+      observed[0]?.get("x-client-request-id"),
+      observed[0]?.get("session-id"),
+    );
+
+    const malformed = fixture({
+      llmConnections: { primary: connection },
+      actionMetadata: {
+        llmSession: {
+          schema: "copilotz.llm-session.v1",
+          threadId: "",
+          agentId: "agent-a",
+        },
+      },
+    });
+    await callLlmAction.execute(input, malformed.context);
+    assertEquals(observed[1]?.get("session-id"), null);
+
+    const forged = fixture({ llmConnections: { primary: connection } });
+    await assertRejects(
+      async () =>
+        await callLlmAction.execute({
+          ...input,
+          models: [{
+            ...input.models[0],
+            options: {
+              ...input.models[0]!.options,
+              executionIdentity: { cacheKey: "forged" },
+            },
+          }],
+        }, forged.context),
+      TypeError,
+      "Unsupported durable LLM provider option 'executionIdentity'",
+    );
+    assertEquals(observed.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -33,6 +33,7 @@ import {
   type LiveEventDispatchHandle,
   type LiveProcessorContextBase,
 } from "../execution/index.ts";
+import { reportDeliveryDiagnostic } from "../execution/diagnostics.ts";
 import {
   createTransientProcessorSet,
   matchProcessor,
@@ -400,7 +401,20 @@ export async function createCopilotzEngine(
         status: "pending",
         limit: 1_000,
       });
-      for (const delivery of deliveries) executor.scheduleDelivery(delivery);
+      for (const delivery of deliveries) {
+        executor.scheduleDelivery(delivery);
+        reportDeliveryDiagnostic(options.execution?.onDiagnostic, {
+          phase: "child_delivery_scheduled",
+          timestampMs: Date.now(),
+          eventId: event.id,
+          deliveryId: delivery.id,
+          consumerId: delivery.consumerId,
+          databaseSchema: context.databaseSchema,
+          namespace: event.namespace,
+          status: delivery.status,
+          origin: "scheduled",
+        });
+      }
     },
   });
   const liveDispatcher = createLiveEventDispatcher({

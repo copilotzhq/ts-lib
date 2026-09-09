@@ -133,6 +133,53 @@ Deno.test("ChatGPT transport receives the same internal key without public contr
   assertEquals("prompt_cache_retention" in body, false);
 });
 
+Deno.test("ChatGPT Codex adds stable routing headers only for trusted runtime identity", () => {
+  const config = keyedConfig({
+    model: "fallback-model",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    executionIdentity: { cacheKey: "opaque-stable-key" },
+  });
+  const headers = openaiProvider(config).headers(config);
+  const body = openaiProvider(config).body(messages, config) as Record<
+    string,
+    unknown
+  >;
+  assertEquals(body.prompt_cache_key, "opaque-stable-key");
+  assertEquals(headers["session-id"], "opaque-stable-key");
+  assertEquals(headers["thread-id"], "opaque-stable-key");
+  assertEquals(headers["x-client-request-id"], "opaque-stable-key");
+  assertEquals(headers["x-codex-routing-hint"], "model=fallback-model");
+
+  const publicConfig = keyedConfig({
+    executionIdentity: { cacheKey: "ignored" },
+  });
+  assertEquals(
+    "session-id" in openaiProvider(publicConfig).headers(publicConfig),
+    false,
+  );
+});
+
+Deno.test("ChatGPT Codex identity overrides conflicting routing extra headers", () => {
+  const config = keyedConfig({
+    model: "selected-fallback",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    executionIdentity: { cacheKey: "generated-key" },
+    extraHeaders: {
+      "SeSsIoN-Id": "caller-value",
+      "THREAD-ID": "caller-value",
+      "X-Client-Request-Id": "caller-value",
+      "X-Codex-Routing-Hint": "model=caller-value",
+      "X-Other": "preserved",
+    },
+  });
+  const headers = new Headers(openaiProvider(config).headers(config));
+  assertEquals(headers.get("session-id"), "generated-key");
+  assertEquals(headers.get("thread-id"), "generated-key");
+  assertEquals(headers.get("x-client-request-id"), "generated-key");
+  assertEquals(headers.get("x-codex-routing-hint"), "model=selected-fallback");
+  assertEquals(headers.get("x-other"), "preserved");
+});
+
 Deno.test("Chat Completions receives the same internal key", () => {
   const config = keyedConfig({ openaiApi: "chat_completions" });
   const body = openaiProvider(config).body(messages, config) as Record<

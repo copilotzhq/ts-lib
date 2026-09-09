@@ -110,3 +110,28 @@ definition.
 
 See also [events, deliveries, and recovery](events-deliveries-recovery.md) and
 [content and assets](content-assets.md).
+
+## Capturing dynamic Action input
+
+Use a prepared call when input must be selected once for a durable invocation:
+
+```ts
+await context.actions.callLlm.prepare(async () => ({
+  input: await prepareRequest(),
+  metadata: { threadId },
+}), { operationKey: `reply:${messageId}` });
+```
+
+The non-empty operation key identifies this call within its processor delivery
+or parent Action. Invoked and terminal replay skip the factory and restore the
+original input and metadata. A competing capture wins over a newly prepared
+input. Factories may run again before a capture exists; any preparation side
+effects must therefore be idempotent. Ordinary calls still reject conflicting
+input. This does not provide exactly-once external provider execution.
+
+`context.readSnapshot(async ({ collections }) => ...)` groups metadata reads
+under one read-only, repeatable-read database snapshot. Its collection methods
+cannot mutate or resolve content, and cannot escape the callback. Close the
+snapshot before loading bodies or contacting providers. Custom sessions must
+provide snapshot support explicitly; the runtime never substitutes weaker
+isolation.

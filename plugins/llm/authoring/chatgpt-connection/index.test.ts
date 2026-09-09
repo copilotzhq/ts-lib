@@ -8,6 +8,7 @@ import {
   type ChatGptConnectionOptions,
   createChatGptConnection,
 } from "./index.ts";
+import { deriveChatGptCodexCacheKey } from "../../internal/internal-cache-key.ts";
 
 const timestamp = 1_700_000_000_000;
 const initial: ChatGptAccount = Object.freeze({
@@ -100,6 +101,23 @@ Deno.test("ChatGPT refresh uses explicit registration, rotates tokens, and await
   });
   assertEquals((await resolve() as { apiKey: string }).apiKey, "new-access");
   assert(saved);
+});
+
+Deno.test("ChatGPT token refresh keeps the account-derived cache session stable", async () => {
+  const resolved = await resolver({ fetch: async () => success() })();
+  const accountId =
+    (resolved as { extraHeaders: Record<string, string> }).extraHeaders[
+      "ChatGPT-Account-ID"
+    ];
+  assertEquals(
+    await deriveChatGptCodexCacheKey(accountId, "tenant", "thread", "agent"),
+    await deriveChatGptCodexCacheKey(
+      initial.accountId,
+      "tenant",
+      "thread",
+      "agent",
+    ),
+  );
 });
 Deno.test("ChatGPT refresh preserves an omitted refresh token", async () => {
   const resolve = resolver({

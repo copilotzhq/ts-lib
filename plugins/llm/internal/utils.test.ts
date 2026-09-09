@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 
 import {
   buildToolCallsBlock,
+  buildToolResultsBlock,
   composeWireContent,
   createCanonicalToolCallDraftTracker,
   detectDegenerateRepetition,
@@ -22,7 +23,7 @@ import {
 import type { ChatRequest } from "./types.ts";
 import { classifyLLMError, LLMTranscriptError } from "./errors.ts";
 
-Deno.test("estimated input limiting reports and reuses a whole-message boundary", () => {
+Deno.test("estimated input formatting preserves complete history for explicit preflight", () => {
   const source = ["m1", "m2", "m3"].map((sourceMessageId, index) => ({
     role: index % 2 === 0 ? "user" as const : "assistant" as const,
     content: String(index + 1).repeat(40),
@@ -33,8 +34,9 @@ Deno.test("estimated input limiting reports and reuses a whole-message boundary"
     config: { limitEstimatedInputTokens: 30 },
   });
 
-  assertEquals(first.cutoffSourceMessageId, "m2");
   assertEquals(first.messages.map((message) => message.content), [
+    "1".repeat(40),
+    "2".repeat(40),
     "3".repeat(40),
   ]);
 
@@ -49,7 +51,6 @@ Deno.test("estimated input limiting reports and reuses a whole-message boundary"
     ],
     config: { limitEstimatedInputTokens: 30 },
   });
-  assertEquals(next.cutoffSourceMessageId, undefined);
   assertEquals(next.messages.map((message) => message.content), [
     "3".repeat(40),
     "4".repeat(40),
@@ -477,7 +478,7 @@ Deno.test("classifyLLMError keeps transcript failures local", () => {
   );
 });
 
-Deno.test("formatMessages creates headroom after crossing the estimated input limit", () => {
+Deno.test("formatMessages preserves history after crossing the estimated input limit", () => {
   const formatted = formatMessages({
     messages: [
       { role: "user", content: "12345678" }, // 2 tokens
@@ -495,6 +496,8 @@ Deno.test("formatMessages creates headroom after crossing the estimated input li
       content: message.content,
     })),
     [
+      { role: "user", content: "12345678" },
+      { role: "assistant", content: "abcdefgh" },
       { role: "user", content: "ijklmnop" },
     ],
   );
@@ -517,7 +520,7 @@ Deno.test("formatMessages does not prune inside the hysteresis band", () => {
   );
 });
 
-Deno.test("formatMessages preserves the system prompt outside the estimated input history budget", () => {
+Deno.test("formatMessages preserves the system prompt and complete history for preflight", () => {
   const formatted = formatMessages({
     messages: [
       { role: "user", content: "12345678" }, // 2 tokens
@@ -536,12 +539,13 @@ Deno.test("formatMessages preserves the system prompt outside the estimated inpu
     })),
     [
       { role: "system", content: "system" },
+      { role: "user", content: "12345678" },
       { role: "assistant", content: "abcdefgh" },
     ],
   );
 });
 
-Deno.test("formatMessages drops the oldest whole message at the estimated budget", () => {
+Deno.test("formatMessages does not drop the oldest message at the estimated budget", () => {
   const formatted = formatMessages({
     messages: [
       { role: "user", content: "12345678" }, // 2 tokens
@@ -558,6 +562,7 @@ Deno.test("formatMessages drops the oldest whole message at the estimated budget
       content: message.content,
     })),
     [
+      { role: "user", content: "12345678" },
       { role: "assistant", content: "abcdefghijkl" },
     ],
   );
@@ -617,7 +622,7 @@ Deno.test("formatMessages preserves inline audio base64 under estimated input li
   );
 });
 
-Deno.test("formatMessages truncation keeps an interleaved completed tool cycle atomic", () => {
+Deno.test("formatMessages preserves an interleaved completed tool cycle for explicit preflight", () => {
   const formatted = formatMessages({
     messages: [
       {
@@ -659,15 +664,19 @@ Deno.test("formatMessages truncation keeps an interleaved completed tool cycle a
     config: { limitEstimatedInputTokens: 20 },
   });
 
-  assertEquals(formatted.map((message) => message.role), ["assistant", "user"]);
-  assertEquals(String(formatted[0]?.content).includes("<tool_calls>"), true);
-  assertEquals(String(formatted[1]?.content).includes("<tool_results>"), true);
-  assertEquals(String(formatted[1]?.content).includes("[North]"), true);
+  assertEquals(formatted.map((message) => message.role), [
+    "user",
+    "assistant",
+    "user",
+  ]);
+  assertEquals(String(formatted[1]?.content).includes("<tool_calls>"), true);
+  assertEquals(String(formatted[2]?.content).includes("<tool_results>"), true);
+  assertEquals(String(formatted[2]?.content).includes("[North]"), true);
   assertEquals(
     formatted.some((message) =>
       String(message.content).includes("old history")
     ),
-    false,
+    true,
   );
 });
 
@@ -909,6 +918,49 @@ Deno.test("parseToolCallsFromResponse preserves parallel branches and sequential
       '<tool_calls>\n{"jq":"."} | {"name":"save","arguments":{}}\n</tool_calls>',
     ).toolCalls.length,
     0,
+  );
+});
+
+Deno.test("recorded tool history retains durable plan correlation on both blocks", () => {
+  const call = {
+    id: "reused-call",
+    planId: "server-plan-b",
+    tool: { id: "lookup" },
+    args: "{}",
+    output: { value: "done" },
+  };
+  assertEquals(
+    buildToolCallsBlock([call]).includes(
+      '"tool_call_id":"reused-call","tool_plan_id":"server-plan-b"',
+    ),
+    true,
+  );
+  assertEquals(
+    buildToolResultsBlock([call]).includes(
+      '"tool_call_id":"reused-call","tool_plan_id":"server-plan-b"',
+    ),
+    true,
+  );
+});
+
+Deno.test("formatMessages materializes a plan-qualified historical tool result once", () => {
+  const formatted = formatMessages({
+    messages: [{
+      role: "tool_result",
+      senderId: "lookup",
+      content: "done",
+      tool_call_id: "reused-call",
+      toolPlanId: "server-plan-b",
+    }],
+  });
+  assertEquals(formatted.map((message) => message.role), ["user"]);
+  assertEquals(
+    String(formatted[0]?.content),
+    '<tool_results>\n{"name":"lookup","output":"done","tool_call_id":"reused-call","tool_plan_id":"server-plan-b"}\n</tool_results>',
+  );
+  assertEquals(
+    String(formatted[0]?.content).includes("&lt;tool_results"),
+    false,
   );
 });
 

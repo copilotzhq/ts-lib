@@ -9,7 +9,9 @@ import {
   agentAskResultMetadata,
   agentFailureMetadata,
   coreToolActionMessageMetadata,
+  coreToolPlanMetadata,
   coreToolPlanResultMetadata,
+  coreToolResultOrigin,
   workflowMetadata,
 } from "../workflow-metadata.ts";
 
@@ -56,6 +58,11 @@ function toolCallId(message: ConversationMessage): string | undefined {
   return optionalText(record(record(message.metadata).toolInvocation).id);
 }
 
+function toolPlanId(message: ConversationMessage): string | undefined {
+  return coreToolPlanMetadata(message.metadata)?.planId ??
+    coreToolResultOrigin(message.metadata)?.planId;
+}
+
 /** Maps one canonical Message into the provider-neutral LLM history contract. */
 function projectMessage(
   message: ConversationMessage,
@@ -87,11 +94,13 @@ function projectMessage(
       if (ask.phase === "progress") {
         if (targetParticipantId === ask.askedParticipantId) {
           const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
+          const planId = toolPlanId(message);
           return Object.freeze({
             role: "assistant",
             content,
             ...(name ? { name } : {}),
             ...(toolCalls.length ? { toolCalls } : {}),
+            ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
           });
         }
         return mode === "public" && content.length
@@ -113,11 +122,13 @@ function projectMessage(
     }
     if (targetParticipantId && message.sender.id === targetParticipantId) {
       const toolCalls = embeddedToolCalls(message.metadata.llmToolCalls);
+      const planId = toolPlanId(message);
       return Object.freeze({
         role: "assistant",
         content,
         ...(name ? { name } : {}),
         ...(toolCalls.length ? { toolCalls } : {}),
+        ...(planId && toolCalls.length ? { toolPlanId: planId } : {}),
       });
     }
     if (embeddedToolCalls(message.metadata.llmToolCalls).length) return null;
@@ -127,11 +138,13 @@ function projectMessage(
     const requesterId = optionalText(message.metadata.requesterId) ??
       workflowMetadata(message.metadata)?.agentParticipantId;
     const id = toolCallId(message);
+    const planId = toolPlanId(message);
     if (id && requesterId === targetParticipantId) {
       return Object.freeze({
         role: "tool",
         content,
         toolCallId: id,
+        ...(planId ? { toolPlanId: planId } : {}),
         ...(name ? { name } : {}),
       });
     }
@@ -223,56 +236,15 @@ export function buildLlmTranscript(
     const projected = project(message);
     if (projected) output.push(projected);
   };
-  for (let index = 0; index < selected.length;) {
-    const plan = selected[index];
-    const planProjection = plan && project(plan);
-    const toolIds = planProjection?.role === "assistant"
-      ? new Set((planProjection.toolCalls ?? []).map((call) => call.id))
-      : new Set<string>();
-    if (!planProjection || toolIds.size === 0) {
-      if (plan) appendNormal(plan);
-      index++;
-      continue;
-    }
-    output.push(planProjection);
-    const receipts: ConversationMessage[] = [];
-    const deferred: ConversationMessage[] = [];
-    const seen = new Set<string>();
-    index++;
-    while (index < selected.length && seen.size < toolIds.size) {
-      const candidate = selected[index++]!;
-      const projected = project(candidate);
-      if (
-        projected?.role === "tool" && projected.toolCallId &&
-        toolIds.has(projected.toolCallId)
-      ) {
-        receipts.push(candidate);
-        seen.add(projected.toolCallId);
-      } else deferred.push(candidate);
-    }
-    // A model may only see peer text after every result for its own call block.
-    for (const receipt of receipts) appendNormal(receipt);
-    const receiptsByAnswerId = new Map(
-      receipts.flatMap((receipt) => {
-        const result = agentAskResultMetadata(receipt.metadata);
-        return result?.answerMessageId
-          ? [[result.answerMessageId, receipt]]
-          : [];
-      }),
-    );
-    // Preserve public nested causality after the closed Tool block. Keep
-    // nested peer messages in their durable order, but reserve direct root
-    // answers for the provider-order receipt sequence below.
-    for (const message of deferred) {
-      if (receiptsByAnswerId.has(message.id)) continue;
-      appendNormal(message);
-    }
-    for (const [id, receipt] of receiptsByAnswerId) {
-      const answer = receiptAnswer(receipt, byId.get(id), input.participantId);
-      if (answer) {
-        sources.set(answer, id);
-        output.push(answer);
-      }
+  for (const message of selected) {
+    const answerId = agentAskResultMetadata(message.metadata)?.answerMessageId;
+    const answer = answerId
+      ? receiptAnswer(message, byId.get(answerId), input.participantId)
+      : null;
+    appendNormal(message);
+    if (answer) {
+      sources.set(answer, answerId!);
+      output.push(answer);
     }
   }
   for (const message of output) onSelectedSource?.(sources.get(message)!);

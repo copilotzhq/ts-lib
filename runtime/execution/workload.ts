@@ -8,6 +8,7 @@ import type {
   DeliveryWorkload,
   DeliveryWorkloadScheduler,
 } from "./types.ts";
+import { reportDeliveryDiagnostic } from "./diagnostics.ts";
 
 const DEFAULT_LEASE_MS = 120_000;
 const DEFAULT_HEARTBEAT_MS = 30_000;
@@ -126,6 +127,18 @@ export function createDeliveryWorkload(
     });
     if (!delivery) {
       const current = await store.getDelivery(metadata.deliveryId);
+      reportDeliveryDiagnostic(options.onDiagnostic, {
+        phase: "worker_claim_skipped",
+        timestampMs: Date.now(),
+        eventId: metadata.eventId,
+        deliveryId: metadata.deliveryId,
+        consumerId: metadata.consumerId,
+        dispatchAttemptId: metadata.dispatchAttemptId,
+        workerId: options.workerId,
+        databaseSchema: metadata.databaseSchema,
+        namespace: metadata.namespace,
+        status: current?.status ?? "missing",
+      });
       return {
         metadata: statusMetadata(
           metadata.deliveryId,
@@ -133,6 +146,18 @@ export function createDeliveryWorkload(
         ),
       };
     }
+    reportDeliveryDiagnostic(options.onDiagnostic, {
+      phase: "worker_claimed",
+      timestampMs: Date.now(),
+      eventId: metadata.eventId,
+      deliveryId: delivery.id,
+      consumerId: metadata.consumerId,
+      dispatchAttemptId: metadata.dispatchAttemptId,
+      workerId: options.workerId,
+      databaseSchema: metadata.databaseSchema,
+      namespace: metadata.namespace,
+      status: delivery.status,
+    });
 
     const abort = new AbortController();
     const relayAbort = () => abort.abort(dispatchSignal.reason);
@@ -225,6 +250,17 @@ export function createDeliveryWorkload(
         event: typeof processorEvent,
         executionContext: typeof context,
       ) => void | Promise<void>;
+      reportDeliveryDiagnostic(options.onDiagnostic, {
+        phase: "worker_handler_started",
+        timestampMs: Date.now(),
+        eventId: event.id,
+        deliveryId: delivery.id,
+        consumerId: metadata.consumerId,
+        dispatchAttemptId: metadata.dispatchAttemptId,
+        workerId: options.workerId,
+        databaseSchema: metadata.databaseSchema,
+        namespace: metadata.namespace,
+      });
       await handle(processorEvent, context);
       abort.signal.throwIfAborted();
       const succeeded = await store.succeedDelivery(
@@ -234,6 +270,18 @@ export function createDeliveryWorkload(
       if (!succeeded) {
         throw new Error(`Delivery '${delivery.id}' could not be settled.`);
       }
+      reportDeliveryDiagnostic(options.onDiagnostic, {
+        phase: "worker_handler_settled",
+        timestampMs: Date.now(),
+        eventId: event.id,
+        deliveryId: delivery.id,
+        consumerId: metadata.consumerId,
+        dispatchAttemptId: metadata.dispatchAttemptId,
+        workerId: options.workerId,
+        databaseSchema: metadata.databaseSchema,
+        namespace: metadata.namespace,
+        status: "succeeded",
+      });
       return { metadata: statusMetadata(delivery.id, "succeeded") };
     } catch (error) {
       if (!abort.signal.aborted) abort.abort(error);
@@ -244,6 +292,18 @@ export function createDeliveryWorkload(
         retryable: !isNonRetryableError(error),
       });
       const current = failed ?? await store.getDelivery(delivery.id);
+      reportDeliveryDiagnostic(options.onDiagnostic, {
+        phase: "worker_handler_settled",
+        timestampMs: Date.now(),
+        eventId: metadata.eventId,
+        deliveryId: delivery.id,
+        consumerId: metadata.consumerId,
+        dispatchAttemptId: metadata.dispatchAttemptId,
+        workerId: options.workerId,
+        databaseSchema: metadata.databaseSchema,
+        namespace: metadata.namespace,
+        status: current?.status ?? "missing",
+      });
       return {
         metadata: statusMetadata(
           delivery.id,

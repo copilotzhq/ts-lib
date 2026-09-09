@@ -53,7 +53,12 @@ Deno.test("defineAction preserves optional schemas and execute typing", () => {
   const output: ActionOutput<typeof search> = { count: 5 };
   const caller: ActionCaller<typeof search> = (value) =>
     Promise.resolve({ count: value.query.length });
-  const callers: ActionCallers<{ search: typeof search }> = { search: caller };
+  const boundCaller = Object.assign(caller, {
+    prepare: () => Promise.resolve({ count: 0 }),
+  });
+  const callers: ActionCallers<{ search: typeof search }> = {
+    search: boundCaller,
+  };
 
   assertEquals(search.id, "search.query");
   assertEquals(search.inputSchema, inputSchema);
@@ -128,11 +133,11 @@ Deno.test("defineAction accepts only the one Action descriptor shape", () => {
 });
 
 Deno.test("runtime Action aliases accept unknown input and invocation metadata", async () => {
-  const callers: RuntimeActionCallers = Object.freeze({
-    dynamic(input: unknown) {
-      return Promise.resolve(input);
-    },
-  });
+  const dynamic = Object.assign(
+    (input: unknown) => Promise.resolve(input),
+    { prepare: () => Promise.resolve(undefined) },
+  );
+  const callers: RuntimeActionCallers = Object.freeze({ dynamic });
   const metadata: ActionInvocationMetadata = Object.freeze({
     source: "dynamic-resource",
   });

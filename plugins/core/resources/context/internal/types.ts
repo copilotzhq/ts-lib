@@ -7,6 +7,7 @@ import type {
   Participant,
 } from "../../../../core-collections/internal/contracts.ts";
 import type { ScopedCollections } from "@copilotz/copilotz/collections";
+import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { ContentInput, ContentRef } from "@copilotz/copilotz/content";
 
 export type ContextPurpose = "conversation";
@@ -29,6 +30,8 @@ export type ContextContributionInput = Readonly<{
   agent: AgentResource;
   participant: Participant;
   thread: ConversationThread;
+  /** The participant-relative internal history scope, when applicable. */
+  historyScopeId?: string;
   sourceRange?: Readonly<{
     startMessageId: string;
     endMessageId: string;
@@ -59,6 +62,19 @@ export type ContextResource = Readonly<{
     | readonly ContextContribution[]
     | null
     | Promise<ContextContribution | readonly ContextContribution[] | null>;
+  /** Optional bounded maintenance hook; true means a ready certified boundary advanced. */
+  compact?(
+    input:
+      & ContextContributionInput
+      & Readonly<{
+        /** Trusted scoped runtime capability for bounded maintenance only. */
+        context: ProcessorContext;
+        triggerMessageId: string;
+        historyAfterMessageId?: string;
+        estimatedTokens: number;
+        limitEstimatedTokens: number;
+      }>,
+  ): boolean | Promise<boolean>;
 }>;
 
 export type FrozenContextContribution = Readonly<{

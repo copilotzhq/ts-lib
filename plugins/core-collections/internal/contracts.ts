@@ -73,6 +73,8 @@ export type ConversationMessage<
   content: Content;
   metadata: Metadata;
   revision?: MessageRevision;
+  /** Read-snapshot evidence used for revalidation before resolving content. */
+  visibility?: Readonly<Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
 }>;

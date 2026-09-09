@@ -1,3 +1,8 @@
+import {
+  agentAskMetadata,
+  coreToolPlanResultMetadata,
+  coreToolResultOrigin,
+} from "../../core/internal/workflow-metadata.ts";
 /**
  * Shared semantic-memory mechanics used by the canonical primitive owners.
  *
@@ -40,6 +45,9 @@ import {
   loadParticipantRecord,
   loadThreadRecord,
 } from "@copilotz/copilotz/core";
+import { loadCoreThreadMessageSnapshot } from "../../core/processors/internal/helpers.ts";
+import { buildLlmTranscript } from "../../core/internal/agents/transcript.ts";
+import { prepareLlmTranscript } from "../../core/internal/agents/prepared-transcript.ts";
 import { estimateTextTokens } from "@copilotz/copilotz/llm/tokens";
 import {
   collectContextContributions,
@@ -96,7 +104,7 @@ export type ConsolidateMemoryActionInput = unknown;
 
 export type ConsolidateMemoryActionResult = Readonly<
   & {
-    outcome: "already_settled" | "no_changes" | "changes";
+    outcome: "already_settled" | "no_changes" | "changes" | "invalidated";
   }
   & Record<string, unknown>
 >;
@@ -130,6 +138,10 @@ export type MemoryProcessorContext = ProcessorContext<
   MemoryActionCallers
 >;
 
+class MemorySourceInvalidatedError extends Error {
+  override name = "MemorySourceInvalidatedError";
+}
+
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -144,6 +156,16 @@ function requiredText(value: unknown, label: string): string {
 
 function optionalText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function serializedActionError(
+  value: unknown,
+): Readonly<{ name: string; message: string }> | undefined {
+  const error = record(value);
+  if (Object.keys(error).length !== 2) return undefined;
+  const name = optionalText(error.name);
+  const message = optionalText(error.message);
+  return name && message ? Object.freeze({ name, message }) : undefined;
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
@@ -416,6 +438,41 @@ function checkpointAccessible(
   return ids.length > 0 && ids.every((id) => readable.has(id));
 }
 
+function branchCertificate(thread: ConversationThread): string {
+  const branch = thread.activeMessageBranch;
+  return branch
+    ? JSON.stringify({
+      rootMessageId: branch.rootMessageId,
+      headMessageId: branch.headMessageId,
+      previousRevisionMessageId: branch.previousRevisionMessageId,
+      revisionIndex: branch.revisionIndex,
+    })
+    : "public";
+}
+
+function certifiedHistoryBoundary(
+  checkpoint: CollectionRecord,
+  input: Readonly<{
+    agentId: string;
+    participantId: string;
+    historyScopeId?: string;
+    thread: ConversationThread;
+  }>,
+): string | undefined {
+  const coverage = record(record(checkpoint.metadata).coverage);
+  if (
+    coverage.schema !== "copilotz.memory.coverage.v1" ||
+    checkpoint.status !== "ready" || checkpoint.agentId !== input.agentId ||
+    coverage.agentParticipantId !== input.participantId ||
+    coverage.historyScopeId !== input.historyScopeId ||
+    coverage.branch !== branchCertificate(input.thread) ||
+    !optionalText(coverage.startMessageId) ||
+    !optionalText(coverage.endMessageId) ||
+    !optionalText(coverage.continuity)
+  ) return undefined;
+  return optionalText(coverage.endMessageId);
+}
+
 async function latestReadyCheckpoint(
   context: MemoryProcessorContext,
   threadId: string,
@@ -429,47 +486,96 @@ async function latestReadyCheckpoint(
   ) ?? null;
 }
 
-async function messageText(
-  context: MemoryProcessorContext,
-  message: ConversationMessage,
-): Promise<string> {
-  const resolved = await context.content.resolveMany(message.content);
-  return resolved.map((item) =>
-    item.text ??
-      (item.value !== undefined
-        ? JSON.stringify(item.value)
-        : `[${item.ref.kind}:${item.ref.name ?? item.ref.mediaType}]`)
-  ).join("\n");
+function preparedSourceText(content: readonly unknown[]): string {
+  return content.map((entry) => {
+    const value = record(entry).value;
+    if (typeof value === "string") return value;
+    if (value !== undefined) return JSON.stringify(value);
+    const ref = record(entry);
+    return `[${String(ref.kind ?? "content")}:${
+      String(ref.name ?? ref.mediaType ?? "unknown")
+    }]`;
+  }).join("\n");
 }
 
-async function sourceMessages(
+async function projectedSourceMessages(
   context: MemoryProcessorContext,
-  messages: readonly ConversationMessage[],
+  input: Readonly<{
+    threadId: string;
+    participantId: string;
+    messages: readonly ConversationMessage[];
+  }>,
 ): Promise<readonly MemorySourceMessage[]> {
-  const result: MemorySourceMessage[] = [];
-  for (const message of messages) {
-    const metadata = record(message.metadata);
-    const toolCalls = Array.isArray(metadata.llmToolCalls)
-      ? structuredClone(metadata.llmToolCalls)
-      : undefined;
-    let reasoning: string | undefined;
-    const reasoningRefs = Array.isArray(metadata.llmReasoning)
-      ? metadata.llmReasoning as ContentRef[]
-      : [];
-    if (reasoningRefs[0]) {
-      const resolved = await context.content.resolve(reasoningRefs[0]);
-      reasoning = resolved.text ?? new TextDecoder().decode(resolved.bytes);
+  const sourceIds: string[] = [];
+  const plans = new Map<string, number>();
+  const completed = new Map<string, Set<number>>();
+  const answered = new Set<string>();
+  const dependencies = new Map<string, string[]>();
+  for (const item of input.messages) {
+    const plan = coreToolPlanMetadata(item.metadata);
+    const origin = coreToolResultOrigin(item.metadata);
+    const ask = agentAskMetadata(item.metadata);
+    const ids: string[] = [];
+    if (plan) {
+      plans.set(plan.planId, plan.planSize);
+      ids.push(`plan:${plan.planId}`);
     }
-    result.push(Object.freeze({
-      id: message.id,
-      senderType: message.sender.participantType,
-      senderId: message.sender.externalId,
-      text: await messageText(context, message),
-      ...(toolCalls !== undefined ? { toolCalls } : {}),
-      ...(reasoning ? { reasoning } : {}),
-    }));
+    if (origin) {
+      ids.push(`plan:${origin.planId}`);
+      if (
+        coreToolPlanResultMetadata(item.metadata) ||
+        origin.stageIndex === origin.stageCount - 1
+      ) {
+        const indices = completed.get(origin.planId) ?? new Set<number>();
+        indices.add(origin.planIndex);
+        completed.set(origin.planId, indices);
+      }
+    }
+    if (ask) {
+      ids.push(`ask:${ask.askId}`, `plan:${ask.origin.planId}`);
+      if (ask.phase === "answer") answered.add(ask.askId);
+    }
+    dependencies.set(item.id, [...new Set(ids)]);
   }
-  return Object.freeze(result);
+  const pending = new Set(
+    [...plans].filter(([id, size]) => (completed.get(id)?.size ?? 0) < size)
+      .map(([id]) => `plan:${id}`),
+  );
+  for (const ids of dependencies.values()) {
+    for (const id of ids) {
+      if (id.startsWith("ask:") && !answered.has(id.slice(4))) pending.add(id);
+    }
+  }
+  buildLlmTranscript({
+    threadId: input.threadId,
+    participantId: input.participantId,
+    history: input.messages,
+  }, (id) => sourceIds.push(id));
+  const prepared = await prepareLlmTranscript(context as never, {
+    threadId: input.threadId,
+    participantId: input.participantId,
+    history: input.messages,
+  });
+  return Object.freeze(prepared.flatMap((message, index) => {
+    const id = sourceIds[index];
+    if (!id) return [];
+    return [Object.freeze({
+      id,
+      dependencyIds: dependencies.get(id) ?? [],
+      pendingDependency: (dependencies.get(id) ?? []).some((key) =>
+        pending.has(key)
+      ),
+      senderType: message.role,
+      senderId: message.name ?? message.role,
+      text: preparedSourceText(message.content),
+      ...(message.role === "assistant" && message.reasoning
+        ? { reasoning: preparedSourceText(message.reasoning) }
+        : {}),
+      ...(message.role === "assistant" && message.toolCalls
+        ? { toolCalls: structuredClone(message.toolCalls) }
+        : {}),
+    })];
+  }));
 }
 
 function memoryRecord(value: CollectionRecord): MemoryRecordProjection | null {
@@ -726,7 +832,7 @@ async function captureContextSnapshot(
 
 function rangeMessages(
   all: readonly ConversationMessage[],
-  checkpoint: CollectionRecord,
+  checkpoint: Readonly<Record<string, unknown>>,
 ) {
   const start = all.findIndex((message) =>
     message.id === checkpoint.sourceStartMessageId
@@ -735,7 +841,9 @@ function rangeMessages(
     message.id === checkpoint.sourceEndMessageId
   );
   if (start < 0 || end < start) {
-    throw new Error("Reserved memory message range is unavailable.");
+    throw new MemorySourceInvalidatedError(
+      "Reserved memory message range is unavailable.",
+    );
   }
   return Object.freeze(all.slice(start, end + 1));
 }
@@ -900,6 +1008,14 @@ async function settleCheckpointError(
   status: "failed" | "cancelled",
   error: unknown,
 ) {
+  // Action lifecycle errors are already durable plain values, not Error
+  // instances. Keep their normalized diagnostic instead of coercing the
+  // object to "[object Object]" while projecting it onto the checkpoint.
+  const durable = serializedActionError(error);
+  const name = error instanceof Error ? error.name : durable?.name ?? "Error";
+  const message = error instanceof Error
+    ? error.message
+    : durable?.message ?? String(error);
   const checkpoint = await context.collections.longTermMemory
     .get({ id: checkpointId });
   if (!checkpoint || checkpoint.status !== "pending") return;
@@ -909,8 +1025,8 @@ async function settleCheckpointError(
       set: {
         status,
         error: {
-          name: error instanceof Error ? error.name : "Error",
-          message: error instanceof Error ? error.message : String(error),
+          name,
+          message,
         },
       },
     },
@@ -1093,6 +1209,83 @@ async function recordRelations(
   );
 }
 
+async function sourceRangeFingerprint(
+  messages: readonly ConversationMessage[],
+): Promise<string> {
+  return await deriveWorkflowId(
+    "memory-source",
+    JSON.stringify(messages.map((message) => ({
+      id: message.id,
+      senderId: message.sender.id,
+      recipientIds: message.recipientIds,
+      createdAt: message.createdAt,
+      updatedAt: message.updatedAt,
+      content: message.content,
+      metadata: message.metadata,
+      revision: message.revision,
+      visibility: message.visibility,
+    }))),
+  );
+}
+
+async function checkpointSourceMessages(
+  context: MemoryProcessorContext,
+  checkpoint: CollectionRecord,
+): Promise<readonly ConversationMessage[]> {
+  const candidate = record(record(checkpoint.metadata).coverageCandidate);
+  const sourceEnd = await context.collections.message.get({
+    id: String(checkpoint.sourceEndMessageId),
+  });
+  if (!sourceEnd) {
+    throw new MemorySourceInvalidatedError(
+      "Memory source range is no longer available.",
+    );
+  }
+  return await context.readSnapshot(async ({ collections }) => {
+    const scoped = { ...context, collections } as typeof context;
+    const snapshot = await loadCoreThreadMessageSnapshot(
+      scoped,
+      String(checkpoint.threadId),
+      sourceEnd,
+      {
+        viewerIds: [
+          String(
+            candidate.agentParticipantId ??
+              record(checkpoint.metadata).agentParticipantId,
+          ),
+        ],
+        ...(typeof candidate.historyScopeId === "string"
+          ? { historyScopeId: candidate.historyScopeId }
+          : {}),
+      },
+    );
+    const messages = rangeMessages(snapshot.messages, checkpoint);
+    if (
+      !snapshot.active ||
+      !snapshot.thread.participants.some((participant) =>
+        participant.id ===
+          String(
+            candidate.agentParticipantId ??
+              record(checkpoint.metadata).agentParticipantId,
+          ) && participant.participantType === "agent"
+      ) ||
+      !checkpointAccessible(
+        checkpoint,
+        await threadMemorySpaces(scoped, String(checkpoint.threadId)),
+      ) ||
+      candidate.schema === "copilotz.memory.coverage.v1" &&
+        (candidate.branch !== branchCertificate(snapshot.thread) ||
+          candidate.sourceFingerprint !==
+            await sourceRangeFingerprint(messages))
+    ) {
+      throw new MemorySourceInvalidatedError(
+        "Memory source range changed before checkpoint settlement.",
+      );
+    }
+    return messages;
+  });
+}
+
 async function prepareCheckpointSettlement(
   context: MemoryProcessorContext,
   input: Readonly<{
@@ -1107,6 +1300,7 @@ async function prepareCheckpointSettlement(
     relations?: readonly MemoryRecordRelation[];
   }>,
 ) {
+  await checkpointSourceMessages(context, input.checkpoint);
   const records = input.records ?? await activeMemoryRecords(
     context,
     input.spaces,
@@ -1114,11 +1308,16 @@ async function prepareCheckpointSettlement(
   );
   const ids = new Set(records.map((item) => item.id));
   const relations = input.relations ?? await recordRelations(context, ids);
-  const text = renderLongTermMemory({
+  const semanticText = renderLongTermMemory({
     records,
     relations,
     maxContentEstimatedTokens: input.config.maxContentEstimatedTokens,
   });
+  const continuity = requiredText(
+    record(input.result).continuity,
+    "Memory continuity",
+  );
+  const text = `Conversation continuity:\n${continuity}\n\n${semanticText}`;
   const prepared = await context.content.prepare({
     type: "text",
     text,
@@ -1135,9 +1334,23 @@ async function prepareCheckpointSettlement(
       error: null,
       metadata: {
         ...record(input.checkpoint.metadata),
+        ...(record(record(input.checkpoint.metadata).coverageCandidate)
+            .schema ===
+            "copilotz.memory.coverage.v1"
+          ? {
+            coverage: {
+              ...record(record(input.checkpoint.metadata).coverageCandidate),
+              continuity: requiredText(
+                record(input.result).continuity,
+                "Memory continuity",
+              ),
+            },
+          }
+          : {}),
         processorVersion: "v4",
         memoryOntologyVersion: "1",
         result: input.result,
+        continuity: optionalText(record(input.result).continuity),
         retrievedMemoryIds: input.retrievedIds ?? [],
         unresolvedReconciliations: input.unresolved ?? [],
       },
@@ -1150,23 +1363,20 @@ async function settleCheckpoint(
   input: Parameters<typeof prepareCheckpointSettlement>[1],
 ) {
   const settlement = await prepareCheckpointSettlement(context, input);
-  await context.collections.longTermMemory.update(
-    {
+  await context.transaction(async (tx) => {
+    await tx.collections.longTermMemory.commands.completeConsolidation({
       id: input.checkpoint.id,
-      set: {
-        ...settlement.patch,
-        content: settlement.content,
-      },
-    },
-    { operationKey: `checkpoint:${input.checkpoint.id}:ready` },
-  );
+      ...settlement.patch,
+      content: settlement.content,
+    }, { operationKey: `memory-checkpoint:ready:${input.checkpoint.id}` });
+  });
 }
 
 const consolidationInputSchemaBase: ActionSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["outcome"],
-  example: { outcome: "no_changes" },
+  required: ["outcome", "continuity"],
+  example: { outcome: "no_changes", continuity: "No outstanding work." },
   $defs: {
     source: {
       description:
@@ -1301,6 +1511,12 @@ const consolidationInputSchemaBase: ActionSchema = {
       example: "no_changes",
       description:
         "Use changes when at least one draft, relation, or lifecycle change is present. Use no_changes alone when nothing durable should be written.",
+    },
+    continuity: {
+      type: "string",
+      minLength: 1,
+      description:
+        "Required replacement for the compacted conversation prefix. State the active task, constraints, decisions/results, and outstanding work, including uncertainty.",
     },
     entities: {
       type: "array",
@@ -1703,7 +1919,9 @@ const consolidationOutputSchema: ActionSchema = {
   additionalProperties: false,
   required: ["outcome"],
   properties: {
-    outcome: { enum: ["already_settled", "no_changes", "changes"] },
+    outcome: {
+      enum: ["already_settled", "no_changes", "changes", "invalidated"],
+    },
     created: {
       type: "integer",
       minimum: 0,
@@ -1824,8 +2042,7 @@ export function createConsolidateMemoryAction(
           checkpoint,
           await threadMemorySpaces(context, threadId),
         );
-        const allMessages = await listThreadMessageRecords(context, threadId);
-        const range = rangeMessages(allMessages, checkpoint);
+        const range = await checkpointSourceMessages(context, checkpoint);
         const snapshot = frozenSnapshot(checkpoint);
         const catalog = sourceCatalog(range, snapshot);
         const kindDefinitions = memoryKinds(context);
@@ -1860,6 +2077,7 @@ export function createConsolidateMemoryAction(
         if (parsed.outcome === "no_changes") {
           const result = Object.freeze({
             outcome: "no_changes",
+            continuity: parsed.continuity,
             created: 0,
             reused: 0,
             lifecycleChanged: 0,
@@ -2190,6 +2408,7 @@ export function createConsolidateMemoryAction(
         );
         const result = Object.freeze({
           outcome: "changes" as const,
+          continuity: parsed.continuity,
           created,
           reused,
           lifecycleChanged,
@@ -2259,6 +2478,12 @@ export function createConsolidateMemoryAction(
         });
         return result;
       } catch (error) {
+        if (error instanceof MemorySourceInvalidatedError) {
+          await settleCheckpointError(context, checkpointId, "failed", error);
+          // Invalid source material cannot be repaired by this frozen task.
+          // A terminal result closes its Core turn without another model call.
+          return Object.freeze({ outcome: "invalidated" as const });
+        }
         if (onDemand) {
           await settleCheckpointError(context, checkpointId, "failed", error);
         }
@@ -3044,6 +3269,195 @@ export function setMemoryStatusAction(): Pick<
   };
 }
 
+export async function reserveMemoryCheckpoint(
+  context: MemoryProcessorContext,
+  messageRecord: CollectionRecord,
+  config: LongTermMemoryConfig,
+  options: Readonly<{
+    ownerParticipantId?: string;
+    force?: boolean;
+    maxSourceEstimatedTokens?: number;
+  }> = {},
+): Promise<CollectionRecord | null> {
+  // Tool-call projections are intermediate Agent output. Consolidating them
+  // would race the Tool result/final answer and could reserve an incomplete
+  // turn, preventing the actual terminal output from being selected while that
+  // checkpoint remains pending.
+  if (!options.force && coreToolPlanMetadata(messageRecord.metadata)) {
+    return null;
+  }
+  const ownerParticipantId = optionalText(options.ownerParticipantId) ??
+    optionalText(messageRecord.senderId);
+  if (!ownerParticipantId) return null;
+  const owner = await loadParticipantRecord(context, ownerParticipantId);
+  if (!owner || owner.participantType !== "agent") return null;
+  const message = Object.freeze({
+    ...messageRecord,
+    threadId: String(messageRecord.threadId),
+    sender: owner,
+  });
+  const agentId = participantAgentId(owner);
+  if (!context.resources.agents[agentId]) return null;
+  const pending = await checkpoints(
+    context,
+    message.threadId,
+    agentId,
+    "pending",
+  );
+  if (pending[0]) return pending[0];
+  const spaces = await ensureWritableMemorySpace(context, message.threadId);
+  const thread = await loadThreadRecord(context, message.threadId);
+  const workflowInitiator = workflowMetadata(messageRecord.metadata)
+    ?.initiatorParticipantId;
+  const humanParticipants =
+    thread?.participants.filter((participant) =>
+      participant.participantType === "human"
+    ) ?? [];
+  const initiatorParticipantId = workflowInitiator ??
+    (humanParticipants.length === 1 ? humanParticipants[0]?.id : undefined);
+  if (!initiatorParticipantId) {
+    throw new Error(
+      "Memory maintenance requires trusted initiating human provenance.",
+    );
+  }
+  const previous = await latestReadyCheckpoint(
+    context,
+    message.threadId,
+    agentId,
+    spaces,
+  );
+  const certifiedPreviousBoundary = previous && thread
+    ? certifiedHistoryBoundary(previous, {
+      agentId,
+      participantId: owner.id,
+      historyScopeId: optionalText(messageRecord.historyScopeId),
+      thread,
+    })
+    : undefined;
+  const snapshot = await context.readSnapshot(({ collections }) =>
+    loadCoreThreadMessageSnapshot(
+      { collections } as typeof context,
+      message.threadId,
+      messageRecord,
+      {
+        ...(optionalText(messageRecord.historyScopeId)
+          ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
+          : {}),
+        viewerIds: [owner.id],
+        ...(certifiedPreviousBoundary
+          ? { afterMessageId: certifiedPreviousBoundary }
+          : {}),
+      },
+    )
+  );
+  if (!snapshot.active) return null;
+  const sources = await projectedSourceMessages(context, {
+    threadId: message.threadId,
+    participantId: owner.id,
+    messages: snapshot.messages,
+  });
+  const range = selectLongTermMemoryRange({
+    messages: options.force
+      ? sources.map((item) =>
+        item.id === message.id ? { ...item, pendingDependency: true } : item
+      )
+      : sources,
+    triggerMessageId: sources.at(-1)?.id ?? message.id,
+    triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
+    retainRecentEstimatedTokens: options.force
+      ? Math.min(
+        config.retainRecentEstimatedTokens,
+        Math.floor(
+          (options.maxSourceEstimatedTokens ?? config.triggerEstimatedTokens) /
+            4,
+        ),
+      )
+      : config.retainRecentEstimatedTokens,
+    maxSourceEstimatedTokens: options.maxSourceEstimatedTokens ??
+      Math.floor(
+        Math.min(
+          ...(context.resources.agents[agentId]?.models.generate ??
+            context.resources.agents[agentId]?.models.session ?? [])
+            .map((model) =>
+              typeof model.options?.limitEstimatedInputTokens === "number"
+                ? model.options.limitEstimatedInputTokens
+                : 150_000
+            ),
+        ) / 3,
+      ),
+  });
+  if (!range) return null;
+  const writable = spaces.filter((space) => space.access === "read_write");
+  const defaultSpace = spaces.find((space) => space.defaultWrite);
+  if (!defaultSpace || !writable.length) {
+    throw new Error("Thread has no default writable memory space.");
+  }
+  const sequence = Math.max(
+    checkpointSequence(previous),
+    ...(await checkpoints(context, message.threadId, agentId)).map(
+      checkpointSequence,
+    ),
+  ) + 1;
+  const id = `memory:${message.threadId}:${agentId}:${sequence}`;
+  try {
+    return await context.collections.longTermMemory.create({
+      id,
+      name: `Thread ${message.threadId} / ${agentId} / ${sequence}`,
+      threadId: message.threadId,
+      schemaVersion: "4",
+      strategy: "semantic_graph",
+      status: "pending",
+      memorySpaceId: defaultSpace.id,
+      readMemorySpaceIds: spaces.map((space) => space.id),
+      writeMemorySpaceIds: writable.map((space) => space.id),
+      defaultWriteMemorySpaceId: defaultSpace.id,
+      sequence,
+      agentId,
+      sourceStartMessageId: range.sourceStartMessageId,
+      sourceEndMessageId: range.sourceEndMessageId,
+      content: [],
+      contextSnapshotContent: [],
+      contextSnapshot: null,
+      embedding: null,
+      contentHash: null,
+      tokenEstimate: null,
+      error: null,
+      metadata: {
+        agentParticipantId: owner.id,
+        initiatorParticipantId,
+        estimatedTokens: range.estimatedTokens,
+        retainedEstimatedTokens: range.retainedEstimatedTokens,
+        retainedMessageCount: range.retainedMessageCount,
+        coverageCandidate: {
+          schema: "copilotz.memory.coverage.v1",
+          agentParticipantId: owner.id,
+          ...(optionalText(messageRecord.historyScopeId)
+            ? { historyScopeId: optionalText(messageRecord.historyScopeId) }
+            : {}),
+          branch: thread ? branchCertificate(thread) : "public",
+          startMessageId: range.sourceStartMessageId,
+          endMessageId: range.sourceEndMessageId,
+          sourceFingerprint: await sourceRangeFingerprint(
+            rangeMessages(snapshot.messages, {
+              sourceStartMessageId: range.sourceStartMessageId,
+              sourceEndMessageId: range.sourceEndMessageId,
+            }),
+          ),
+        },
+      },
+    }, { operationKey: `checkpoint:reserve:${id}` });
+  } catch (error) {
+    const concurrent = (await checkpoints(
+      context,
+      message.threadId,
+      agentId,
+      "pending",
+    ))[0];
+    if (concurrent) return concurrent;
+    throw error;
+  }
+}
+
 export function memoryReservationProcessor(
   config: LongTermMemoryConfig,
 ): Omit<Processor<MemoryProcessorContext>, "id"> {
@@ -3057,110 +3471,7 @@ export function memoryReservationProcessor(
         id: event.subject.id,
       });
       if (!messageRecord) return;
-      // Tool-call projections are intermediate Agent output. Consolidating
-      // them would race the Tool result/final answer and could reserve an
-      // incomplete turn, preventing the actual terminal output from being
-      // selected while that checkpoint remains pending.
-      if (coreToolPlanMetadata(messageRecord.metadata)) return;
-      const sender = await loadParticipantRecord(
-        context,
-        String(messageRecord.senderId),
-      );
-      if (!sender || sender.participantType !== "agent") return;
-      const message = Object.freeze({
-        ...messageRecord,
-        threadId: String(messageRecord.threadId),
-        sender,
-      });
-      const agentId = participantAgentId(message.sender);
-      if (!context.resources.agents[agentId]) return;
-      if (
-        (await checkpoints(context, message.threadId, agentId, "pending"))
-          .length
-      ) return;
-      const spaces = await ensureWritableMemorySpace(context, message.threadId);
-      const thread = await loadThreadRecord(context, message.threadId);
-      const workflowInitiator = workflowMetadata(messageRecord.metadata)
-        ?.initiatorParticipantId;
-      const humanParticipants =
-        thread?.participants.filter((participant) =>
-          participant.participantType === "human"
-        ) ?? [];
-      const initiatorParticipantId = workflowInitiator ??
-        (humanParticipants.length === 1 ? humanParticipants[0]?.id : undefined);
-      if (!initiatorParticipantId) {
-        throw new Error(
-          "Memory maintenance requires trusted initiating human provenance.",
-        );
-      }
-      const previous = await latestReadyCheckpoint(
-        context,
-        message.threadId,
-        agentId,
-        spaces,
-      );
-      const history = await listThreadMessageRecords(
-        context,
-        message.threadId,
-      );
-      const range = selectLongTermMemoryRange({
-        messages: await sourceMessages(context, history),
-        triggerMessageId: message.id,
-        previousBoundaryMessageId: optionalText(previous?.sourceEndMessageId),
-        triggerEstimatedTokens: config.triggerEstimatedTokens,
-        retainRecentEstimatedTokens: config.retainRecentEstimatedTokens,
-      });
-      if (!range) return;
-      const writable = spaces.filter((space) => space.access === "read_write");
-      const defaultSpace = spaces.find((space) => space.defaultWrite);
-      if (!defaultSpace || !writable.length) {
-        throw new Error("Thread has no default writable memory space.");
-      }
-      const sequence = Math.max(
-        checkpointSequence(previous),
-        ...(await checkpoints(context, message.threadId, agentId)).map(
-          checkpointSequence,
-        ),
-      ) + 1;
-      const id = `memory:${message.threadId}:${agentId}:${sequence}`;
-      try {
-        await context.collections.longTermMemory.create({
-          id,
-          name: `Thread ${message.threadId} / ${agentId} / ${sequence}`,
-          threadId: message.threadId,
-          schemaVersion: "4",
-          strategy: "semantic_graph",
-          status: "pending",
-          memorySpaceId: defaultSpace.id,
-          readMemorySpaceIds: spaces.map((space) => space.id),
-          writeMemorySpaceIds: writable.map((space) => space.id),
-          defaultWriteMemorySpaceId: defaultSpace.id,
-          sequence,
-          agentId,
-          sourceStartMessageId: range.sourceStartMessageId,
-          sourceEndMessageId: range.sourceEndMessageId,
-          content: [],
-          contextSnapshotContent: [],
-          contextSnapshot: null,
-          embedding: null,
-          contentHash: null,
-          tokenEstimate: null,
-          error: null,
-          metadata: {
-            agentParticipantId: message.sender.id,
-            initiatorParticipantId,
-            estimatedTokens: range.estimatedTokens,
-            retainedEstimatedTokens: range.retainedEstimatedTokens,
-            retainedMessageCount: range.retainedMessageCount,
-          },
-        }, { operationKey: `checkpoint:reserve:${id}` });
-      } catch (error) {
-        if (
-          (await checkpoints(context, message.threadId, agentId, "pending"))
-            .length
-        ) return;
-        throw error;
-      }
+      await reserveMemoryCheckpoint(context, messageRecord, config);
     },
   };
 }
@@ -3181,6 +3492,7 @@ function memoryTaskMetadata(checkpointId: string, ownerParticipantId: string) {
     id: checkpointId,
     ownerParticipantId,
     completeOn: { action: "consolidate_memory" },
+    history: "scope",
   });
 }
 
@@ -3237,6 +3549,14 @@ export function dispatchMemoryConsolidationProcessor(): Omit<
         .get({ id: event.subject.id });
       if (!checkpoint || checkpoint.status !== "pending") return;
       if (record(checkpoint.metadata).onDemand === true) return;
+      let messages: readonly ConversationMessage[];
+      try {
+        messages = await checkpointSourceMessages(context, checkpoint);
+      } catch (error) {
+        if (!(error instanceof MemorySourceInvalidatedError)) throw error;
+        await settleCheckpointError(context, checkpoint.id, "failed", error);
+        return;
+      }
       const threadId = requiredText(checkpoint.threadId, "Memory thread id");
       const agentId = requiredText(checkpoint.agentId, "Memory agent id");
       const participantId = requiredText(
@@ -3250,10 +3570,6 @@ export function dispatchMemoryConsolidationProcessor(): Omit<
           "Memory checkpoint participant or thread is unavailable.",
         );
       }
-      const messages = rangeMessages(
-        await listThreadMessageRecords(context, threadId),
-        checkpoint,
-      );
       await captureContextSnapshot(context, {
         checkpoint,
         agent: context.resources.agents[agentId]!,
@@ -3277,7 +3593,11 @@ export function dispatchMemoryConsolidationProcessor(): Omit<
       ).slice(0, 100);
       const instruction = buildMemoryConsolidationInstruction({
         spaces,
-        sourceMessages: await sourceMessages(context, messages),
+        sourceMessages: await projectedSourceMessages(context, {
+          threadId,
+          participantId: participant.id,
+          messages,
+        }),
         kinds: memoryKinds(context),
         previousRecords: previous,
         context: frozenSnapshot(checkpoint),
@@ -3422,11 +3742,66 @@ export function settleMemoryConsolidationProcessor(): Omit<
 
 export function createMemoryContextResource(
   enabled: boolean,
+  config: LongTermMemoryConfig = DEFAULT_LONG_TERM_MEMORY_CONFIG,
 ): ContextResource & Readonly<{ historyAfterMessageId?: string }> {
   return Object.freeze({
     id: MEMORY_RESOURCE_ID,
     type: "context",
     purposes: Object.freeze(["conversation"] as const),
+    async compact(input) {
+      if (!enabled || input.historyScopeId) return false;
+      const context = input.context as unknown as MemoryProcessorContext;
+      const trigger = await context.collections.message.get({
+        id: input.triggerMessageId,
+      });
+      if (!trigger || String(trigger.threadId) !== input.thread.id) {
+        return false;
+      }
+      const checkpoint = await reserveMemoryCheckpoint(
+        context,
+        trigger,
+        config,
+        {
+          ownerParticipantId: input.participant.id,
+          force: true,
+          maxSourceEstimatedTokens: Math.floor(input.limitEstimatedTokens / 3),
+        },
+      );
+      if (!checkpoint) return false;
+      const deadline = Date.now() + 45_000;
+      while (Date.now() < deadline) {
+        input.signal.throwIfAborted();
+        const current = await context.collections.longTermMemory.get({
+          id: checkpoint.id,
+        });
+        if (
+          !current || current.status === "failed" ||
+          current.status === "cancelled"
+        ) return false;
+        if (current.status === "ready") {
+          const thread = await loadThreadRecord(context, input.thread.id);
+          const boundary = thread && certifiedHistoryBoundary(current, {
+            agentId: input.agent.id,
+            participantId: input.participant.id,
+            thread,
+          });
+          return Boolean(boundary && boundary !== input.historyAfterMessageId);
+        }
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(input.signal.reason);
+          };
+          const timer = setTimeout(() => {
+            input.signal.removeEventListener("abort", abort);
+            resolve();
+          }, 50);
+          input.signal.addEventListener("abort", abort, { once: true });
+          if (input.signal.aborted) abort();
+        });
+      }
+      return false;
+    },
     async contribute(input) {
       if (!enabled) return null;
       // Context resources intentionally receive capabilities, not the processor object.
@@ -3459,6 +3834,19 @@ export function createMemoryContextResource(
         !checkpoint || !Array.isArray(checkpoint.content) ||
         !checkpoint.content.length
       ) return null;
+      const boundary = certifiedHistoryBoundary(checkpoint, {
+        agentId: input.agent.id,
+        participantId: input.participant.id,
+        historyScopeId: input.historyScopeId,
+        thread: input.thread,
+      });
+      // A scope-incompatible checkpoint may contain private material. Do not
+      // expose it as ordinary context. A compatible but uncertified checkpoint
+      // remains useful semantic context, but cannot trim raw history.
+      const coverage = record(record(checkpoint.metadata).coverage);
+      if (coverage.schema === "copilotz.memory.coverage.v1" && !boundary) {
+        return null;
+      }
       return Object.freeze({
         id: checkpoint.id,
         title: "YOUR PERSISTENT MEMORY",
@@ -3471,10 +3859,7 @@ export function createMemoryContextResource(
             role: "memory.refs",
           },
         capturedAt: checkpoint.updatedAt,
-        historyAfterMessageId: requiredText(
-          checkpoint.sourceEndMessageId,
-          "Memory history boundary",
-        ),
+        ...(boundary ? { historyAfterMessageId: boundary } : {}),
       });
     },
   });

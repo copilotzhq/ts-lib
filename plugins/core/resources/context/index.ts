@@ -30,6 +30,7 @@ export function defineContextResource(
     type: "context",
     purposes: Object.freeze([...new Set(resource.purposes)]),
     contribute: resource.contribute,
+    ...(resource.compact ? { compact: resource.compact } : {}),
   });
 }
 

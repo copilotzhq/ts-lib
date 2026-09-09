@@ -17,7 +17,7 @@ import type {
   ToolSystemPromptVariant,
   WireChatMessage,
 } from "./types.ts";
-import { LLMTranscriptError } from "./errors.ts";
+import { ContextInputLimitError, LLMTranscriptError } from "./errors.ts";
 import { estimateTextTokens } from "../authoring/token-estimation/index.ts";
 import { type ChatTokenEstimate, estimateChatMessages } from "./chat-tokens.ts";
 
@@ -227,7 +227,6 @@ function structuredStartTagSuffixOverlap(
 export interface FormattedMessagesResult {
   messages: WireChatMessage[];
   estimate: ChatTokenEstimate;
-  cutoffSourceMessageId?: string;
 }
 
 export function formatMessagesDetailed(
@@ -268,38 +267,10 @@ export function formatMessagesDetailed(
     ...systemMessage,
     ...messages.filter((m) => m.role !== "system"),
   ];
-  const toolCycleUnitKeys = buildToolCycleUnitKeys(formattedMessages);
-
-  const systemEstimatedTokens = estimateChatMessages(systemMessage, config)
-    .estimatedTokens;
-
   // Materialize first so tool I/O is embedded in `content` (tool_results /
   // tool_calls blocks). The input limiter only inspects `content` (plus
   // multimodal parts); it cannot see structured `toolCalls` on the wire.
   let normalizedMessages = formattedMessages.map(materializeHistoryMessage);
-
-  // Apply estimated input budget if specified. We preserve the system prompt and
-  // trim only the remaining history budget.
-  let cutoffSourceMessageId: string | undefined;
-  if (config?.limitEstimatedInputTokens) {
-    const historyLimit = config.limitEstimatedInputTokens -
-      systemEstimatedTokens;
-    const historyTarget = Math.max(
-      0,
-      Math.floor(config.limitEstimatedInputTokens * 0.8) -
-        systemEstimatedTokens,
-    );
-    const limited = limitMessageEstimatedInputTokens(
-      normalizedMessages,
-      historyLimit,
-      formattedMessages,
-      historyTarget,
-      config,
-      toolCycleUnitKeys,
-    );
-    normalizedMessages = limited.messages;
-    cutoffSourceMessageId = limited.cutoffSourceMessageId;
-  }
 
   // Ensure system message is first if it exists
   if (hasSystemContent && normalizedMessages[0]?.role !== "system") {
@@ -313,11 +284,25 @@ export function formatMessagesDetailed(
   // alternates assistant/user turns (system messages stay separate).
   const finalMessages = mergeConsecutiveMessages(normalizedMessages);
   assertWireMessageInvariants(finalMessages);
+  const estimate = estimateChatMessages(finalMessages, config);
   return {
     messages: finalMessages,
-    estimate: estimateChatMessages(finalMessages, config),
-    ...(cutoffSourceMessageId ? { cutoffSourceMessageId } : {}),
+    estimate,
   };
+}
+
+/** Applies the configured ceiling after the exact wire transcript is formed. */
+export function assertEstimatedInputLimit(
+  estimate: ChatTokenEstimate,
+  config: ProviderConfig | undefined,
+): void {
+  const limit = config?.limitEstimatedInputTokens;
+  if (
+    typeof limit === "number" && limit > 0 &&
+    estimate.estimatedTokens > limit
+  ) {
+    throw new ContextInputLimitError(estimate.estimatedTokens, limit);
+  }
 }
 
 export function formatMessages(request: ChatRequest): WireChatMessage[] {
@@ -562,66 +547,6 @@ function isToolResultRole(
   return role === "tool" || role === "tool_result";
 }
 
-function requestedToolCallIds(message: ChatMessage): string[] {
-  if (message.role !== "assistant" || !Array.isArray(message.toolCalls)) {
-    return [];
-  }
-  return message.toolCalls.flatMap((call) =>
-    typeof call.id === "string" && call.id.length > 0 &&
-      typeof call.output === "undefined"
-      ? [call.id]
-      : []
-  );
-}
-
-function resultToolCallIds(message: ChatMessage): string[] {
-  if (!isToolResultRole(message.role) || !Array.isArray(message.toolCalls)) {
-    return [];
-  }
-  return message.toolCalls.flatMap((call) =>
-    typeof call.id === "string" && call.id.length > 0 ? [call.id] : []
-  );
-}
-
-/**
- * Keep input trimming from splitting a completed tool cycle while preserving
- * every message's original graph position.
- */
-function buildToolCycleUnitKeys(
-  messages: ChatMessage[],
-): Array<string | undefined> {
-  const unitKeys: Array<string | undefined> = messages.map(() => undefined);
-  for (let requestIndex = 0; requestIndex < messages.length; requestIndex++) {
-    const requestedIds = requestedToolCallIds(messages[requestIndex]);
-    if (requestedIds.length === 0) continue;
-    const requested = new Set(requestedIds);
-    const found = new Set<string>();
-    let lastResultIndex = -1;
-    for (
-      let candidateIndex = requestIndex + 1;
-      candidateIndex < messages.length;
-      candidateIndex++
-    ) {
-      if (messages[candidateIndex].role === "assistant") break;
-      const resultIds = resultToolCallIds(messages[candidateIndex]);
-      if (
-        resultIds.length === 0 || resultIds.some((id) => !requested.has(id))
-      ) {
-        continue;
-      }
-      resultIds.forEach((id) => found.add(id));
-      lastResultIndex = candidateIndex;
-      if (requestedIds.every((id) => found.has(id))) break;
-    }
-    if (!requestedIds.every((id) => found.has(id))) continue;
-    const key = `tool-cycle:${requestIndex}`;
-    for (let index = requestIndex; index <= lastResultIndex; index++) {
-      unitKeys[index] = key;
-    }
-  }
-  return unitKeys;
-}
-
 function collectWireSegmentsFromMessage(
   message: ChatMessage,
 ): ComposeWireContentInput {
@@ -665,6 +590,25 @@ function collectWireSegmentsFromMessage(
     };
   }
 
+  if (
+    isToolResultRole(message.role) &&
+    typeof message.tool_call_id === "string" && message.tool_call_id &&
+    typeof message.toolPlanId === "string" && message.toolPlanId
+  ) {
+    return {
+      ...base,
+      visible: undefined,
+      noResponse: false,
+      toolResults: [{
+        id: message.tool_call_id,
+        planId: message.toolPlanId,
+        tool: { id: message.senderId ?? "tool" },
+        args: "{}",
+        output: strippedVisible,
+      }],
+    };
+  }
+
   if (toolCalls.length > 0) {
     return {
       ...base,
@@ -677,7 +621,9 @@ function collectWireSegmentsFromMessage(
 
 function shouldMaterializeWireContent(message: ChatMessage): boolean {
   if (message.role === "tool" || message.role === "tool_result") {
-    return Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+    return (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) ||
+      (typeof message.tool_call_id === "string" &&
+        typeof message.toolPlanId === "string");
   }
 
   const speakerLabel = message.metadata &&
@@ -744,11 +690,12 @@ function materializedWireRole(
 
 function lowerUnmaterializedMessage(message: ChatMessage): WireChatMessage {
   const role = toWireRole(message.role);
+  const { toolPlanId: _toolPlanId, ...wireMessage } = message;
   if (!isToolResultRole(message.role)) {
-    return { ...message, role };
+    return { ...wireMessage, role };
   }
   return {
-    ...message,
+    ...wireMessage,
     role,
     toolCalls: undefined,
     tool_call_id: undefined,
@@ -774,6 +721,7 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
     }
 
     const role = materializedWireRole(message, segments);
+    const { toolPlanId: _toolPlanId, ...wireMessage } = message;
 
     const nextMetadata = message.metadata &&
         typeof message.metadata === "object"
@@ -784,7 +732,7 @@ function materializeWireContent(message: ChatMessage): WireChatMessage {
     }
 
     return {
-      ...message,
+      ...wireMessage,
       role,
       content: applyComposedWireContent(message.content, composed),
       metadata: nextMetadata &&
@@ -984,103 +932,6 @@ function applyLocalStopSequences(
   }
 
   return { text: combined };
-}
-
-/**
- * Enforces the estimated input ceiling with 20% hysteresis, keeping complete
- * newest conversation/tool-cycle units.
- */
-function limitMessageEstimatedInputTokens<T extends ChatMessage>(
-  messages: T[],
-  limitTokens: number,
-  groupingMessages: ChatMessage[] = messages,
-  targetTokens = limitTokens,
-  config: ProviderConfig = {},
-  groupingUnitKeys: Array<string | undefined> = [],
-): { messages: T[]; cutoffSourceMessageId?: string } {
-  if (limitTokens <= 0) {
-    return {
-      messages: messages.filter((message) => message.role === "system"),
-    };
-  }
-
-  const systemMessages: T[] = [];
-  const units: T[][] = [];
-  const unitKeys: Array<string | undefined> = [];
-  messages.forEach((message, index) => {
-    if (message.role === "system") {
-      systemMessages.push(message);
-      return;
-    }
-    const groupingRole = groupingMessages[index]?.role ?? message.role;
-    const groupingUnitKey = groupingUnitKeys[index];
-    const continuesExplicitUnit = typeof groupingUnitKey === "string" &&
-      unitKeys[unitKeys.length - 1] === groupingUnitKey;
-    if (
-      units.length > 0 &&
-      (
-        continuesExplicitUnit ||
-        groupingRole === "tool" ||
-        groupingRole === "tool_result"
-      )
-    ) {
-      units[units.length - 1].push(message);
-    } else {
-      units.push([message]);
-      unitKeys.push(groupingUnitKey);
-    }
-  });
-
-  const measuredUnits = units.map((unit) => {
-    const messages = unit.filter((message) => Boolean(message.content));
-    return {
-      messages,
-      tokens: estimateChatMessages(messages, config).estimatedTokens,
-    };
-  }).filter((unit) => unit.messages.length > 0);
-  const measuredTotal = measuredUnits.reduce(
-    (sum, unit) => sum + unit.tokens,
-    0,
-  );
-  if (measuredTotal <= limitTokens) {
-    return {
-      messages: [
-        ...systemMessages,
-        ...measuredUnits.flatMap((unit) => unit.messages),
-      ],
-    };
-  }
-
-  const keptUnits: T[][] = [];
-  let retainedTokens = 0;
-  let firstKeptIndex = measuredUnits.length;
-  for (let index = measuredUnits.length - 1; index >= 0; index--) {
-    const unit = measuredUnits[index];
-    if (retainedTokens + unit.tokens <= targetTokens) {
-      keptUnits.unshift(unit.messages);
-      retainedTokens += unit.tokens;
-      firstKeptIndex = index;
-    } else {
-      // Never split a conversation/tool-cycle unit. Preserve an oversized
-      // newest unit so callers can handle the over-budget request explicitly.
-      if (keptUnits.length === 0) {
-        keptUnits.unshift(unit.messages);
-        firstKeptIndex = index;
-      }
-      break;
-    }
-  }
-  const dropped = measuredUnits.slice(0, firstKeptIndex).flatMap((unit) =>
-    unit.messages
-  );
-  const cutoffSourceMessageId = dropped.toReversed().flatMap((message) => {
-    const value = message.metadata?.sourceMessageId;
-    return typeof value === "string" ? [value] : [];
-  })[0];
-  return {
-    messages: [...systemMessages, ...keptUnits.flat()],
-    ...(cutoffSourceMessageId ? { cutoffSourceMessageId } : {}),
-  };
 }
 
 /**
@@ -2218,6 +2069,7 @@ export function buildToolCallsBlock(
           : OMITTED_PEER_TOOL_VALUE,
       };
       if (call.id) obj.tool_call_id = call.id;
+      if (call.planId) obj.tool_plan_id = call.planId;
       return [stringifyWireJson(obj)];
     }
 
@@ -2241,6 +2093,7 @@ export function buildToolCallsBlock(
           arguments: args,
         };
         if (stage.id) obj.tool_call_id = stage.id;
+        if (call.planId) obj.tool_plan_id = call.planId;
         return stringifyWireJson(obj);
       }).join(" | "),
     ];
@@ -2282,6 +2135,7 @@ export function buildToolResultsBlock(
           : OMITTED_PEER_TOOL_VALUE,
       };
       if (call.id) obj.tool_call_id = call.id;
+      if (call.planId) obj.tool_plan_id = call.planId;
       return [stringifyWireJson(obj)];
     }
 
@@ -2296,6 +2150,7 @@ export function buildToolResultsBlock(
       obj.output = normalizeToolResultOutput(call, fallback);
     }
     if (call.id) obj.tool_call_id = call.id;
+    if (call.planId) obj.tool_plan_id = call.planId;
     if (call.status) obj.status = call.status;
     return [stringifyWireJson(obj)];
   });

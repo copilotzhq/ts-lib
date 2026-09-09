@@ -19,8 +19,12 @@ import type {
   ActionContext,
   ActionInvocationMetadata,
   ActionMap,
+  ActionPrepareFactory,
+  ActionPrepareOptions,
   ActionTransactionOptions,
   AnyActionDefinition,
+  BoundActionCaller,
+  RuntimeActionCallers,
   RuntimeIdentity,
 } from "./types.ts";
 import { actionDefinitionHasSecrets } from "./protected-lifecycle.ts";
@@ -97,17 +101,14 @@ export type CreateActionCallersOptions = Readonly<{
   actionLifecycle: ActionLifecycleEmitter;
   content?: RuntimeContent;
   createInvocationKey?: (actionId: string) => string;
+  /** Stable root scope for deferred Action captures in one processor run. */
+  invocationScope?: string;
   identity?: RuntimeIdentity;
   signal: AbortSignal;
   createContext(
     input: Readonly<{
       frame: ActionInvocationFrame;
-      actions: Readonly<
-        Record<
-          string,
-          (input: unknown, options?: ActionCallOptions) => Promise<unknown>
-        >
-      >;
+      actions: RuntimeActionCallers;
       progress(value: unknown): Promise<void>;
     }>,
   ): ActionContext;
@@ -299,6 +300,7 @@ function createFrame(
   options: ActionCallOptions,
   parent: ActionInvocationFrame | undefined,
   invoker: CreateActionCallersOptions,
+  prepared = false,
 ): ActionInvocationFrame {
   const metadata = durableActionMetadata(options.metadata ?? {});
   const explicitKey = options.operationKey?.trim() || undefined;
@@ -307,17 +309,28 @@ function createFrame(
     options.identity,
   );
   const signal = mergeSignal(parent?.signal ?? invoker.signal, options.signal);
-  const hostInvocationKey = parent
+  const hostInvocationKey = parent || prepared
     ? undefined
     : invoker.createInvocationKey?.(action.id)?.trim() || undefined;
-  const identityInvocationKey = parent
+  // Root prepared calls replay a durable capture, so neither their stable
+  // operation key nor their lifecycle identity may depend on a host callback.
+  // Lifecycle storage already isolates the fallback scope by namespace.
+  const preparedInvocationScope = prepared
+    ? invoker.invocationScope?.trim() || "lifecycle"
+    : undefined;
+  const identityInvocationKey = parent || prepared
     ? undefined
     : identity?.deduplicationId?.trim() || undefined;
-  const rootKey = parent?.rootKey ?? hostInvocationKey ??
+  const rootKey = parent?.rootKey ?? preparedInvocationScope ??
+    hostInvocationKey ??
     identityInvocationKey ?? explicitKey ?? `invocation:${crypto.randomUUID()}`;
   const localKey = explicitKey ?? String(parent?.nextActionIndex() ?? 1);
   const actionRunId = parent
     ? `${parent.actionRunId}/action:${action.id}:${localKey}`
+    : preparedInvocationScope
+    ? explicitKey
+      ? `${preparedInvocationScope}:action:${action.id}:${explicitKey}`
+      : `${preparedInvocationScope}:action:${action.id}`
     : hostInvocationKey
     ? explicitKey ? `${hostInvocationKey}:${explicitKey}` : hostInvocationKey
     : identityInvocationKey
@@ -399,6 +412,22 @@ function validateReceipt(
   }
 }
 
+function validateReceiptIdentity(
+  receipt: ActionEventData,
+  frame: ActionInvocationFrame,
+): void {
+  if (receipt.actionId !== frame.actionId) {
+    throw new Error(
+      `Action run '${frame.actionRunId}' belongs to '${receipt.actionId}', not '${frame.actionId}'.`,
+    );
+  }
+  if (receipt.parentActionRunId !== frame.parentActionRunId) {
+    throw new Error(
+      `Action run '${frame.actionRunId}' was retried with a different parent.`,
+    );
+  }
+}
+
 async function loadInvoked(
   lifecycle: ActionLifecycleEmitter,
   frame: ActionInvocationFrame,
@@ -427,9 +456,14 @@ function actionCaller(
   actions: ActionMap,
   invoker: CreateActionCallersOptions,
   parent?: ActionInvocationFrame,
-): (input: unknown, options?: ActionCallOptions) => Promise<unknown> {
-  return async (input, options = {}) => {
-    const frame = createFrame(action, options, parent, invoker);
+): BoundActionCaller<AnyActionDefinition> {
+  const invoke = async (
+    input: unknown,
+    options: ActionCallOptions = {},
+    captureRace = false,
+    prepared = false,
+  ): Promise<unknown> => {
+    const frame = createFrame(action, options, parent, invoker, prepared);
     throwIfAborted(frame.signal);
 
     // Execution receives the canonical value; lifecycle persistence applies
@@ -469,29 +503,65 @@ function actionCaller(
     if (!preparedContent) validateInput(durableInput);
     const inputSecrets = protectedStrings(action.inputSchema, durableInput);
     assertMetadataIsSecretFree(frame.metadata, inputSecrets);
-    const existing = await loadTerminal(
-      invoker.actionLifecycle,
-      frame,
-      durableInput,
-    );
+    const existing = captureRace
+      ? await invoker.actionLifecycle.terminal(frame.actionRunId)
+      : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+    if (existing && captureRace) {
+      validateReceiptIdentity(existing, frame);
+      return await invoke(
+        existing.input,
+        {
+          ...options,
+          metadata: existing.metadata,
+        },
+        false,
+        prepared,
+      );
+    }
     if (existing) return restoreTerminal(existing);
 
-    const invoked = await loadInvoked(
-      invoker.actionLifecycle,
-      frame,
-      durableInput,
-    );
+    const invoked = captureRace
+      ? await invoker.actionLifecycle.invoked(frame.actionRunId)
+      : await loadInvoked(invoker.actionLifecycle, frame, durableInput);
+    if (invoked && captureRace) {
+      validateReceiptIdentity(invoked, frame);
+      return await invoke(
+        invoked.input,
+        {
+          ...options,
+          metadata: invoked.metadata,
+        },
+        false,
+        prepared,
+      );
+    }
     const executionInput = preparedContent
       ? await preparedContent.hydrate()
       : durableInput;
     if (preparedContent) validateInput(executionInput);
     throwIfAborted(frame.signal);
     if (!invoked) {
-      await invoker.actionLifecycle.emit({
-        ...lifecycleCommon(frame, durableInput),
-        status: "invoked",
-        deduplicationId: `${frame.actionRunId}:action:invoked`,
-      });
+      try {
+        await invoker.actionLifecycle.emit({
+          ...lifecycleCommon(frame, durableInput),
+          status: "invoked",
+          deduplicationId: `${frame.actionRunId}:action:invoked`,
+        });
+      } catch (error) {
+        if (!captureRace) throw error;
+        const winner = await invoker.actionLifecycle.invoked(frame.actionRunId);
+        if (!winner) throw error;
+        validateReceiptIdentity(winner, frame);
+        return await invoke(
+          winner.input,
+          {
+            ...options,
+            metadata: winner.metadata,
+          },
+          false,
+          prepared,
+        );
+      }
     }
 
     let progressIndex = 0;
@@ -521,12 +591,7 @@ function actionCaller(
       actions,
       invoker,
       frame,
-    ) as Readonly<
-      Record<
-        string,
-        (input: unknown, options?: ActionCallOptions) => Promise<unknown>
-      >
-    >;
+    ) as RuntimeActionCallers;
     const context = invoker.createContext({
       frame,
       actions: nestedActions,
@@ -557,21 +622,21 @@ function actionCaller(
           deduplicationId: `${frame.actionRunId}:action:terminal`,
         });
       } catch (error) {
-        const terminal = await loadTerminal(
-          invoker.actionLifecycle,
-          frame,
-          durableInput,
-        );
+        const terminal = captureRace
+          ? await invoker.actionLifecycle.terminal(frame.actionRunId)
+          : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+        if (terminal && captureRace) validateReceiptIdentity(terminal, frame);
         if (terminal) return restoreTerminal(terminal);
         throw error;
       }
       return structuredClone(durableOutput);
     } catch (error) {
-      const existingTerminal = await loadTerminal(
-        invoker.actionLifecycle,
-        frame,
-        durableInput,
-      );
+      const existingTerminal = captureRace
+        ? await invoker.actionLifecycle.terminal(frame.actionRunId)
+        : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+      if (existingTerminal && captureRace) {
+        validateReceiptIdentity(existingTerminal, frame);
+      }
       if (existingTerminal) return restoreTerminal(existingTerminal);
       const status = frame.signal?.aborted || isCancellationError(error)
         ? "cancelled" as const
@@ -586,17 +651,84 @@ function actionCaller(
           deduplicationId: `${frame.actionRunId}:action:terminal`,
         });
       } catch (settlementError) {
-        const terminal = await loadTerminal(
-          invoker.actionLifecycle,
-          frame,
-          durableInput,
-        );
+        const terminal = captureRace
+          ? await invoker.actionLifecycle.terminal(frame.actionRunId)
+          : await loadTerminal(invoker.actionLifecycle, frame, durableInput);
+        if (terminal && captureRace) validateReceiptIdentity(terminal, frame);
         if (terminal) return restoreTerminal(terminal);
         throw settlementError;
       }
       throw settledActionError(error);
     }
   };
+  const caller = Object.assign(invoke, {
+    async prepare(
+      factory: ActionPrepareFactory<unknown>,
+      options: ActionPrepareOptions,
+    ): Promise<unknown> {
+      if (
+        typeof options?.operationKey !== "string" ||
+        !options.operationKey.trim()
+      ) {
+        throw new TypeError("Prepared Action operationKey must be non-empty.");
+      }
+      const bootstrap = createFrame(action, options, parent, invoker, true);
+      const restore = async (receipt: ActionEventData): Promise<unknown> => {
+        validateReceiptIdentity(receipt, bootstrap);
+        return await invoke(
+          receipt.input,
+          {
+            ...options,
+            metadata: receipt.metadata,
+          },
+          false,
+          true,
+        );
+      };
+      throwIfAborted(bootstrap.signal);
+      const terminal = await invoker.actionLifecycle.terminal(
+        bootstrap.actionRunId,
+      );
+      if (terminal) return await restore(terminal);
+      const invoked = await invoker.actionLifecycle.invoked(
+        bootstrap.actionRunId,
+      );
+      if (invoked) return await restore(invoked);
+
+      const prepared = await factory();
+      if (
+        !prepared || typeof prepared !== "object" ||
+        !Object.hasOwn(prepared, "input")
+      ) {
+        throw new TypeError("Action prepare factory must return an input.");
+      }
+      throwIfAborted(bootstrap.signal);
+      // A receipt may have won while preparation was in progress. Never compare
+      // freshly selected history to that capture; replay the durable winner.
+      const afterPreparationTerminal = await invoker.actionLifecycle.terminal(
+        bootstrap.actionRunId,
+      );
+      if (afterPreparationTerminal) {
+        return await restore(afterPreparationTerminal);
+      }
+      const afterPreparationInvoked = await invoker.actionLifecycle.invoked(
+        bootstrap.actionRunId,
+      );
+      if (afterPreparationInvoked) {
+        return await restore(afterPreparationInvoked);
+      }
+      return await invoke(
+        prepared.input,
+        {
+          ...options,
+          metadata: prepared.metadata,
+        },
+        true,
+        true,
+      );
+    },
+  });
+  return Object.freeze(caller) as BoundActionCaller<AnyActionDefinition>;
 }
 
 /** Builds the single direct Action API from the composed Action alias map. */

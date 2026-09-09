@@ -102,6 +102,13 @@ Deno.test("collection predicate compiler filters and paginates in PGlite with ex
       ["a", "b", "d", "e"],
     );
     assertEquals(await ids({ field: "n", eq: 10 }), ["b"]);
+    assertEquals(await ids({ field: "n", jsonEquals: 10 }), ["b"]);
+    assertEquals(
+      await ids({ field: "visibility", jsonEquals: { kind: "public" } }),
+      ["a", "d", "e"],
+    );
+    assertEquals(await ids({ field: "tags", jsonEquals: ["x"] }), ["a"]);
+    assertEquals(await ids({ field: "scope", jsonEquals: null }), ["b"]);
     assertEquals(await ids({ field: "n", eq: "10" }), ["c"]);
     assertEquals(await ids({ field: "n", in: [2, false] }), ["a", "d"]);
     assertEquals(await ids({ field: "n", gt: 2 }), ["b"]);
@@ -298,6 +305,16 @@ Deno.test("collection predicates reject malformed, unbounded, and injectable str
     { field: "id", inIgnoreCase: Array(1001).fill("x") },
     { field: "createdAt", eqIgnoreCase: "2026-09-06" },
     { field: "updatedAt", inIgnoreCase: ["2026-09-06"] },
+    { field: "n", jsonEquals: undefined },
+    { field: "n", jsonEquals: NaN },
+    { field: "n", jsonEquals: new Date() },
+    { field: "n", jsonEquals: { value: undefined } },
+    { field: "n", jsonEquals: [, 1] },
+    {
+      field: "n",
+      jsonEquals: Object.defineProperty({}, "value", { get: () => 1 }),
+    },
+    { field: "n", jsonEquals: "x".repeat(1024 * 1024 + 1) },
   ];
   let deep: CollectionPredicate = { and: [] };
   for (let i = 0; i < 17; i++) deep = { not: deep };
@@ -327,4 +344,10 @@ Deno.test("collection predicates reject malformed, unbounded, and injectable str
   );
   assertEquals(sql.includes("' OR TRUE --"), false);
   assertEquals(params, [JSON.stringify("' OR TRUE --")]);
+  const jsonParams: unknown[] = [];
+  compileCollectionPredicate(
+    { field: "metadata", jsonEquals: { z: 1, a: 2 } },
+    jsonParams,
+  );
+  assertEquals(jsonParams, ['{"a":2,"z":1}']);
 });

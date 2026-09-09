@@ -1,3 +1,6 @@
+import { assertJsonValue } from "../json.ts";
+import { stableStringify } from "./equal.ts";
+
 /** Scalar predicates deliberately avoid string/number coercion. */
 export type CollectionPredicateValue = string | number | boolean | null;
 export type CollectionPredicate =
@@ -21,12 +24,16 @@ export type CollectionPredicate =
       | Readonly<{ eqIgnoreCase: string }>
       | Readonly<{ inIgnoreCase: readonly string[] }>
       | Readonly<{ overlaps: readonly CollectionPredicateValue[] }>
+      | Readonly<{ jsonEquals: unknown }>
     )
   );
 
 const MAX_DEPTH = 16;
 const MAX_NODES = 256;
 const MAX_VALUES = 1000;
+const MAX_JSON_LENGTH = 1024 * 1024;
+const MAX_JSON_DEPTH = 64;
+const MAX_JSON_NODES = 65_536;
 // ECMAScript String.trim whitespace, including BOM and Unicode separators.
 const BLANK_CHARACTERS =
   "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
@@ -46,6 +53,18 @@ export function compileCollectionPredicate(
       typeof value === "number" && Number.isFinite(value)
     ) return value;
     throw new TypeError("Predicate values must be finite JSON scalars.");
+  };
+  const canonicalJson = (value: unknown): string => {
+    assertJsonValue(value, {
+      label: "jsonEquals",
+      maxDepth: MAX_JSON_DEPTH,
+      maxNodes: MAX_JSON_NODES,
+    });
+    const serialized = stableStringify(value);
+    if (serialized.length > MAX_JSON_LENGTH) {
+      throw new TypeError("jsonEquals exceeds its size limit.");
+    }
+    return serialized;
   };
   const visit = (input: unknown, depth: number): string => {
     if (++nodes > MAX_NODES || depth > MAX_DEPTH) {
@@ -101,6 +120,11 @@ export function compileCollectionPredicate(
     const text = column ?? `(data #>> '{${field.split(".").join(",")}}')`;
     const op = keys.find((key) => key !== "field")!;
     const value = node[op];
+    if (op === "jsonEquals") {
+      return `(COALESCE(${json} = ${
+        parameter(canonicalJson(value))
+      }::jsonb, FALSE))`;
+    }
     values += Array.isArray(value) ? value.length : 1;
     if (values > MAX_VALUES) {
       throw new TypeError("Collection predicate exceeds its value limit.");
@@ -204,9 +228,12 @@ export function compileCollectionPredicate(
           "Record identity and timestamp ranges require strings.",
         );
       }
-      return `(COALESCE(${column} ${comparison} ${parameter(value)}${
+      // Physical node columns are NOT NULL. Unlike nullable JSON paths, a
+      // direct comparison retains two-valued semantics and lets PostgreSQL
+      // use the timestamp/id keyset indexes without a COALESCE wrapper.
+      return `(${column} ${comparison} ${parameter(value)}${
         timestamp ? "::timestamptz" : "::text"
-      }, FALSE))`;
+      })`;
     }
     return `(COALESCE(jsonb_typeof(${json}) = '${
       typeof value === "number" ? "number" : "string"

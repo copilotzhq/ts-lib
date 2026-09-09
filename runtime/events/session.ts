@@ -25,6 +25,13 @@ export type SqlSession = SqlExecutor & {
   transaction<T>(
     operation: (transaction: SqlExecutor) => Promise<T>,
   ): Promise<T>;
+  /**
+   * Runs a short, repeatable read-only database snapshot. The callback must
+   * finish its selection before content or provider work begins.
+   */
+  readSnapshot?<T>(
+    operation: (snapshot: SqlExecutor) => Promise<T>,
+  ): Promise<T>;
   /** Optional PostgreSQL notification seam; absence enables bounded fallback. */
   listen?(
     channel: string,
@@ -44,23 +51,32 @@ type DatabaseLike = SqlExecutor & {
 export function createSqlSession(database: DatabaseLike): SqlSession {
   const query: SqlExecutor["query"] = (sql, params) =>
     database.query(sql, params);
+  const transaction: SqlSession["transaction"] = async (operation) => {
+    if (typeof database.__copilotzTransaction === "function") {
+      return await database.__copilotzTransaction(() => operation({ query }));
+    }
+    if (typeof database.transaction === "function") {
+      return await database.transaction(operation);
+    }
+    throw createEventStoreError(
+      "event_transaction_unavailable",
+      "The event store requires an atomic database transaction capability.",
+    );
+  };
 
   return {
     query,
     ...(typeof database.listen === "function"
       ? { listen: database.listen.bind(database) }
       : {}),
-    async transaction(operation) {
-      if (typeof database.__copilotzTransaction === "function") {
-        return await database.__copilotzTransaction(() => operation({ query }));
-      }
-      if (typeof database.transaction === "function") {
-        return await database.transaction(operation);
-      }
-      throw createEventStoreError(
-        "event_transaction_unavailable",
-        "The event store requires an atomic database transaction capability.",
-      );
+    transaction,
+    async readSnapshot(operation) {
+      return await transaction(async (snapshot) => {
+        await snapshot.query(
+          "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        );
+        return await operation(snapshot);
+      });
     },
   };
 }

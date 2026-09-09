@@ -1,6 +1,7 @@
 import { assertEquals, assertNotEquals } from "@std/assert";
 
 import {
+  deriveChatGptCodexCacheKey,
   deriveInternalPromptCacheKey,
   readInternalPromptCacheKey,
   withInternalPromptCacheKey,
@@ -35,6 +36,31 @@ Deno.test("internal prompt cache keys are stable and isolated", async () => {
     "scope",
   );
   assertNotEquals(delimitedNamespace, delimitedThread);
+});
+
+Deno.test("ChatGPT Codex cache keys isolate accounts and Core session scopes", async () => {
+  const key = await deriveChatGptCodexCacheKey(
+    "account-a",
+    "tenant",
+    "thread",
+    "agent",
+  );
+  assertEquals(
+    key,
+    await deriveChatGptCodexCacheKey("account-a", "tenant", "thread", "agent"),
+  );
+  const changed: readonly (readonly [string, string, string, string])[] = [
+    ["account-b", "tenant", "thread", "agent"],
+    ["account-a", "other-tenant", "thread", "agent"],
+    ["account-a", "tenant", "other-thread", "agent"],
+    ["account-a", "tenant", "thread", "other-agent"],
+  ];
+  for (const [account, namespace, thread, agent] of changed) {
+    assertNotEquals(
+      key,
+      await deriveChatGptCodexCacheKey(account, namespace, thread, agent),
+    );
+  }
 });
 
 Deno.test("internal prompt cache key is runtime-only", () => {

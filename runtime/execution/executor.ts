@@ -16,8 +16,12 @@ import {
 } from "./types.ts";
 import { createDeliveryWorkload } from "./workload.ts";
 import { relayCopilotzWorkHandle } from "./protocol.ts";
+import { reportDeliveryDiagnostic } from "./diagnostics.ts";
+import { isStreamOutputDescriptor } from "../streams/index.ts";
 
 const RECOVERY_MINIMUM_DELAY_MS = 1_000;
+const PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS = 1_000;
+const MAX_PLACEMENT_FAILURE_DIAGNOSTICS = 10_000;
 
 function positiveCapacity(value: number | undefined): number {
   const capacity = value ?? 8;
@@ -85,6 +89,8 @@ export function createDeliveryExecutor(
     leaseMs: options.leaseMs,
     heartbeatMs: options.heartbeatMs,
     scheduler: options.scheduler,
+    workerId,
+    onDiagnostic: options.onDiagnostic,
   });
   if (Object.prototype.hasOwnProperty.call(options.workloads ?? {}, workload)) {
     throw new TypeError(
@@ -227,7 +233,9 @@ export function createDeliveryExecutor(
     Readonly<{ handle: unknown; dueAtMs: number }>
   >();
   const continuousRecoverySchemas = new Set<string>();
+  const lastPlacementFailureDiagnosticAt = new Map<string, number>();
   let scheduling = false;
+  let capacityBlocked = false;
   let scheduleTimer: ReturnType<typeof setTimeout> | undefined;
   const deliveryKey = (
     delivery: string | EventDelivery,
@@ -241,6 +249,27 @@ export function createDeliveryExecutor(
     namespace: string,
     settlementScopeId: string,
   ): string => `${databaseSchema}\u0000${namespace}\u0000${settlementScopeId}`;
+  const shouldReportPlacementAttempt = (
+    key: string,
+    nowMs: number,
+  ): boolean => {
+    const previous = lastPlacementFailureDiagnosticAt.get(key);
+    return previous === undefined ||
+      nowMs - previous >= PLACEMENT_FAILURE_DIAGNOSTIC_INTERVAL_MS;
+  };
+  const recordPlacementFailureDiagnostic = (
+    key: string,
+    nowMs: number,
+  ): void => {
+    if (
+      !lastPlacementFailureDiagnosticAt.has(key) &&
+      lastPlacementFailureDiagnosticAt.size >= MAX_PLACEMENT_FAILURE_DIAGNOSTICS
+    ) {
+      const oldest = lastPlacementFailureDiagnosticAt.keys().next().value;
+      if (oldest) lastPlacementFailureDiagnosticAt.delete(oldest);
+    }
+    lastPlacementFailureDiagnosticAt.set(key, nowMs);
+  };
   const trackOutputScope = (
     delivery: EventDelivery,
     event: DurableEvent,
@@ -274,9 +303,65 @@ export function createDeliveryExecutor(
         if (
           localCapacity !== undefined &&
           active.size + dispatchTasks.size >= localCapacity
-        ) break;
+        ) {
+          if (!capacityBlocked) {
+            capacityBlocked = true;
+            const queued = typeof delivery === "string" ? undefined : delivery;
+            const queuedId = typeof delivery === "string"
+              ? delivery
+              : undefined;
+            reportDeliveryDiagnostic(options.onDiagnostic, {
+              phase: "capacity_blocked",
+              timestampMs: Date.now(),
+              workerId,
+              ...(queued ? {} : {
+                deliveryId: queuedId,
+                databaseSchema: defaultDatabaseSchema,
+              }),
+              ...(queued
+                ? {
+                  eventId: queued.eventId,
+                  deliveryId: queued.id,
+                  consumerId: queued.consumerId,
+                  databaseSchema: queued.databaseSchema,
+                }
+                : {}),
+              capacity: localCapacity,
+              activeCount: active.size + dispatchTasks.size,
+              queuedCount: scheduled.size,
+            });
+          }
+          break;
+        }
+        if (capacityBlocked) {
+          capacityBlocked = false;
+          const queued = typeof delivery === "string" ? undefined : delivery;
+          const queuedId = typeof delivery === "string" ? delivery : undefined;
+          reportDeliveryDiagnostic(options.onDiagnostic, {
+            phase: "capacity_unblocked",
+            timestampMs: Date.now(),
+            workerId,
+            ...(queued ? {} : {
+              deliveryId: queuedId,
+              databaseSchema: defaultDatabaseSchema,
+            }),
+            ...(queued
+              ? {
+                eventId: queued.eventId,
+                deliveryId: queued.id,
+                consumerId: queued.consumerId,
+                databaseSchema: queued.databaseSchema,
+              }
+              : {}),
+            capacity: localCapacity,
+            activeCount: active.size + dispatchTasks.size,
+            queuedCount: scheduled.size,
+          });
+        }
         try {
-          const handle = await dispatchDelivery(delivery);
+          const handle = await dispatchDelivery(delivery, {
+            origin: "scheduled",
+          });
           scheduled.delete(id);
           void handle.done.finally(() => schedulePump()).catch(() => undefined);
         } catch {
@@ -375,9 +460,13 @@ export function createDeliveryExecutor(
     });
   };
 
+  type DispatchOptions = Readonly<{
+    databaseSchema?: string;
+    origin?: "direct" | "scheduled" | "recovery";
+  }>;
   const dispatchDelivery = async (
     deliveryInput: string | EventDelivery,
-    dispatchOptions: { databaseSchema?: string } = {},
+    dispatchOptions: DispatchOptions = {},
   ): Promise<DeliveryExecutionHandle> => {
     if (closed) throw new Error("Delivery executor is shut down.");
     const requestedSchema = typeof deliveryInput === "string"
@@ -415,12 +504,88 @@ export function createDeliveryExecutor(
         dispatchAttemptId: attemptId,
         idempotencyKey: delivery.id,
       });
-      const dispatched = await dispatcher.dispatch({
-        workload,
-        ...(target ? { target } : {}),
-        metadata,
+      const placementNowMs = Date.now();
+      const reportPlacement = options.onDiagnostic !== undefined &&
+        shouldReportPlacementAttempt(key, placementNowMs);
+      if (reportPlacement) {
+        reportDeliveryDiagnostic(options.onDiagnostic, {
+          phase: "placement_requested",
+          timestampMs: placementNowMs,
+          eventId: event.id,
+          deliveryId: delivery.id,
+          consumerId: delivery.consumerId,
+          dispatchAttemptId: attemptId,
+          workerId: target?.workerId ?? workerId,
+          databaseSchema: delivery.databaseSchema,
+          namespace: event.namespace,
+          capacity: localCapacity,
+          activeCount: active.size + dispatchTasks.size,
+          queuedCount: scheduled.size,
+          origin: dispatchOptions.origin ?? "direct",
+        });
+      }
+      let dispatched: Awaited<ReturnType<DeliveryDispatcher["dispatch"]>>;
+      try {
+        dispatched = await dispatcher.dispatch({
+          workload,
+          ...(target ? { target } : {}),
+          metadata,
+        });
+      } catch (error) {
+        if (reportPlacement) {
+          reportDeliveryDiagnostic(options.onDiagnostic, {
+            phase: "placement_failed",
+            timestampMs: Date.now(),
+            eventId: event.id,
+            deliveryId: delivery.id,
+            consumerId: delivery.consumerId,
+            dispatchAttemptId: attemptId,
+            workerId: target?.workerId ?? workerId,
+            databaseSchema: delivery.databaseSchema,
+            namespace: event.namespace,
+            status: "rejected",
+            capacity: localCapacity,
+            activeCount: active.size + dispatchTasks.size,
+            queuedCount: scheduled.size,
+            origin: dispatchOptions.origin ?? "direct",
+          });
+          recordPlacementFailureDiagnostic(key, placementNowMs);
+        }
+        throw error;
+      }
+      lastPlacementFailureDiagnosticAt.delete(key);
+      reportDeliveryDiagnostic(options.onDiagnostic, {
+        phase: "placement_accepted",
+        timestampMs: Date.now(),
+        eventId: event.id,
+        deliveryId: delivery.id,
+        consumerId: delivery.consumerId,
+        dispatchAttemptId: attemptId,
+        operationId: dispatched.operationId,
+        workerId: target?.workerId ?? workerId,
+        databaseSchema: delivery.databaseSchema,
+        namespace: event.namespace,
+        capacity: localCapacity,
+        activeCount: active.size + dispatchTasks.size,
+        queuedCount: scheduled.size,
+        origin: dispatchOptions.origin ?? "direct",
       });
       const work = relayCopilotzWorkHandle(dispatched, {
+        onEventFrame: (output) => {
+          if (isStreamOutputDescriptor(output)) return;
+          reportDeliveryDiagnostic(options.onDiagnostic, {
+            phase: "gateway_event_frame_received",
+            timestampMs: Date.now(),
+            ...(output.durable ? { eventId: output.id } : {}),
+            deliveryId: delivery.id,
+            consumerId: delivery.consumerId,
+            dispatchAttemptId: attemptId,
+            operationId: dispatched.operationId,
+            workerId: target?.workerId ?? workerId,
+            databaseSchema: delivery.databaseSchema,
+            namespace: output.namespace,
+          });
+        },
         onOutput: options.onOutput
           ? (output) =>
             options.onOutput!(output, {
@@ -468,9 +633,21 @@ export function createDeliveryExecutor(
       const store = await resolveStore(databaseSchema);
       const { databaseSchema: _databaseSchema, ...filters } = listOptions;
       const deliveries = await store.listRecoverable(filters);
+      for (const delivery of deliveries) {
+        reportDeliveryDiagnostic(options.onDiagnostic, {
+          phase: "recovery_selected",
+          timestampMs: Date.now(),
+          eventId: delivery.eventId,
+          deliveryId: delivery.id,
+          consumerId: delivery.consumerId,
+          databaseSchema: delivery.databaseSchema,
+          status: delivery.status,
+          origin: "recovery",
+        });
+      }
       const settled = await Promise.allSettled(
         deliveries.map((delivery) =>
-          dispatchDelivery(delivery, { databaseSchema })
+          dispatchDelivery(delivery, { databaseSchema, origin: "recovery" })
         ),
       );
       const handles: DeliveryExecutionHandle[] = [];

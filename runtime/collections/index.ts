@@ -31,6 +31,8 @@ export type {
   ScopedCollectionReadOptions,
   ScopedCollections,
   ScopedCollectionUpdateInput,
+  SnapshotCollection,
+  SnapshotCollections,
   TransactionCollection,
 } from "./kernel.ts";
 export {

@@ -97,6 +97,7 @@ function adapter(script: Script, inputs: LlmAdapterCallInput[]): LlmAdapter {
 function memoryProposal() {
   return {
     outcome: "changes",
+    continuity: "Compass remains the active project for the next turn.",
     entities: [{
       localId: "compass",
       kind: "entity.project",
@@ -115,7 +116,7 @@ function text(input: LlmAdapterCallInput): string {
 
 async function fixture(
   script: Script,
-  options: Readonly<{ enabled?: boolean }> = {},
+  options: Readonly<{ enabled?: boolean; inputLimit?: number }> = {},
 ): Promise<Fixture> {
   const db = await createTestDatabase({ url: ":memory:" });
   const inputs: LlmAdapterCallInput[] = [];
@@ -137,6 +138,9 @@ async function fixture(
             generate: [{
               connection: "test_model",
               model: "native-memory-model",
+              ...(options.inputLimit === undefined ? {} : {
+                options: { limitEstimatedInputTokens: options.inputLimit },
+              }),
             }],
           },
           capabilities: { tools: ["consolidate_memory"] },
@@ -196,10 +200,9 @@ function collection(fixture: Fixture, name: string): any {
   return value as never;
 }
 
-async function startUserTurn(fixture: Fixture, id = "message:user") {
+async function setupThread(fixture: Fixture) {
   const participants = collection(fixture, "participant");
   const threads = collection(fixture, "thread");
-  const messages = collection(fixture, "message");
   await participants.create({
     id: "human-a",
     externalId: "human-a",
@@ -216,24 +219,42 @@ async function startUserTurn(fixture: Fixture, id = "message:user") {
     id: "thread-a",
     participantIds: ["human-a", "agent-north"],
   }, { namespace: NAMESPACE });
+}
+
+async function createHumanMessage(
+  fixture: Fixture,
+  input: Readonly<
+    { id: string; text: string; recipientIds?: readonly string[] }
+  >,
+) {
+  const messages = collection(fixture, "message");
   const content = await fixture.engine.content.preparer.prepare(
-    "Remember Compass and answer normally.",
-    { namespace: NAMESPACE, idempotencyKey: `${id}:content` },
+    input.text,
+    { namespace: NAMESPACE, idempotencyKey: `${input.id}:content` },
   );
   const created = await messages.create({
-    id,
+    id: input.id,
     threadId: "thread-a",
     senderId: "human-a",
-    recipientIds: ["agent-north"],
+    recipientIds: input.recipientIds ?? [],
     content,
     metadata: {},
   }, {
     namespace: NAMESPACE,
     threadId: "thread-a",
-    routing: { senderId: "human-a", recipientIds: ["agent-north"] },
-    identity: { deduplicationId: `${id}:create` },
+    routing: { senderId: "human-a", recipientIds: input.recipientIds ?? [] },
+    identity: { deduplicationId: `${input.id}:create` },
   });
   return created.id;
+}
+
+async function startUserTurn(fixture: Fixture, id = "message:user") {
+  await setupThread(fixture);
+  return await createHumanMessage(fixture, {
+    id,
+    text: "Remember Compass and answer normally.",
+    recipientIds: ["agent-north"],
+  });
 }
 
 async function eventually(
@@ -308,7 +329,19 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       async () => (await checkpoints(run))[0]?.status === "ready",
     );
 
-    assertEquals(run.inputs.length, 2);
+    const saved = await checkpoint(run);
+    assertEquals(
+      run.inputs.length,
+      2,
+      JSON.stringify({
+        error: saved.error,
+        metadata: saved.metadata,
+        inputs: run.inputs.map((input) => ({
+          messages: input.request.messages.length,
+          textLength: text(input).length,
+        })),
+      }),
+    );
     const maintenance = run.inputs[1]!;
     assertEquals(maintenance.model, "native-memory-model");
     assertEquals(maintenance.providerModel, "native-memory-model");
@@ -316,11 +349,29 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
       maintenance.request.instructions ?? "",
       "NORTH_NATIVE_MEMORY_INSTRUCTIONS",
     );
-    assertStringIncludes(text(maintenance), "NATIVE_MEMORY_CONTEXT");
+    const maintenanceText = text(maintenance);
+    assertStringIncludes(maintenanceText, "NATIVE_MEMORY_CONTEXT");
+    // The maintenance turn receives exactly the reserved source range, rather
+    // than the ordinary public reply that follows the triggering message.
+    assertStringIncludes(
+      maintenanceText,
+      "Remember Compass and answer normally.",
+    );
+    // The ordinary source is embedded in the single maintenance task rather
+    // than replayed as separate raw public-history messages.
+    assertEquals(maintenance.request.messages.length, 1);
+    assertEquals(maintenance.request.messages[0]?.role, "user");
     assertEquals(maintenance.request.tools?.map((value) => value.name), [
       "consolidate_memory",
     ]);
-    assertEquals((await checkpoint(run)).status, "ready");
+    const savedCheckpoint = await checkpoint(run);
+    assertEquals(savedCheckpoint.status, "ready");
+    assertEquals(
+      (savedCheckpoint.metadata as {
+        coverage?: { continuity?: string };
+      }).coverage?.continuity,
+      "Compass remains the active project for the next turn.",
+    );
     const records = await collection(run, "memory_record").list({
       limit: 10,
     });
@@ -328,9 +379,6 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
     const sources = (records[0]!.provenance as {
       sources: readonly { type: string; id: string }[];
     }).sources;
-    assertEquals(sources.length, 2);
-    assert(sources.some((source) => source.type === "message"));
-    assert(sources.some((source) => source.type === "asset"));
     const publicHistory = await projectMessages(
       run.engine,
       NAMESPACE,
@@ -338,6 +386,110 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
     );
     assertEquals(publicHistory.length, 2);
     assertEquals(publicHistory[0]?.id, "message:user");
+    const messageSources = sources.filter((source) => source.type === "message")
+      .map((source) => source.id).sort();
+    assertEquals(
+      messageSources,
+      publicHistory.map((message) => message.id).sort(),
+    );
+    assertEquals(sources.filter((source) => source.type === "asset").length, 2);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("an oversized normal request compacts a bounded prefix before retrying with continuity and its latest tail", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("The compacted normal request can continue."),
+    { inputLimit: 40_000 },
+  );
+  try {
+    await setupThread(run);
+    for (let index = 0; index < 26; index++) {
+      await createHumanMessage(run, {
+        id: `message:old:${index}`,
+        text: `OLD_${index} ${"history ".repeat(1_600)}`,
+      });
+    }
+    await createHumanMessage(run, {
+      id: "message:latest",
+      text: "LATEST_TAIL continue the active task.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () => {
+        const values = await checkpoints(run);
+        return (values.some((item: { status: string }) =>
+          item.status === "ready"
+        ) &&
+          run.inputs.some((input) =>
+            !text(input).includes("Internal memory maintenance")
+          )) ||
+          values.some((item: { status: string }) =>
+            item.status === "failed" || item.status === "cancelled"
+          );
+      },
+    );
+
+    const saved = (await checkpoints(run)).find((item: { status: string }) =>
+      item.status === "ready"
+    );
+    assert(saved);
+    const maintenanceInputs = run.inputs.filter((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assert(maintenanceInputs.length >= 1);
+    const maintenance = text(maintenanceInputs[0]!);
+    assertStringIncludes(maintenance, "OLD_0");
+    assert(!maintenance.includes("LATEST_TAIL"));
+    const retriedInput = run.inputs.find((input) =>
+      !text(input).includes("Internal memory maintenance")
+    )!;
+    const retried = text(retriedInput);
+    assertStringIncludes(
+      retriedInput.request.instructions ?? "",
+      "Compass remains the active project",
+    );
+    assertStringIncludes(retried, "LATEST_TAIL");
+    assert(!retried.includes("OLD_0"));
+    assertEquals(saved.sourceStartMessageId, "message:old:0");
+    assert(saved.sourceEndMessageId !== "message:latest");
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("a source mutation during maintenance prevents a checkpoint from becoming ready", async () => {
+  let mutateSource = async () => {};
+  const run = await fixture(async (input) => {
+    if (text(input).includes("Internal memory maintenance")) {
+      await mutateSource();
+      return tool(memoryProposal());
+    }
+    return stop("Initial answer before maintenance.");
+  });
+  try {
+    await startUserTurn(run);
+    mutateSource = async () => {
+      await collection(run, "message").update({
+        id: "message:user",
+        set: { metadata: { changedDuringMaintenance: true } },
+      }, { namespace: NAMESPACE });
+    };
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "failed",
+    );
+    const saved = await checkpoint(run);
+    assertEquals(saved.status, "failed");
+    assert(saved.error);
+    assertEquals(run.inputs.length, 2);
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -347,7 +499,12 @@ Deno.test("checkpoint dispatch is a hidden ordinary Agent turn that atomically c
 Deno.test("invalid and omitted consolidation calls repair through ordinary Core continuations", async () => {
   const run = await fixture((_input, call) => {
     if (call === 1) return stop("Initial answer.");
-    if (call === 2) return tool({ outcome: "changes" }); // Invalid: no draft.
+    if (call === 2) {
+      return tool({
+        outcome: "changes",
+        continuity: "The user still expects a normal answer about Compass.",
+      }); // Invalid: no draft.
+    }
     if (call === 3) return stop("I forgot the requested tool."); // Memory emits one repair Message.
     return tool(memoryProposal());
   });
@@ -384,7 +541,10 @@ Deno.test("provider failure settles the detached checkpoint as failed", async ()
     );
     const saved = await checkpoint(run);
     assertEquals(saved.status, "failed");
-    assert(saved.error);
+    assertEquals(saved.error, {
+      name: "Error",
+      message: "fixture provider unavailable",
+    });
     await assertNoDeadLetters(run);
   } finally {
     await run.close();
@@ -502,6 +662,8 @@ Deno.test("invalid on-demand consolidation settles its own checkpoint as failed"
       call === 1
         ? tool({
           outcome: "changes",
+          continuity:
+            "The requested work continues, but this evidence is invalid.",
           entities: [{
             localId: "unauthorized",
             kind: "entity.project",

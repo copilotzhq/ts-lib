@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatRequest, ProviderConfig } from "./types.ts";
 import { toLLMConfig } from "./config.ts";
-import { formatMessagesDetailed } from "./utils.ts";
+import { assertEstimatedInputLimit, formatMessagesDetailed } from "./utils.ts";
 import { type ChatTokenEstimate, estimateChatMessages } from "./chat-tokens.ts";
 
 export interface PreparedAttemptTranscript {
@@ -36,20 +36,10 @@ export async function prepareAttemptTranscript(args: {
     : args.request.messages;
   const config = toLLMConfig(args.config);
   const recoveryMessages = args.recoveryMessages ?? [];
-  const recoveryEstimatedTokens = recoveryMessages.length > 0
-    ? estimateChatMessages(recoveryMessages, args.config).estimatedTokens
-    : 0;
-  const baseInputLimit = typeof config.limitEstimatedInputTokens === "number" &&
-      config.limitEstimatedInputTokens > 0
-    ? Math.max(1, config.limitEstimatedInputTokens - recoveryEstimatedTokens)
-    : config.limitEstimatedInputTokens;
   const formatted = formatMessagesDetailed({
     ...args.request,
     messages: materialized,
-    config: {
-      ...config,
-      limitEstimatedInputTokens: baseInputLimit,
-    },
+    config,
   });
   const messages = [
     ...formatted.messages,
@@ -67,11 +57,15 @@ export async function prepareAttemptTranscript(args: {
     fingerprintMessages(messages.slice(0, promptPrefixMessageCount)),
   ]);
 
+  const inputTokenEstimate = estimateChatMessages(messages, config);
+  // Recovery context is part of the provider request, so enforce the same
+  // ceiling after it is appended instead of silently discarding history.
+  assertEstimatedInputLimit(inputTokenEstimate, config);
   return {
     messages,
     promptFingerprint,
     promptPrefixFingerprint,
     promptPrefixMessageCount,
-    inputTokenEstimate: estimateChatMessages(messages, args.config),
+    inputTokenEstimate,
   };
 }

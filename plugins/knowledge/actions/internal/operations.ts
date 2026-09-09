@@ -10,6 +10,7 @@ import type {
 import type {
   ActionCallOptions,
   ActionContext,
+  RuntimeActionCallers,
 } from "@copilotz/copilotz/actions";
 import { chunkText } from "./chunker.ts";
 import { embedKnowledgeTexts } from "../../resources/embedding/index.ts";
@@ -41,10 +42,12 @@ export type KnowledgeActionContext =
   & Omit<ActionContext, "actions" | "adapters">
   & Readonly<{
     actions: Readonly<{
-      createThreadMessage: (
-        input: unknown,
-        options?: ActionCallOptions,
-      ) => Promise<unknown>;
+      createThreadMessage:
+        & RuntimeActionCallers[string]
+        & ((
+          input: unknown,
+          options?: ActionCallOptions,
+        ) => Promise<unknown>);
     }>;
     adapters: Readonly<{
       embedding: Readonly<

@@ -14,3 +14,7 @@ export type {
   CopilotzApplicationObservation,
   CopilotzInputEnvelope,
 } from "./types.ts";
+export type {
+  DeliveryDiagnostic,
+  DeliveryDiagnosticSink,
+} from "../execution/index.ts";

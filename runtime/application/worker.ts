@@ -112,11 +112,16 @@ export async function createCopilotzWorker(
       resources: options.resources,
       adapters: options.adapters,
       assets: options.assets,
+      onDeliveryDiagnostic: options.onDeliveryDiagnostic,
       database: persistence.database,
       engine: {
         ...(options.engine ?? {}),
         publish: relay.publish,
         execution: {
+          workerId: options.id,
+          ...(options.capacity === undefined
+            ? {}
+            : { capacity: options.capacity }),
           dispatcher: createDeferredDeliveryDispatcher(),
         },
       },

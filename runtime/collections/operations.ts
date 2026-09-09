@@ -89,6 +89,7 @@ export function createCollectionOperations(
   collection: BoundCollection,
   services: {
     activeTransaction(): boolean;
+    activeSnapshot(): boolean;
     contentResolver?: ContentResolver;
     relations(
       namespace: string,
@@ -152,6 +153,11 @@ export function createCollectionOperations(
       options?: ScopedCollectionReadOptions,
     ) => {
       const ns = namespace(scope);
+      if (services.activeSnapshot() && options?.content !== undefined) {
+        throw new Error(
+          "Content resolution is not allowed inside a read snapshot.",
+        );
+      }
       return createResolvedCollectionReader(
         (value: Input) => operation(ns, value),
         collection.definition,

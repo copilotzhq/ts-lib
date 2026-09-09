@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { createTestDatabase } from "../../../../runtime/testing/ominipg.ts";
 import { createSqlSession } from "../../../../runtime/events/index.ts";
 import { queryCollectionRecords } from "../../../../runtime/collections/query.ts";
@@ -159,6 +159,107 @@ Deno.test("Core resolves final transcript content and own reasoning, leaving pee
     });
     assertEquals(empty, []);
     assertEquals(queries.length, 2);
+  } finally {
+    await db.close();
+  }
+});
+
+Deno.test("Core rejects a changed content or visibility snapshot before opening asset bodies", async () => {
+  const db = await createTestDatabase({ url: ":memory:" });
+  const session = createSqlSession(db);
+  const assets = createMemoryAssetRepository();
+  const readIds: string[] = [];
+  const resolver = createContentResolver({
+    assets,
+    authorize: ({ ref }) => {
+      readIds.push(ref.assetId);
+      return true;
+    },
+  });
+  const publish = async (id: string) => {
+    await assets.publish({
+      namespace: "tenant",
+      id,
+      mediaType: "text/plain",
+      body: new TextEncoder().encode(id),
+    });
+    return {
+      assetId: id,
+      kind: "text" as const,
+      role: "body",
+      mediaType: "text/plain",
+    };
+  };
+  try {
+    const body = await publish("before");
+    const changed = await publish("after");
+    const record = {
+      id: "message",
+      namespace: "tenant",
+      threadId: "thread",
+      senderId: "north",
+      content: [body],
+      metadata: {},
+      visibility: { kind: "public" },
+      createdAt: date,
+      updatedAt: date,
+    } as CollectionRecord;
+    await session.query(
+      "CREATE TABLE changed_nodes (id text,namespace text,type text,data jsonb,created_at timestamptz,updated_at timestamptz,content text)",
+    );
+    await session.query(
+      "INSERT INTO changed_nodes VALUES ('message','tenant','message',$1::jsonb,$2::timestamptz,$2::timestamptz,'')",
+      [JSON.stringify(record), date],
+    );
+    let mutated = false;
+    const list = createResolvedCollectionReader(
+      async (query: CollectionQuery) => {
+        if (!mutated) {
+          mutated = true;
+          await session.query(
+            "UPDATE changed_nodes SET data = jsonb_set(jsonb_set(data, '{content}', $1::jsonb), '{visibility}', $2::jsonb)",
+            [JSON.stringify([changed]), JSON.stringify({ kind: "internal" })],
+          );
+        }
+        return await queryCollectionRecords(
+          session,
+          { nodes: "changed_nodes", edges: "unused" },
+          messageCollection,
+          "tenant",
+          query,
+        );
+      },
+      messageCollection,
+      "tenant",
+      resolver,
+    );
+    const participant = {
+      id: "north",
+      namespace: "tenant",
+      externalId: "north",
+      participantType: "agent" as const,
+      metadata: {},
+      createdAt: date,
+      updatedAt: date,
+    };
+    const history = [{
+      ...mapMessageRecord(record, participant),
+      visibility: record.visibility as Record<string, unknown>,
+    }];
+    const context = {
+      collections: { message: { list } as unknown as ScopedCollection },
+    } as unknown as CoreProcessorContext;
+    await assertRejects(
+      () =>
+        prepareLlmTranscript(context, {
+          threadId: "thread",
+          participantId: "north",
+          history,
+        }),
+      Error,
+      "no longer available",
+    );
+    assertEquals(readIds, []);
   } finally {
     await db.close();
   }

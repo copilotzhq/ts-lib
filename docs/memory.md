@@ -47,11 +47,31 @@ merely because projection or checkpoint settlement was interrupted.
 New/updated records, relations, frozen evidence refs, lifecycle changes, and the
 ready checkpoint commit atomically.
 
-The internal maintenance instruction is appended as the last private Message,
-after the same ordinary history and prompt prefix used by the Agent. This keeps
-the Agent's instructions, Context, Skills, tools, Model ordering, and credential
-routing identical to a user-facing turn and preserves provider prompt-cache
-opportunities. The private scope is never accepted from HTTP history input.
+Core prepares each new invocation from the latest authorized history. A verified
+checkpoint supplies the lower boundary; the trigger message is not an upper
+cutoff. There is no moving 1,000-message window or silent LLM input trimming. An
+already captured Action keeps its original request during replay.
+
+A checkpoint can replace raw history only when its coverage matches the Agent,
+visibility scope, active branch and source range. Its required `continuity`
+summary preserves the current task, constraints, useful results and outstanding
+work. Older semantic checkpoints remain readable but do not certify a cutoff.
+The first certified range begins at the start of eligible history; later ranges
+continue after the previous certified boundary and carry its summary forward.
+
+Compaction takes bounded contiguous chunks and keeps unfinished Tool/Ask groups
+in the raw tail. The private task contains its authorized source text and prior
+context; its own scoped transcript replaces replaying the whole public thread.
+The owning Agent's instructions, tools, model selection and authentication stay
+in effect. The private scope is never accepted from HTTP history input.
+
+Core preflights the same formatted input used by execution. If necessary, it
+waits for certified compaction progress and rebuilds the request. Waiting is
+cancellable and bounded to 45 seconds per pass, with at most eight passes.
+Unavailable compaction, a failed checkpoint, an indivisible oversized input, or
+failure to make progress produces an input-limit failure instead of dropping
+history. A source change invalidates its pending checkpoint and ends that
+maintenance task with the `invalidated` outcome; it cannot advance coverage.
 
 `consolidate_memory` may also be called during an ordinary turn. Core does not
 special-case that Tool: Memory derives a deterministic on-demand checkpoint from

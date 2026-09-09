@@ -498,3 +498,29 @@ Deno.test("prepared assistant reasoning reaches the provider through existing es
     globalThis.fetch = originalFetch;
   }
 });
+
+Deno.test("built-in bridge preserves ChatGPT Codex runtime identity to wire headers", async () => {
+  const originalFetch = globalThis.fetch;
+  let headers = new Headers();
+  globalThis.fetch = (_input, init) => {
+    headers = new Headers(init?.headers);
+    return Promise.resolve(openAiStream("ok"));
+  };
+  try {
+    const adapter = builtin("openai", {
+      apiKey: "test",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      executionIdentity: { cacheKey: "bridge-stable-key" },
+    });
+    const invocation = adapter.call(
+      callInput({ providerModel: "fallback-model" }),
+    );
+    await Promise.all([collectFrames(invocation.frames), invocation.result]);
+    assertEquals(headers.get("session-id"), "bridge-stable-key");
+    assertEquals(headers.get("thread-id"), "bridge-stable-key");
+    assertEquals(headers.get("x-client-request-id"), "bridge-stable-key");
+    assertEquals(headers.get("x-codex-routing-hint"), "model=fallback-model");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

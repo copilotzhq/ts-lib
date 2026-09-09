@@ -126,7 +126,7 @@ export function createLongTermMemoryPlugin(
   const invalidateMemory = createInvalidateMemoryAction();
   const setMemoryStatus = createSetMemoryStatusAction();
   const consolidateTool = createConsolidateMemoryTool(consolidateMemory);
-  const context = createMemoryContextResource(enabled);
+  const context = createMemoryContextResource(enabled, config);
   return definePlugin({
     id: options.id ?? DEFAULT_PLUGIN_ID,
     version: options.version ?? DEFAULT_PLUGIN_VERSION,

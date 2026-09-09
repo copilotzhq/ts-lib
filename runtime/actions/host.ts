@@ -31,12 +31,12 @@ import {
 } from "./invoker.ts";
 import type {
   ActionCallers,
-  ActionCallOptions,
   ActionContext,
   ActionLifecycleAppender,
   ActionLifecycleLoader,
   ActionTransactionContext,
   ActionTransactionOptions,
+  RuntimeActionCallers,
   RuntimeContext,
 } from "./types.ts";
 
@@ -78,6 +78,7 @@ export type ActionHostContext = Readonly<{
   signal: AbortSignal;
   now(): Date;
   transaction: ActionContext["transaction"];
+  readSnapshot: ActionContext["readSnapshot"];
 }>;
 
 export type ActionContextBindings = Readonly<{
@@ -148,6 +149,7 @@ type ActionInvocationHost = Pick<
   | "signal"
   | "now"
   | "transaction"
+  | "readSnapshot"
 >;
 
 /** Reserved stream metadata injected by the generic Action invocation host. */
@@ -158,12 +160,7 @@ export function createActionInvocationContext(
   options: Readonly<{
     host: ActionInvocationHost;
     frame: ActionInvocationFrame;
-    actions: Readonly<
-      Record<
-        string,
-        (input: unknown, options?: ActionCallOptions) => Promise<unknown>
-      >
-    >;
+    actions: RuntimeActionCallers;
     progress(value: unknown): Promise<void>;
   }>,
 ): ActionContext {
@@ -236,6 +233,8 @@ export function createActionInvocationContext(
         signal: transactionOptions.signal ?? frame.signal,
       }) as never;
     },
+    readSnapshot: (execute: Parameters<ActionContext["readSnapshot"]>[0]) =>
+      host.readSnapshot(execute as never),
   }, protectedEventResolverFrom(host))) as ActionContext;
 }
 
@@ -285,6 +284,29 @@ export function createActionContext(
     throwIfAborted(options.signal);
     return result.value;
   };
+  const readSnapshot: ActionHostContext["readSnapshot"] = async (execute) =>
+    await bindings.collections.readSnapshot(
+      { namespace },
+      async ({ collections: byName }) => {
+        const snapshotCollections = Object.freeze(Object.fromEntries(
+          Object.entries(bindings.plugins.collections).map(
+            ([alias, definition]) => {
+              const collection =
+                byName[(definition as CollectionDefinition).name];
+              if (!collection) {
+                throw new Error(
+                  `Collection '${definition.name}' for alias '${alias}' is not bound.`,
+                );
+              }
+              return [alias, collection];
+            },
+          ),
+        ));
+        return await execute(
+          Object.freeze({ collections: snapshotCollections }) as never,
+        );
+      },
+    );
 
   const actions = createActionCallers(bindings.plugins.actions, {
     actionLifecycle: lifecycle,
@@ -321,6 +343,7 @@ export function createActionContext(
     signal,
     now: bindings.now ?? (() => new Date()),
     transaction: transact,
+    readSnapshot,
   });
   return host;
 }

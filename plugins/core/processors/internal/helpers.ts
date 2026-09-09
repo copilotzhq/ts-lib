@@ -11,7 +11,6 @@ import type {
   Participant,
 } from "../../../core-collections/internal/contracts.ts";
 import {
-  compareThreadMessageRecords,
   loadThreadMessageRecordWindow,
   mapMessageRecord,
   mapParticipantRecord,
@@ -20,15 +19,9 @@ import {
 } from "../../../core-collections/internal/projections.ts";
 import type { ProcessorContext } from "@copilotz/copilotz/plugins";
 import type { ToolResource } from "@copilotz/copilotz/tools";
-import { deriveWorkflowId } from "@copilotz/copilotz/events";
 import type { AgentResource } from "../../resources/agent/index.ts";
 import type { CoreResources } from "../../internal/runtime-context.ts";
 import { resolveToolGrants } from "../../internal/capabilities/grants.ts";
-import {
-  agentAskResultMetadata,
-  coreToolPlanMetadata,
-  coreToolResultOrigin,
-} from "../../internal/workflow-metadata.ts";
 
 export type CoreToolEntry = Readonly<{
   alias: string;
@@ -43,6 +36,36 @@ export type CoreThreadMessageSnapshot = Readonly<{
   records: readonly CollectionRecord[];
   messages: readonly ConversationMessage[];
 }>;
+
+/** Reads only thread/participant metadata so context can certify a lower bound before tail selection. */
+export async function loadCoreThreadMetadata(
+  context: Pick<ProcessorContext, "collections">,
+  threadId: string,
+): Promise<
+  Readonly<
+    {
+      thread: ConversationThread;
+      participantRecords: readonly CollectionRecord[];
+    }
+  >
+> {
+  const thread = await requireCollection(context, "thread").get({
+    id: threadId,
+  });
+  if (!thread) throw new Error(`Thread '${threadId}' was not found.`);
+  const participantRecords = (await Promise.all(
+    stringArray(thread.participantIds)
+      .map((id) => requireCollection(context, "participant").get({ id })),
+  ))
+    .filter((item): item is CollectionRecord => Boolean(item));
+  return Object.freeze({
+    thread: mapThreadRecord(
+      thread,
+      participantRecords.map(mapParticipantRecord),
+    ),
+    participantRecords: Object.freeze(participantRecords),
+  });
+}
 
 export function requiredText(value: string | undefined, name: string): string {
   const normalized = value?.trim();
@@ -182,67 +205,50 @@ export function participantInput(participant: CollectionRecord) {
 }
 
 /**
- * Selects the latest bounded history through an immutable trigger. Tool plans,
- * their result blocks, and completed Ask answers are retained as one causal
- * unit even when the ordinary history boundary crosses that unit.
+ * Selects the complete latest authorized history. The trigger is validated as
+ * an active branch member, but never determines the history end.
  */
 export async function loadCoreThreadMessageSnapshot(
   context: Pick<ProcessorContext, "collections">,
   threadId: string,
   trigger: CollectionRecord,
-  options: Readonly<{ historyScopeId?: string; limit?: number }> = {},
+  options: Readonly<
+    {
+      historyScopeId?: string;
+      internalOnly?: boolean;
+      afterMessageId?: string;
+      viewerIds?: readonly string[];
+    }
+  > = {},
 ): Promise<CoreThreadMessageSnapshot> {
   const messages = requireCollection(context, "message");
+  const boundary = options.afterMessageId
+    ? await messages.get({ id: options.afterMessageId })
+    : null;
+  if (
+    options.afterMessageId &&
+    (!boundary || String(boundary.threadId) !== threadId)
+  ) {
+    throw new Error("Certified history boundary is no longer available.");
+  }
   const window = await loadThreadMessageRecordWindow(context, threadId, {
-    anchor: trigger,
-    limit: options.limit ?? 1_000,
     ...(options.historyScopeId
       ? { historyScopeId: options.historyScopeId }
       : {}),
+    ...(options.viewerIds ? { viewerIds: options.viewerIds } : {}),
+    ...(options.internalOnly ? { internalOnly: true } : {}),
+    ...(boundary ? { after: boundary } : {}),
   });
-  const selected = new Map(
-    window.records.map((record) => [String(record.id), record]),
+  const currentTrigger = await messages.get({ id: String(trigger.id) });
+  const active = Boolean(
+    currentTrigger &&
+      String(currentTrigger.createdAt) === String(trigger.createdAt) &&
+      threadMessageRecordInWindow(
+        { ...window, after: undefined },
+        currentTrigger,
+      ),
   );
-  const inspected = new Set<string>();
-  let pending = [...window.records];
-  while (window.anchorActive && pending.length) {
-    const dependencyIds = new Set<string>();
-    await Promise.all(pending.map(async (record) => {
-      inspected.add(String(record.id));
-      const origin = coreToolResultOrigin(record.metadata);
-      const plan = coreToolPlanMetadata(record.metadata);
-      const planId = origin?.planId ?? plan?.planId;
-      const planSize = origin?.planSize ?? plan?.planSize;
-      if (origin) dependencyIds.add(origin.planMessageId);
-      if (planId && planSize) {
-        const resultIds = await Promise.all(
-          Array.from(
-            { length: planSize },
-            (_, index) =>
-              deriveWorkflowId("message", planId, String(index), "result"),
-          ),
-        );
-        for (const id of resultIds) dependencyIds.add(id);
-      }
-      const askResult = agentAskResultMetadata(record.metadata);
-      if (askResult?.status === "completed" && askResult.answerMessageId) {
-        dependencyIds.add(askResult.answerMessageId);
-      }
-    }));
-    const unseen = [...dependencyIds].filter((id) =>
-      !selected.has(id) && !inspected.has(id)
-    );
-    for (const id of unseen) inspected.add(id);
-    const loaded = await Promise.all(unseen.map((id) => messages.get({ id })));
-    pending = loaded.filter((record): record is CollectionRecord =>
-      Boolean(record && threadMessageRecordInWindow(window, record))
-    );
-    for (const record of pending) selected.set(String(record.id), record);
-  }
-
-  const records = orderToolPlanResults(
-    [...selected.values()].sort(compareThreadMessageRecords),
-  );
+  const records = Object.freeze(active ? window.records : []);
   const participantRecords = new Map(
     window.participantRecords.map((record) => [String(record.id), record]),
   );
@@ -274,56 +280,20 @@ export async function loadCoreThreadMessageSnapshot(
     if (!sender) {
       throw new Error(`Message '${record.id}' sender was not found.`);
     }
-    return mapMessageRecord(record, sender);
+    return Object.freeze({
+      ...mapMessageRecord(record, sender),
+      ...(record.visibility === undefined
+        ? {}
+        : { visibility: structuredClone(asRecord(record.visibility)) }),
+    });
   });
   return Object.freeze({
-    active: window.anchorActive,
+    active,
     thread,
     participantRecords: Object.freeze([...participantRecords.values()]),
     records,
     messages: Object.freeze(hydrated),
   });
-}
-
-/**
- * A plan may settle in any wall-clock order (and clocks may share a tick), but
- * its provider transcript is declared order. Keep each plan's projected root
- * results contiguous at its first message position and order by durable cursor.
- */
-export function orderToolPlanResults(
-  records: readonly CollectionRecord[],
-): readonly CollectionRecord[] {
-  const groups = new Map<string, CollectionRecord[]>();
-  const first = new Map<string, number>();
-  records.forEach((entry, index) => {
-    const cursor = coreToolResultOrigin(entry.metadata);
-    if (!cursor) return;
-    const bucket = groups.get(cursor.planId) ?? [];
-    bucket.push(entry);
-    groups.set(cursor.planId, bucket);
-    if (!first.has(cursor.planId)) first.set(cursor.planId, index);
-  });
-  for (const bucket of groups.values()) {
-    bucket.sort((left, right) =>
-      coreToolResultOrigin(left.metadata)!.planIndex -
-      coreToolResultOrigin(right.metadata)!.planIndex
-    );
-  }
-  const emitted = new Set<string>();
-  const result: CollectionRecord[] = [];
-  records.forEach((entry, index) => {
-    const cursor = coreToolResultOrigin(entry.metadata);
-    if (!cursor) {
-      result.push(entry);
-      return;
-    }
-    if (first.get(cursor.planId) !== index || emitted.has(cursor.planId)) {
-      return;
-    }
-    emitted.add(cursor.planId);
-    result.push(...(groups.get(cursor.planId) ?? []));
-  });
-  return Object.freeze(result);
 }
 
 /** Resolves one Agent's least-authority Tool Resources in stable grant order. */

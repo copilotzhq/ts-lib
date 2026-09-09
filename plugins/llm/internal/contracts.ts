@@ -42,6 +42,12 @@ export type LlmRuntimeDiagnostics = Readonly<{
   credentialSource?: LlmCredentialSource;
 }>;
 
+/** Trusted Core turn identity, retained only while a built-in provider is called. */
+export type LlmRuntimeExecutionIdentity = Readonly<{
+  /** Opaque provider-scoped stable identity, never durable Action data. */
+  cacheKey: string;
+}>;
+
 /** Stable identity of the connection being resolved. */
 export type LlmConnectionExecution = Readonly<{
   connection: string;
@@ -144,6 +150,7 @@ export type LlmBuiltinProviderConfiguration = Readonly<{
   extraHeaders?: Readonly<Record<string, string>>;
   options?: LlmJsonObject;
   runtimeDiagnostics?: LlmRuntimeDiagnostics;
+  executionIdentity?: LlmRuntimeExecutionIdentity;
 }>;
 
 export type LlmToolDefinition = Readonly<{
@@ -207,6 +214,8 @@ export type LlmMessage =
       role: "assistant";
       reasoning?: readonly (ContentSequence[number] | ActionContentEntry)[];
       toolCalls?: readonly LlmToolCall[];
+      /** Server-derived identity of the durable Tool plan that owns these calls. */
+      toolPlanId?: string;
     }>
   )
   | (
@@ -214,6 +223,8 @@ export type LlmMessage =
     & Readonly<{
       role: "tool";
       toolCallId: string;
+      /** Server-derived identity of the durable Tool plan that owns this result. */
+      toolPlanId?: string;
     }>
   );
 
@@ -317,6 +328,7 @@ export type LlmAdapterMessage =
       role: "assistant";
       reasoning?: string;
       toolCalls?: readonly LlmToolCall[];
+      toolPlanId?: string;
     }>
   )
   | (
@@ -324,6 +336,7 @@ export type LlmAdapterMessage =
     & Readonly<{
       role: "tool";
       toolCallId: string;
+      toolPlanId?: string;
     }>
   );
 

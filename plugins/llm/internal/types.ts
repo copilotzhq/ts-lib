@@ -56,6 +56,8 @@ export interface ChatMessage {
   /** Internal metadata used to reconstruct hidden control blocks for model-facing history. */
   metadata?: Record<string, unknown>;
   tool_call_id?: string;
+  /** Server-derived durable plan identity for a historical tool call/result. */
+  toolPlanId?: string;
   // Prefer passing tool calls explicitly for assistant messages
   toolCalls?: ToolInvocation[];
   /**
@@ -118,6 +120,8 @@ export interface ProviderConfigBase {
   provider?: ProviderName;
   apiKey?: string;
   runtimeDiagnostics?: LLMRuntimeDiagnostics;
+  /** Internal-only resolved ChatGPT Codex request identity. */
+  executionIdentity?: { cacheKey: string };
   /** Explicit prompt protocol selection; defaults to the useful-visible contract. */
   toolSystemPromptVariant?: ToolSystemPromptVariant;
 
@@ -369,6 +373,8 @@ export interface ToolPipeline {
 export interface ToolInvocation {
   /** Framework-owned correlation ID. Model/provider-supplied IDs are ignored. */
   id: string;
+  /** Server-derived durable plan identity for historical prompt correlation. */
+  planId?: string;
   tool: {
     id: string; // The programmatic tool key
     name?: string; // Optional human-readable tool title

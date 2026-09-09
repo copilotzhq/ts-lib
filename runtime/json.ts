@@ -7,14 +7,19 @@ export function assertJsonValue(
     rejectNegativeZero?: boolean;
     allowBytes?: boolean;
     maxDepth?: number;
+    maxNodes?: number;
   } = {},
 ): void {
   const label = options.label ?? "Value";
   const ancestors = new WeakSet<object>();
+  let nodes = 0;
   function fail(reason: string): never {
     throw new TypeError(`${label} ${reason}`);
   }
   const visit = (item: unknown, depth: number): void => {
+    if (++nodes > (options.maxNodes ?? Infinity)) {
+      fail("exceeds maximum JSON node count.");
+    }
     if (depth > (options.maxDepth ?? Infinity)) {
       fail("exceeds maximum JSON depth.");
     }

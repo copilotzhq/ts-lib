@@ -126,7 +126,7 @@ function testContext(
   } as unknown as Pick<ProcessorContext, "collections">;
 }
 
-Deno.test("Core history selects the latest 1000 through its trigger and closes causal blocks", async () => {
+Deno.test("Core history selects all authorized records while validating its trigger", async () => {
   const records = Array.from({ length: 1_002 }, (_, index) => message(index));
   const planId = "plan-at-history-boundary";
   const planMessage = Object.freeze({
@@ -209,7 +209,7 @@ Deno.test("Core history selects the latest 1000 through its trigger and closes c
     resultId,
   ]);
   assertEquals(snapshot.records.at(-1)?.id, records.at(-1)?.id);
-  assertEquals(counts.messages.lists, 1);
+  assertEquals(counts.messages.lists, 2);
   assertEquals(counts.participants.gets, 3);
 });
 
@@ -240,4 +240,28 @@ Deno.test("Core history ignores a queued trigger superseded by the active branch
   assertEquals(snapshot.active, false);
   assertEquals(snapshot.records, []);
   assertEquals(snapshot.messages, []);
+});
+
+Deno.test("a delayed trigger before compaction still selects the latest authorized tail", async () => {
+  const records = Array.from({ length: 6 }, (_, index) => message(index));
+  const thread = {
+    id: THREAD_ID,
+    namespace: NAMESPACE,
+    participantIds: ["human", "agent"],
+    status: "active",
+    metadata: {},
+    createdAt: timestamp(0),
+    updatedAt: timestamp(5),
+  };
+  const snapshot = await loadCoreThreadMessageSnapshot(
+    testContext(records, thread),
+    THREAD_ID,
+    records[0],
+    { afterMessageId: records[2].id },
+  );
+  assertEquals(snapshot.active, true);
+  assertEquals(
+    snapshot.records.map((item) => item.id),
+    records.slice(3).map((item) => item.id),
+  );
 });

@@ -64,7 +64,10 @@ export type ThreadMessageRecordWindow = Readonly<{
   records: readonly CollectionRecord[];
   anchorActive: boolean;
   historyScopeId?: string;
+  internalOnly?: boolean;
+  viewerIds?: readonly string[];
   anchor?: CollectionRecord;
+  after?: CollectionRecord;
   branch?: ActiveBranchBounds;
 }>;
 
@@ -297,6 +300,8 @@ export function threadMessageRecordInWindow(
   return String(record.threadId) === String(window.threadRecord.id) &&
     (!window.anchor ||
       compareThreadMessageRecords(record, window.anchor) <= 0) &&
+    (!window.after || compareThreadMessageRecords(record, window.after) > 0) &&
+    (!window.internalOnly || asRecord(record.visibility).kind === "internal") &&
     visibleInHistoryScope(record, window.historyScopeId) &&
     activeInBranch(record, window.branch);
 }
@@ -344,7 +349,7 @@ export function threadMessageWindowFilter(
       { field: "threadId", eq: String(window.threadRecord.id) },
       {
         or: [
-          publicScope,
+          ...(window.internalOnly ? [] : [publicScope]),
           ...(window.historyScopeId
             ? [
               {
@@ -368,6 +373,61 @@ export function threadMessageWindowFilter(
         ]
         : []),
       ...(window.anchor ? [boundary(window.anchor, "lte")] : []),
+      ...(window.after
+        ? [
+          {
+            or: [{ field: "createdAt", gt: String(window.after.createdAt) }, {
+              and: [
+                { field: "createdAt", eq: String(window.after.createdAt) },
+                { field: "id", gt: window.after.id },
+              ],
+            }],
+          } satisfies CollectionPredicate,
+        ]
+        : []),
+      ...(window.viewerIds?.length
+        ? [
+          {
+            or: [
+              ...(window.historyScopeId
+                ? [
+                  {
+                    and: [
+                      { field: "visibility.kind", eq: "internal" },
+                      {
+                        field: "historyScopeId",
+                        trimEq: window.historyScopeId,
+                      },
+                      {
+                        or: [{ field: "senderId", in: window.viewerIds }, {
+                          field: "recipientIds",
+                          overlaps: window.viewerIds,
+                        }],
+                      },
+                    ],
+                  } satisfies CollectionPredicate,
+                ]
+                : []),
+              { field: "visibility.kind", exists: false },
+              { field: "visibility.kind", eq: "public" },
+              {
+                and: [{ field: "visibility.kind", eq: "participants" }, {
+                  field: "visibility.participantIds",
+                  overlaps: window.viewerIds,
+                }],
+              },
+              {
+                and: [{ field: "visibility.kind", eq: "tool" }, {
+                  or: [{
+                    field: "visibility.policy",
+                    in: ["public", "public_status"],
+                  }, { field: "visibility.requesterId", in: window.viewerIds }],
+                }],
+              },
+            ],
+          } satisfies CollectionPredicate,
+        ]
+        : []),
     ],
   };
 }
@@ -382,7 +442,10 @@ export async function loadThreadMessageRecordWindow(
   threadId: string,
   options: Readonly<{
     anchor?: CollectionRecord;
+    after?: CollectionRecord;
     historyScopeId?: string;
+    internalOnly?: boolean;
+    viewerIds?: readonly string[];
     limit?: number;
   }> = {},
 ): Promise<ThreadMessageRecordWindow> {
@@ -403,6 +466,12 @@ export async function loadThreadMessageRecordWindow(
   const currentAnchor = options.anchor
     ? await messages.get({ id: options.anchor.id })
     : undefined;
+  const currentAfter = options.after
+    ? await messages.get({ id: options.after.id })
+    : undefined;
+  const after = currentAfter && String(currentAfter.threadId) === threadId
+    ? currentAfter
+    : undefined;
   const anchor = currentAnchor && String(currentAnchor.threadId) === threadId
     ? currentAnchor
     : undefined;
@@ -414,7 +483,12 @@ export async function loadThreadMessageRecordWindow(
     ...(options.historyScopeId
       ? { historyScopeId: options.historyScopeId }
       : {}),
+    ...(options.internalOnly ? { internalOnly: true } : {}),
+    ...(options.viewerIds?.length
+      ? { viewerIds: Object.freeze([...options.viewerIds]) }
+      : {}),
     ...(anchor ? { anchor } : {}),
+    ...(after ? { after } : {}),
     ...(branch ? { branch } : {}),
   }) satisfies ThreadMessageRecordWindow;
   const anchorActive = options.anchor === undefined || Boolean(
@@ -474,7 +548,12 @@ export async function loadThreadMessageRecordWindow(
     ...(options.historyScopeId
       ? { historyScopeId: options.historyScopeId }
       : {}),
+    ...(options.internalOnly ? { internalOnly: true } : {}),
+    ...(options.viewerIds?.length
+      ? { viewerIds: Object.freeze([...options.viewerIds]) }
+      : {}),
     ...(anchor ? { anchor } : {}),
+    ...(after ? { after } : {}),
     ...(branch ? { branch } : {}),
   });
 }

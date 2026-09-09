@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.70.0 — 2026-09-08
+
+- Prepare each new Agent invocation from the latest authorized history for its
+  Agent and scope. A durable Action captures its prepared request and metadata
+  once, preserving the original request on recovery.
+- Replace moving conversation-history and LLM input cutoffs with certified
+  memory-compaction coverage and bounded, explicit input-limit failures.
+  Compaction preserves private visibility, active branches, unfinished Tool/Ask
+  groups, and replay-safe checkpoint invalidation.
+- Add read-only repeatable-read snapshot support for preparation, and expose
+  bounded delivery diagnostics through the public application surface.
+- Derive a stable, trusted subscription session identity from the resolved
+  account, namespace, thread, and Agent for built-in ChatGPT routing and prompt
+  cache keys. Credentials remain runtime-only; no provider turn-state replay is
+  introduced.
+- Preserve normalized, credential-safe Memory checkpoint failure diagnostics.
+  Existing database schemas, Events, Messages, Assets, and public HTTP routing
+  remain compatible; no database migration is required.
+
 ## 0.69.1 — 2026-09-07
 
 - Add case-insensitive exact and set string predicates for Collection reads and

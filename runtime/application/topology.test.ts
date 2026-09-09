@@ -173,12 +173,17 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
   let accepted = 0;
   let ready = 0;
   let started = 0;
+  const gatewayDiagnostics: string[] = [];
+  const workerDiagnostics: string[] = [];
   const gateway = await createCopilotzGateway({
     namespace,
     database,
     plugins: [coreCollectionsPlugin, plugin],
     transports: [transport],
     target: { workerId },
+    onDeliveryDiagnostic(diagnostic) {
+      gatewayDiagnostics.push(diagnostic.phase);
+    },
     engine: {
       retryBaseMs: 0,
       random: () => 0,
@@ -196,6 +201,9 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
     id: workerId,
     transport,
     capacity: 1,
+    onDeliveryDiagnostic(diagnostic) {
+      workerDiagnostics.push(diagnostic.phase);
+    },
     engine: { retryBaseMs: 0, random: () => 0 },
   }, {
     onReady() {
@@ -266,6 +274,10 @@ Deno.test("Gateway and Worker preserve live output and cascading durable work", 
       "first worker reply",
     );
     assertEquals(streamOutputTransientCalls, 0);
+    assert(gatewayDiagnostics.includes("gateway_event_frame_received"));
+    assert(gatewayDiagnostics.includes("child_delivery_scheduled"));
+    assert(workerDiagnostics.includes("worker_handler_started"));
+    assert(workerDiagnostics.includes("worker_handler_settled"));
     assertEquals(
       (await projectMessages(gateway.application, namespace, "topology-thread"))
         .length,

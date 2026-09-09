@@ -35,6 +35,10 @@ export type MemorySourceMessage = Readonly<{
   text: string;
   toolCalls?: unknown;
   reasoning?: string;
+  /** IDs of causal message groups that must be consolidated as a whole. */
+  dependencyIds?: readonly string[];
+  /** The message or one of its dependency groups has not reached a safe end. */
+  pendingDependency?: boolean;
 }>;
 
 export type SelectedMemoryRange = Readonly<{
@@ -309,6 +313,7 @@ export function parseConsolidateMemoryInput(
       "consolidate_memory outcome must be 'changes' or 'no_changes'.",
     );
   }
+  const continuity = requiredText(input.continuity, "Memory continuity");
 
   const rawGroups = [
     input.entities,
@@ -718,6 +723,7 @@ export function parseConsolidateMemoryInput(
   }
   return Object.freeze({
     outcome: input.outcome,
+    continuity,
     ...(entities.length ? { entities } : {}),
     ...(assertions.length ? { assertions } : {}),
     ...(occurrences.length ? { occurrences } : {}),
@@ -748,33 +754,32 @@ export function selectLongTermMemoryRange(
     previousBoundaryMessageId?: string;
     triggerEstimatedTokens: number;
     retainRecentEstimatedTokens?: number;
+    /** Maximum source size passed to a single maintenance turn. */
+    maxSourceEstimatedTokens?: number;
   }>,
 ): SelectedMemoryRange | null {
   const triggerIndex = input.messages.findIndex((message) =>
     message.id === input.triggerMessageId
   );
   if (triggerIndex < 0) return null;
-  const selectedNewestFirst: MemorySourceMessage[] = [];
-  let estimatedTokens = 0;
-  let foundBoundary = !input.previousBoundaryMessageId;
-  for (let index = triggerIndex; index >= 0; index--) {
-    const message = input.messages[index];
-    if (message.id === input.previousBoundaryMessageId) {
-      foundBoundary = true;
-      break;
-    }
-    selectedNewestFirst.push(message);
-    estimatedTokens += sourceMessageTokens(message);
-    if (
-      !input.previousBoundaryMessageId &&
-      estimatedTokens >= input.triggerEstimatedTokens
-    ) break;
+  const boundaryIndex = input.previousBoundaryMessageId === undefined
+    ? -1
+    : input.messages.findIndex((message) =>
+      message.id === input.previousBoundaryMessageId
+    );
+  if (input.previousBoundaryMessageId !== undefined && boundaryIndex < 0) {
+    return null;
   }
-  if (
-    !foundBoundary || estimatedTokens < input.triggerEstimatedTokens ||
-    !selectedNewestFirst.length
-  ) return null;
-  const selected = selectedNewestFirst.reverse();
+  // A certified checkpoint replaces a contiguous prefix. The first checkpoint
+  // therefore begins with the first eligible message, never a recent suffix.
+  const selected = input.messages.slice(boundaryIndex + 1, triggerIndex + 1);
+  const estimatedTokens = selected.reduce(
+    (total, message) => total + sourceMessageTokens(message),
+    0,
+  );
+  if (estimatedTokens < input.triggerEstimatedTokens || !selected.length) {
+    return null;
+  }
   const retainTarget = Math.max(0, input.retainRecentEstimatedTokens ?? 0);
   let retainedEstimatedTokens = 0;
   let retainedMessageCount = 0;
@@ -797,13 +802,75 @@ export function selectLongTermMemoryRange(
       retainedMessageCount += units[index].length;
     }
   }
-  const messages = retainedMessageCount
-    ? selected.slice(0, -retainedMessageCount)
-    : selected;
+  let end = retainedMessageCount
+    ? selected.length - retainedMessageCount
+    : selected.length;
+
+  const dependencyIndexes = new Map<string, number[]>();
+  for (const [index, message] of selected.entries()) {
+    for (const dependencyId of message.dependencyIds ?? []) {
+      const indexes = dependencyIndexes.get(dependencyId) ?? [];
+      indexes.push(index);
+      dependencyIndexes.set(dependencyId, indexes);
+    }
+  }
+  // An unfinished group is retained in its entirety. Because source ranges are
+  // contiguous prefixes, its first member is also the latest safe endpoint.
+  for (const indexes of dependencyIndexes.values()) {
+    if (indexes.some((index) => selected[index].pendingDependency)) {
+      end = Math.min(end, indexes[0]);
+    }
+  }
+  for (const [index, message] of selected.entries()) {
+    if (message.pendingDependency) end = Math.min(end, index);
+  }
+
+  // Retaining one member of a dependency group means retaining all messages
+  // between the group's first and last member too: source deletion always
+  // covers a single prefix and cannot silently skip interleaved history.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const indexes of dependencyIndexes.values()) {
+      if (indexes[0] < end && indexes.at(-1)! >= end) {
+        end = indexes[0];
+        changed = true;
+      }
+    }
+  }
+
+  const maxSourceEstimatedTokens = input.maxSourceEstimatedTokens;
+  if (maxSourceEstimatedTokens !== undefined) {
+    let boundedEnd = 0;
+    let boundedTokens = 0;
+    for (let index = 0; index < end; index++) {
+      boundedTokens += sourceMessageTokens(selected[index]);
+      if (boundedTokens > maxSourceEstimatedTokens) break;
+      const cutsDependency = [...dependencyIndexes.values()].some((indexes) =>
+        indexes[0] <= index && indexes.at(-1)! > index
+      );
+      if (!cutsDependency) boundedEnd = index + 1;
+    }
+    // Even the first safe contiguous source unit is too large. Callers must
+    // handle that overflow explicitly rather than discarding history.
+    if (!boundedEnd) return null;
+    end = boundedEnd;
+  }
+
+  const messages = selected.slice(0, end);
   if (!messages.length) return null;
+  const retainedMessages = selected.slice(end);
+  retainedEstimatedTokens = retainedMessages.reduce(
+    (total, message) => total + sourceMessageTokens(message),
+    0,
+  );
+  retainedMessageCount = retainedMessages.length;
   return Object.freeze({
     messages: Object.freeze(messages),
-    estimatedTokens,
+    estimatedTokens: messages.reduce(
+      (total, message) => total + sourceMessageTokens(message),
+      0,
+    ),
     retainedEstimatedTokens,
     retainedMessageCount,
     sourceStartMessageId: messages[0].id,
@@ -831,15 +898,22 @@ export function buildMemoryConsolidationInstruction(
   return [
     "## Internal memory maintenance",
     "Copilotz reserved part of your conversation history for durable memory consolidation. This is internal maintenance, not a new user request.",
-    'Review the reserved history using your normal identity and instructions. Call consolidate_memory exactly once. If nothing durable changed, call it with {"outcome":"no_changes"}. Do not answer the user or continue the task.',
+    'Review the reserved history using your normal identity and instructions. Call consolidate_memory exactly once. Its continuity summary must cover the complete reserved source range and reconcile it with any earlier continuity provided below. Preserve the current task, constraints, decisions, useful results, outstanding work, and any tool/Ask identifiers needed to continue. If nothing durable changed, call it with {"outcome":"no_changes","continuity":"<complete conversation summary>"}. Do not answer the user or continue the task.',
     "Extract only durable entities, assertions, meaningful occurrences, active intents, unresolved inquiries, and reusable procedures. Every record must be self-contained and cite allowed sources. Preserve uncertainty, negation, temporal meaning, authorship, and explicit corrections. Do not turn tentative language into facts, silently overwrite conflicts, create an entity for every noun, or persist small talk, raw tool output, token deltas, and transient wording. Use the default writable memory space unless another listed writable space clearly owns the record.",
     input.repair ? `Repair required: ${input.repair}` : "",
-    "Allowed message evidence:",
+    "Reserved source messages (complete bounded contents):",
     JSON.stringify(input.sourceMessages.map((message) => ({
       type: "message",
       id: message.id,
       senderType: message.senderType,
       senderId: message.senderId,
+      text: message.text,
+      ...(message.toolCalls === undefined
+        ? {}
+        : { toolCalls: message.toolCalls }),
+      ...(message.reasoning === undefined
+        ? {}
+        : { reasoning: message.reasoning }),
     }))),
     "Frozen application contributions:",
     JSON.stringify(input.context.map((item) => ({

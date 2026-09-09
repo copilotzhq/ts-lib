@@ -55,5 +55,6 @@ export function createTestProcessorContext(
     signal: seed.signal,
     now: () => new Date(),
     transaction: unavailable,
+    readSnapshot: unavailable,
   });
 }
