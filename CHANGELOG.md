@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.71.1 — 2026-09-10
+
+- Fill memory consolidation's bounded source budget before reserving a
+  checkpoint, instead of invoking maintenance for each small read batch.
+  Preserve recent history and a safe prefix when a later source exceeds the read
+  budget.
+- Cover consecutive large-backlog checkpoints, uneven retained tails, and later
+  oversized sources with deterministic regression tests.
+
 ## 0.71.0 — 2026-09-09
 
 - Include the existing main-branch refactor that places plugin primitives in

@@ -389,6 +389,33 @@ Deno.test("a retained tool result does not retain its earlier call", () => {
   assertEquals(selected?.retainedMessageCount, 1);
 });
 
+Deno.test("a large retained message does not falsely report a full source budget", () => {
+  const messages = [
+    {
+      id: "source",
+      senderType: "human",
+      senderId: "u",
+      text: "s ".repeat(100_000),
+    },
+    {
+      id: "large-tail",
+      senderType: "human",
+      senderId: "u",
+      text: "t ".repeat(18_000),
+    },
+    { id: "small-tail", senderType: "human", senderId: "u", text: "small" },
+  ] as const;
+  const selected = selectLongTermMemoryRange({
+    messages,
+    triggerMessageId: "small-tail",
+    triggerEstimatedTokens: 0,
+    retainRecentEstimatedTokens: 8_000,
+    maxSourceEstimatedTokens: 60_000,
+  });
+  assertEquals(selected?.sourceEndMessageId, "source");
+  assertEquals(selected?.sourceLimitReached, false);
+});
+
 Deno.test("an open Ask can be summarized without waiting for its answer", () => {
   const selected = selectLongTermMemoryRange({
     messages: [

@@ -709,6 +709,129 @@ Deno.test("an oversized normal request compacts a bounded prefix before retrying
   }
 });
 
+Deno.test("forced consolidation advances full bounded ranges across a large backlog", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("Continue after compaction."),
+    {
+      inputLimit: 180_000,
+      memoryConfig: {
+        triggerEstimatedTokens: 999_999,
+        retainRecentEstimatedTokens: 8_000,
+      },
+    },
+  );
+  try {
+    await setupThread(run);
+    for (let index = 0; index < 100; index++) {
+      await createHumanMessage(run, {
+        id: `message:batch:${index}`,
+        text: `BATCH_${index} ${"history ".repeat(1_600)}`,
+      });
+    }
+    await createHumanMessage(run, {
+      id: "message:batch:tail",
+      text: "ACTUAL_HISTORY_TAIL must remain outside both maintenance prompts.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () =>
+        (await checkpoints(run)).filter((item: { status: string }) =>
+          item.status === "ready"
+        ).length >= 2,
+    );
+    const ready = (await checkpoints(run)).filter((item: { status: string }) =>
+      item.status === "ready"
+    ).sort((left: { sequence: number }, right: { sequence: number }) =>
+      left.sequence - right.sequence
+    );
+    const [first, second] = ready;
+    assert(first && second);
+    assertEquals(
+      second.sourceStartMessageId,
+      `message:batch:${
+        Number(String(first.sourceEndMessageId).split(":").at(-1)) + 1
+      }`,
+    );
+    assert(
+      (first.metadata as { estimatedTokens: number }).estimatedTokens > 50_000,
+    );
+    assert(
+      (first.metadata as { estimatedTokens: number }).estimatedTokens <= 60_000,
+    );
+    assert(
+      (second.metadata as { estimatedTokens: number }).estimatedTokens > 50_000,
+    );
+    assert(
+      (second.metadata as { estimatedTokens: number }).estimatedTokens <=
+        60_000,
+    );
+    assert(first.sourceEndMessageId !== "message:batch:tail");
+    assert(second.sourceEndMessageId !== "message:batch:tail");
+    const maintenance = run.inputs.filter((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assert(maintenance.length >= 2);
+    assertEquals(
+      maintenance.slice(0, 2).some((input) =>
+        text(input).includes("ACTUAL_HISTORY_TAIL")
+      ),
+      false,
+    );
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
+Deno.test("a later oversized source leaves a safe checkpoint prefix", async () => {
+  const run = await fixture(
+    (input) =>
+      text(input).includes("Internal memory maintenance")
+        ? tool(memoryProposal())
+        : stop("Continue after compaction."),
+    {
+      inputLimit: 30_000,
+      memoryConfig: { triggerEstimatedTokens: 30_000 },
+    },
+  );
+  try {
+    await setupThread(run);
+    await createHumanMessage(run, {
+      id: "message:prefix",
+      text: "SAFE_PREFIX " + "history ".repeat(500),
+    });
+    await createHumanMessage(run, {
+      id: "message:oversized",
+      text: "OVERSIZED_SOURCE " + "content ".repeat(40_000),
+    });
+    await createHumanMessage(run, {
+      id: "message:oversized:tail",
+      text: "Trigger forced compaction.",
+      recipientIds: ["agent-north"],
+    });
+    await eventually(
+      run,
+      async () => (await checkpoints(run))[0]?.status === "ready",
+    );
+    const saved = await checkpoint(run);
+    assertEquals(saved.sourceStartMessageId, "message:prefix");
+    assertEquals(saved.sourceEndMessageId, "message:prefix");
+    const maintenance = run.inputs.find((input) =>
+      text(input).includes("Internal memory maintenance")
+    );
+    assert(maintenance);
+    assertStringIncludes(text(maintenance), "SAFE_PREFIX");
+    assertEquals(text(maintenance).includes("OVERSIZED_SOURCE"), false);
+    await assertNoDeadLetters(run);
+  } finally {
+    await run.close();
+  }
+});
+
 Deno.test("a source mutation during maintenance prevents a checkpoint from becoming ready", async () => {
   let mutateSource = async () => {};
   const run = await fixture(async (input) => {

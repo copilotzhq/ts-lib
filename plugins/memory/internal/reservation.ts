@@ -126,9 +126,16 @@ export async function reserveMemoryCheckpoint(
   // Background eligibility may require seeing more source than one maintenance
   // turn can carry. The scan remains bounded, while range selection below
   // still caps the checkpoint source at maxSourceEstimatedTokens.
+  const retainRecentEstimatedTokens = options.force
+    ? Math.min(
+      config.retainRecentEstimatedTokens,
+      Math.floor(maxSourceEstimatedTokens / 4),
+    )
+    : config.retainRecentEstimatedTokens;
   const sourceByteLimit = Math.max(
     1,
-    Math.max(maxSourceEstimatedTokens, config.triggerEstimatedTokens) * 8,
+    (Math.max(maxSourceEstimatedTokens, config.triggerEstimatedTokens) +
+      retainRecentEstimatedTokens) * 8,
   );
   const sources: MemorySourceMessage[] = [];
   const encoder = new TextEncoder();
@@ -150,6 +157,10 @@ export async function reserveMemoryCheckpoint(
         batchSize = Math.max(1, Math.floor(batchSize / 2));
         continue;
       }
+      // A later record can exceed the remaining bounded read budget. Keep the
+      // completed prefix when it already has a safe range; that record and the
+      // history after it remain raw tail. The first record has no safe prefix.
+      if (range) break;
       throw new Error(
         sources.length
           ? "Memory source cannot reach the consolidation trigger within the maintenance content budget."
@@ -165,20 +176,18 @@ export async function reserveMemoryCheckpoint(
       0,
     );
     offset += batchSize;
-    batchSize = 16;
     range = selectLongTermMemoryRange({
       messages: sources,
       triggerMessageId: sources.at(-1)?.id ?? message.id,
       triggerEstimatedTokens: options.force ? 0 : config.triggerEstimatedTokens,
-      retainRecentEstimatedTokens: options.force
-        ? Math.min(
-          config.retainRecentEstimatedTokens,
-          Math.floor(maxSourceEstimatedTokens / 4),
-        )
-        : config.retainRecentEstimatedTokens,
+      retainRecentEstimatedTokens,
       maxSourceEstimatedTokens,
     });
-    if (range) break;
+    // Once the next source would exceed the selected budget, further reads
+    // only add raw tail. The selector has already retained the configured
+    // recent history, so this source range is safe to reserve.
+    if (range?.sourceLimitReached) break;
+    batchSize = 16;
   }
   if (!range) return null;
   return await createCheckpoint(context, {

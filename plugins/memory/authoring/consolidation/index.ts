@@ -43,6 +43,8 @@ export type SelectedMemoryRange = Readonly<{
   estimatedTokens: number;
   retainedEstimatedTokens: number;
   retainedMessageCount: number;
+  /** The next eligible source would exceed the single-turn source budget. */
+  sourceLimitReached: boolean;
   sourceStartMessageId: string;
   sourceEndMessageId: string;
 }>;
@@ -532,6 +534,7 @@ export function selectLongTermMemoryRange(
     : selected.length;
 
   const maxSourceEstimatedTokens = input.maxSourceEstimatedTokens;
+  let sourceLimitReached = false;
   if (maxSourceEstimatedTokens !== undefined) {
     let boundedEnd = 0;
     let boundedTokens = 0;
@@ -543,6 +546,7 @@ export function selectLongTermMemoryRange(
     // Even the first source message is too large. Callers must
     // handle that overflow explicitly rather than discarding history.
     if (!boundedEnd) return null;
+    sourceLimitReached = boundedEnd < end;
     end = boundedEnd;
   }
 
@@ -562,6 +566,7 @@ export function selectLongTermMemoryRange(
     ),
     retainedEstimatedTokens,
     retainedMessageCount,
+    sourceLimitReached,
     sourceStartMessageId: messages[0].id,
     sourceEndMessageId: messages.at(-1)!.id,
   });
