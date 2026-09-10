@@ -45,6 +45,15 @@ export type {
 } from "./body-store.ts";
 export { createS3BodyStore } from "./s3-body-store.ts";
 export {
+  createGcsBodyStore,
+  createGcsBodyStoreAdapter,
+  createGcsMetadataAccessTokenProvider,
+} from "./gcs-body-store.ts";
+export type {
+  GcsBodyStoreConfig,
+  GcsBodyStoreOptions,
+} from "./gcs-body-store.ts";
+export {
   createDatabaseBodyStore,
   createDatabaseBodyStoreAdapter,
 } from "./database-body-store.ts";

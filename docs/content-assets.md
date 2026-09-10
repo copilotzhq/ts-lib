@@ -260,9 +260,41 @@ them once only after the complete result validates.
 
 ## Body storage
 
-The runtime supports database, filesystem, memory, and S3-compatible BodyStores.
-Persisted Asset location selects the reader, allowing several backends to
-coexist. Credentials and physical keys never enter `ContentRef`.
+The runtime supports database, filesystem, memory, S3-compatible, and native
+Google Cloud Storage BodyStores. `createGcsBodyStoreAdapter` uses the GCS JSON
+API with bearer tokens (an explicit `getAccessToken` callback, or the Google
+metadata-service provider); it does not read environment credentials or use HMAC
+keys. It is an immutable Ready tier, so progressive streams compose a database
+staging store with `createPromotedBodyStoreAdapter`. Its conservative deployment
+declaration disables Ready garbage collection until exact maintenance CAS is
+available. Persisted Asset location selects the reader, allowing several
+backends to coexist. Credentials and physical keys never enter `ContentRef`.
+
+The default token provider caches and refreshes the Cloud Run metadata-service
+access token. Metadata requests time out after 5 seconds; GCS requests
+(including body consumption) after 30 seconds. These limits and Fetch are
+injectable through the factory's second argument. Uploads use an immutable
+generation precondition; reads pin the exact object generation. No public ACLs
+or signed URLs are created.
+
+```ts
+import { createGcsBodyStoreAdapter } from "@copilotz/copilotz/content";
+
+const ready = createGcsBodyStoreAdapter({
+  bucket: "my-private-bucket",
+  backendId: "gcs:my-private-bucket",
+  // Optional outside Cloud Run: getAccessToken: async () => ...
+});
+```
+
+The service account needs object create/read permissions. Keep these canonical
+objects out of bucket expiration policies. Existing database assets need an
+explicit `database:default` reader when switching the writer. When composing
+promotion, isolate its staging maintenance to new stream bodies: sharing an
+unfiltered database store can otherwise treat old Ready assets as promotion
+intents. Setting a different backend ID alone does not isolate database rows.
+Event records and their JSON Event Bodies remain in PostgreSQL; this adapter
+does not migrate or delete them.
 
 Asset provenance is exactly:
 

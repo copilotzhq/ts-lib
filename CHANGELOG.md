@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.71.0 — 2026-09-09
+
+- Include the existing main-branch refactor that places plugin primitives in
+  their owning modules.
+- Add the native GCS BodyStore with Cloud Run metadata-service bearer
+  authentication by default and an application-owned authentication callback.
+- Use immutable conditional uploads for Ready Bodies, generation-pinned reads,
+  and database-staging promotion composed into the final object.
+- Do not perform automatic GCS garbage collection. No database migration is
+  required, and Event JSON Bodies remain stored in the database.
+
 ## 0.70.2 — 2026-09-09
 
 - Consolidate bounded chronological history across unfinished Tool and Ask

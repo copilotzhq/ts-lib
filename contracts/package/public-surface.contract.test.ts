@@ -200,6 +200,9 @@ Deno.test("package subpaths expose cohesive factories", () => {
     "createContentPreparer",
     "createContentResolver",
     "createDatabaseAssetRepository",
+    "createGcsBodyStore",
+    "createGcsBodyStoreAdapter",
+    "createGcsMetadataAccessTokenProvider",
   ]);
   assertFunctions(events, ["createEventStore", "createEventCoordinator"]);
   assertFunctions(plugins, ["definePlugin", "defineProcessor"]);
